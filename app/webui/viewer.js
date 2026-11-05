@@ -285,7 +285,6 @@ async function openPaper(id) {
     if (['orig', 'bilingual', 'zh'].includes(state.view)) renderContentView();   // 聚合就绪→升级原图裁剪
   }).catch(() => {});
   state._refs = null;   // 引用缓存随论文重置
-  $('#link-toggle')?.classList.toggle('on', state.syncLink);   // 开关状态校准
   state.showLayout = false; $('#layout-btn')?.classList.remove('on');   // 布局框不跨篇残留
   refreshJobState();   // 先取完整标志
   loadBilingual(id).then(() => {   // 翻译完成才默认双语；未完成/未开始停在原文
@@ -352,10 +351,7 @@ async function pdfEnsureAll() {
     if (pg !== state.pageNum) {
       state.pageNum = pg;
       $('#pg-label').textContent = `${pg} / ${state.pdfDoc.numPages}`;
-      if (state.syncLink && !state._suppressFollow && ['orig','bilingual','zh'].includes(state.view)) {
-        const first = $(`#content-view .blk[data-page="${pg - 1}"]`);
-        if (first && typeof first.scrollIntoView === 'function') first.scrollIntoView({block: 'start'});
-      }
+      savePos();
     }
   }, { root: $('#pdf-host'), threshold: [0.35, 0.6] });
   wraps.forEach(w => state._pdfPageObs.observe(w));
@@ -623,10 +619,10 @@ function renderContentView() {
   }
   if (state.view === 'bilingual') {
     if (!state.translatedComplete) {
-      el.innerHTML = `<div class="card"><p>${
-        state.translatingNow
-          ? '⏳ 翻译进行中——完成后此处自动展示双语对照。'
-          : '尚未完成翻译。点击右上「🌐 翻译全文」开始/继续。'}</p></div>`;
+      el.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px">
+        <p style="font-size:15px;margin-bottom:14px">${state.translatingNow ? '⏳ 翻译中…' : '未翻译'}</p>
+        ${state.translatingNow ? '' : `<button class="btn primary" onclick="startTranslate()">🌐 全文翻译</button>`}
+      </div>`;
       return;
     }
     // 双语渲染：图表/公式只出一份（在 en 行）；无译文的行整行跳过——不留空壳占位
@@ -644,6 +640,13 @@ function renderContentView() {
     }
     el.innerHTML = '<div class="pairs">' + rows.join('') + '</div>';
   } else if (state.view === 'zh') {
+    if (!state.translatedComplete) {
+      el.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px">
+        <p style="font-size:15px;margin-bottom:14px">${state.translatingNow ? '⏳ 翻译中…' : '未翻译'}</p>
+        ${state.translatingNow ? '' : `<button class="btn primary" onclick="startTranslate()">🌐 全文翻译</button>`}
+      </div>`;
+      return;
+    }
     const zh = state.pairs.filter(p => p.zh);
     el.innerHTML = zh.length ? zh.map(p =>
       `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.zh)}</div>`).join('')
@@ -658,30 +661,6 @@ function renderContentView() {
         ${note ? `<div class="bnote" title="双击段落编辑批注">📌 ${esc(note)}</div>` : ''}
       </div>`;}).join('');
   }
-  // 🔗 联动：右侧滚动 → PDF 跟页 + 当前块高亮（节流：仅页变化时重渲染）
-  if (window.IntersectionObserver && state.syncLink) {
-    if (state._blkObs) state._blkObs.disconnect();
-    state._blkObs = new IntersectionObserver(entries => {
-      if (!state.syncLink) return;
-      const vis = entries.filter(e => e.isIntersecting && e.intersectionRatio > 0.4)
-        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-      if (!vis) return;
-      const blk = vis.target;
-      $$('.blk.active', $('#content-view')).forEach(x => { x.classList.remove('active'); x.style.removeProperty('--hlc'); });
-      applyActiveStyle(blk);
-      const pg = +blk.dataset.page;
-      if (state.pdfDoc && pg >= 0 && pg + 1 !== state.pageNum) {
-        state.pageNum = pg + 1;
-        window._hoverClear && window._hoverClear();
-        renderPage({noFollow: true});
-      } else {
-        window._hoverClear && window._hoverClear();
-        redrawHl();
-      }
-      savePos();
-    }, { root: el, threshold: [0.4, 0.75] });
-    $$('.blk', el).forEach(b => state._blkObs.observe(b));
-  }
 
   figCropPass();   // PDF 原图裁剪（异步，pdfDoc 未就绪则跳过）
   // 段落点击 → 跳页 + 高亮
@@ -694,17 +673,6 @@ function renderContentView() {
     }
   });
 }
-
-/* 🔗 联动开关 */
-state.syncLink = localStorage.getItem('ps-link') !== '0';
-$('#link-toggle').onclick = () => {
-  state.syncLink = !state.syncLink;
-  localStorage.setItem('ps-link', state.syncLink ? '1' : '0');
-  $('#link-toggle').classList.toggle('on', state.syncLink);
-  toast(state.syncLink ? '联动已开：滚动双向对应' : '联动已关：两侧独立滚动');
-  if (!state.syncLink && state._blkObs) { state._blkObs.disconnect(); state._blkObs = null; }
-  if (state.syncLink) renderContentView();   // 重新挂 observer
-};
 
 /* 阅读子页签（原文/双语/中文） */
 $$('.r-subtabs [data-s]').forEach(b => b.onclick = () => switchView('read', b.dataset.s));
@@ -1293,7 +1261,6 @@ async function boot() {
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
   applyQaLayout();
   if (state.qaOpen) renderQaTab();   // 问答 dock（按记忆的开合状态）
-  $('#link-toggle').classList.toggle('on', state.syncLink);
   await loadCollections();
   await loadPapers();
   watchJobs();
@@ -2203,7 +2170,6 @@ window.flashRefBlock = async blockId => {
 /* ===== 联动诊断（Ctrl+Shift+L）===== */
 window.linkDiag = () => {
   const d = {
-    开关: state.syncLink ? '开' : '关',
     当前视图: state.view, 主视图: state.mainView,
     块观察器: state._blkObs ? '挂载中' : '未挂载',
     PDF页观察器: state._pdfPageObs ? '挂载中' : '未挂载',
