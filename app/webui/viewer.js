@@ -2185,3 +2185,12 @@ window.linkDiag = () => {
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') { e.preventDefault(); linkDiag(); }
 });
+
+/* ①顺序 / ☰目录 绑定（此前随联动开关块误删） */
+state.showOrder = false;
+$('#ord-btn').onclick = () => {
+  state.showOrder = !state.showOrder;
+  $('#ord-btn').classList.toggle('on', state.showOrder);
+  renderContentView();
+};
+$('#toc-btn').onclick = () => toggleToc();
