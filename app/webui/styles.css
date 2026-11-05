@@ -482,3 +482,8 @@ table.list input[type=checkbox] { width: auto; }
 .eq-block { text-align: center; margin: 10px 0; overflow-x: auto; padding: 4px 0; }
 .katex { font-size: 1.02em; }
 .katex-display { margin: 0; }
+
+/* 缺段补译提示（极简无按钮感） */
+.fill-hint { color: #b6bdd6; font-size: 12px; cursor: pointer; user-select: none;
+             border-bottom: 1px dashed #ccd3ea; padding: 0 2px; }
+.fill-hint:hover { color: var(--primary); border-color: var(--primary); }

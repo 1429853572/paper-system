@@ -527,8 +527,8 @@ function renderContentView() {
         : (SKIP.has(p.type) ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
       const zhBody = p.type === 'table' ? renderBlockBody(p)
         : p.zh ? katexify(esc(p.zh))
-        : (p.type === 'image' ? '' :
-           `<button class="btn small" onclick="fillBlock('${p.block_id}', this)">⬇ 补译此段</button>`);
+        : (p.type === 'image' || p.type === 'equation' ? '' :
+           `<span class="fill-hint" data-bid="${p.block_id}">补译</span>`);
       return `<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
               <div class="pair zh blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${p.block_id}')">${zhBody}</div>`;
     }).join('') + '</div>';
@@ -1874,20 +1874,26 @@ window.clearQuote = () => {
 };
 
 /* 单段补译（模块翻译） */
-window.fillBlock = async (bid, btn) => {
-  btn.disabled = true; btn.textContent = '翻译中…';
+window.fillBlock = async (bid, hint) => {
+  if (hint.dataset.busy) return;
+  hint.dataset.busy = '1';
+  hint.textContent = '译中…';
   try {
     const r = await api(`/api/papers/${state.current.id}/translate-block`, {method: 'POST',
       body: JSON.stringify({block_id: bid})});
     const pair = state.pairs.find(x => x.block_id === bid);
     if (pair) pair.zh = r.zh;
     renderContentView();
-    toast('已补译');
   } catch (e) {
-    btn.disabled = false; btn.textContent = '⬇ 补译此段（重试）';
+    delete hint.dataset.busy;
+    hint.textContent = '补译（重试）';
     toast('补译失败: ' + e.message);
   }
 };
+document.addEventListener('click', e => {
+  const hint = e.target.closest && e.target.closest('.fill-hint');
+  if (hint) fillBlock(hint.dataset.bid, hint);
+});
 
 /* 公式渲染：KaTeX（$$块级优先，$行内；esc 后文本） */
 function katexify(html) {
