@@ -1074,6 +1074,19 @@ def papers_statuses(request: Request):
     return {"statuses": out}
 
 
+@app.post("/api/trash/empty")
+def empty_trash(request: Request):
+    """清空回收站（按用户独立）：member 清自己删除的；admin 清全部。"""
+    u = require(request)
+    scope = "" if u["role"] == "admin" else " AND owner_id=?"
+    sargs = () if u["role"] == "admin" else (u["id"],)
+    rows = db.all(f"SELECT id FROM papers WHERE deleted_at IS NOT NULL{scope}", sargs)
+    from core.jobs import scheduler
+    for r in rows:
+        scheduler.hard_delete_paper(r["id"])
+    return {"purged": len(rows)}
+
+
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
 def reindex_paper(paper_id: str, request: Request):
