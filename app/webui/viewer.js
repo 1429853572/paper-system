@@ -325,6 +325,25 @@ async function renderPage(opts = {}) {
   } catch (e) { console.warn('textLayer 跳过:', e); }
   state._lastVP = vp; state._lastPage = page;
   drawHighlights(page, vp);
+  // 版面布局框（可开关）：当前页所有块的检测边界
+  if (state.showLayout) {
+    const wrap = $('.pdf-page');
+    const colors = {text: '#4a6cf7', title: '#8a5cf6', equation: '#e6a23c',
+                    table: '#2eaa6e', image: '#e0528f', ref_text: '#8a93b0'};
+    state.blocks.filter(b => b.page_index === state.pageNum - 1 && b.bbox).forEach(b => {
+      const bb = JSON.parse(b.bbox);
+      if (!bb || bb.length < 4) return;
+      const r = document.createElement('div');
+      r.className = 'layout-rect';
+      r.style.left = (bb[0] * vp.width) + 'px';
+      r.style.top = ((1 - bb[3]) * vp.height) + 'px';
+      r.style.width = ((bb[2] - bb[0]) * vp.width) + 'px';
+      r.style.height = ((bb[3] - bb[1]) * vp.height) + 'px';
+      r.style.borderColor = colors[b.type] || '#9aa3bd';
+      r.title = `${b.type} · ${b.block_id.slice(-11)}`;
+      wrap.appendChild(r);
+    });
+  }
   // 🔗 左→右：翻页/跳页时右侧滚到本页首块
   if (state.syncLink && !opts.noFollow && ['orig', 'bilingual', 'zh'].includes(state.view)) {
     const first = $(`#content-view .blk[data-page="${state.pageNum - 1}"]`);
@@ -360,6 +379,12 @@ $('#pg-prev').onclick = () => { if (state.pageNum > 1) { state.pageNum--; render
 $('#pg-next').onclick = () => { if (state.pdfDoc && state.pageNum < state.pdfDoc.numPages) { state.pageNum++; renderPage(); } };
 $('#zoom-in').onclick = () => { state.scale = Math.min(3, state.scale + 0.2); renderPage(); };
 $('#zoom-out').onclick = () => { state.scale = Math.max(0.5, state.scale - 0.2); renderPage(); };
+state.showLayout = false;
+$('#layout-btn').onclick = () => {
+  state.showLayout = !state.showLayout;
+  $('#layout-btn').classList.toggle('on', state.showLayout);
+  renderPage({noFollow: true});
+};
 
 /* 内容视图（统一走 switchView，保证 mainView/view 两级状态一致） */
 $$('.view-tabs [data-v]').forEach(b => b.onclick = () => switchView(b.dataset.v));
