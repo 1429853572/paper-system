@@ -53,7 +53,7 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - **视觉 token**：字号用 `--fs-*`（xs11/sm12/base13/md14/lg15/xl17/h1 22）、圆角 `--r-*`（xs4/sm6/md8/lg10/pill）、颜色用 `:root` 语义变量（含 `--tint-*` 系列）——新样式禁止硬编码 px 字号/颜色（v1.2 已归一 146 处字号、161 处颜色）。
 - **图标一律走 `icon('name')` / `ICONS`**（viewer.js，线条 SVG、currentColor）：新 UI 不再引入 emoji 图标；toast 消息文本里可保留 emoji。给 `textContent` 赋含 icon 的 HTML 会转义显示——用 `innerHTML`。
 - **内联 onclick 的函数必须挂到 window**：`viewer.js` 是 `type="module"`，模块顶层函数不在全局作用域，而内联 `onclick="fn()"` 在全局求值 → 引用模块函数会抛 ReferenceError，按钮表现为"点了没反应"。写法：`window.fn = fn;`。改完跑 `node scripts/check-inline-handlers.mjs` 复查（这坑已出现 4 次）。
-- **问答模式**：dock 顶部〔单篇/对比〕切换（`state.qaMode`，存 `ps-qa-mode`）。对比模式 ≥2 篇走检索取证、上限 6 篇、`COMPARE_ADDENDUM` 附加对比提示词（qa.py）；≥2 篇的库级对比工作台是规划中的独立功能。
+- **问答模式**：dock 顶部〔单篇/对比〕切换（`state.qaMode`，存 `ps-qa-mode`）。单篇=范围跟随正在读的论文（**无选择器**，scope 行只显示当前论文标识）；对比=chips 常显 + 虚线「＋添加论文」chip（即选文面板入口），≥2 篇走检索取证、上限 6 篇、`COMPARE_ADDENDUM` 附加对比提示词（qa.py）。勾选后保持面板展开（panelWasOpen 逻辑）。≥2 篇的库级对比工作台是规划中的独立功能。
 - **冒烟测试**：部署后跑 `bash scripts/smoke-test.sh`（只读，15 项：health/静态/登录/关键端点/401 保护）。
 - **按钮巡检**：`node scripts/audit-buttons.mjs` —— 浏览器逐页点击（跳过改数据/花钱的按钮），抓「onclick 函数缺失」「点击抛异常」「接口 4xx/5xx」。静态审计（check-inline-handlers）查不到 `addEventListener` 绑的按钮，巡检能查到。跑之前会自动备份数据库。
 - **上传入口**：没有独立大拖放框——直接把文件拖到**论文列表区**（`.paper-list`）即上传；工具条右侧的 📄 弹层里是「选择文件 / URL 导入」，🔓 图标切换上传可见性（仅自己可见）。

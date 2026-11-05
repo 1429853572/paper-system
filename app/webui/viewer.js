@@ -1209,18 +1209,18 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       <button data-m="compare" class="${isCompare ? 'on' : ''}" title="跨论文对比（选 2-6 篇）">${icon('copy')} 对比</button>
     </div>
     <div class="qa-scope" id="qa-scope"></div>
-    <div class="qa-picker">
-      <button class="btn small" id="qa-pick-toggle">${icon('doc')} 选择论文（<span id="qa-pick-count">0</span>）</button>
+    ${isCompare ? `<div class="qa-picker">
       <div class="qa-pick-panel" id="qa-pick-panel" hidden>
-        <input id="qa-pick-filter" placeholder="过滤标题…" style="font-size:12px">
+        <div class="qa-pick-head">选择要对比的论文 <span class="muted">2-6 篇 · 已选 <b id="qa-pick-count">0</b></span></div>
+        <input id="qa-pick-filter" placeholder="搜索标题…" style="font-size:12px">
         <div id="qa-pick-list"></div>
       </div>
-    </div>
+    </div>` : ''}
     <div class="qa-parse-hint" id="qa-parse-hint" hidden></div>
     <div class="qa-msgs" id="qa-msgs">
       <div class="qa-no-paper" id="qa-no-paper" hidden>${isCompare
-        ? `${icon('chat')} 勾选 2-6 篇论文开始对比<br><span style="font-size:var(--fs-xs)">已解析的论文才能参与对比</span>`
-        : `${icon('chat')} 先用「选择论文」勾选要提问的文献<br><span style="font-size:var(--fs-xs)">也可以先在左侧打开一篇</span>`}</div>
+        ? `${icon('copy')} 在上方勾选 2-6 篇论文开始对比<br><span style="font-size:var(--fs-xs)">已解析的论文才能参与对比</span>`
+        : `${icon('book')} 在左侧打开一篇论文，即可对它提问`}</div>
       <div id="qa-sum-bubble"></div>
       <div id="qa-msg-list"></div>
     </div>
@@ -1244,9 +1244,10 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     localStorage.setItem('ps-qa-mode', state.qaMode);
     renderQaTab();
   });
-  if (isCompare && state.qaPapers.size < 2) {   // 对比模式：不足 2 篇自动展开选文引导
-    $('#qa-pick-panel').hidden = false;
-    renderPickList($('#qa-pick-filter').value.toLowerCase());
+  if (isCompare) { renderQaScope(); }            // 对比模式：chips 常显
+  if (isCompare && state.qaPapers.size < 2) {    // 不足 2 篇自动展开选文引导
+    const panel = $('#qa-pick-panel');
+    if (panel) { panel.hidden = false; renderPickList($('#qa-pick-filter').value.toLowerCase()); }
   }
   api('/api/presets').then(presets => {
     const el = $('#preset-qs');
@@ -1258,12 +1259,15 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       `<button onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('')}</div>`;
     $('#preset-toggle').onclick = () => togglePresetList();
   });
-  $('#qa-pick-toggle').onclick = () => {
+  const pickToggle = $('#qa-pick-toggle');           // 仅对比模式渲染（单篇无选择器）
+  if (pickToggle) pickToggle.onclick = () => {
     const panel = $('#qa-pick-panel');
+    if (!panel) return;
     panel.hidden = !panel.hidden;
     if (!panel.hidden) { renderPickList($('#qa-pick-filter').value.toLowerCase()); $('#qa-pick-filter').focus(); }
   };
-  $('#qa-pick-filter').oninput = e => renderPickList(e.target.value.toLowerCase());
+  const pickFilter = $('#qa-pick-filter');
+  if (pickFilter) pickFilter.oninput = e => renderPickList(e.target.value.toLowerCase());
   $('#qa-send').onclick = sendQa;
   $('#qa-quote-clear').onclick = clearQuote;
   $('#qa-text').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) sendQa(); };
@@ -1388,25 +1392,29 @@ function renderQaScope() {
   const el = $('#qa-scope');
   if (!el) return;
   const cnt = $('#qa-pick-count');
-  if (cnt) cnt.textContent = state.qaPapers.size;   // 计数随范围实时同步（避免残留旧值）
+  if (cnt) cnt.textContent = state.qaPapers.size;   // 计数随范围实时同步
   const ids = [...state.qaPapers];
-  // 单篇模式：范围=当前论文时不占版面；对比模式：chips 常显（直观看到在对比谁）
-  const isDefaultScope = state.qaMode !== 'compare' &&
-    ids.length <= 1 && (!ids.length || ids[0] === state.current?.id);
-  if (isDefaultScope) {
-    el.innerHTML = '';
-    el.hidden = true;
+  const paperName = p2 => {
+    const p = state.qaAllPapers?.find(x => x.id === p2) || state.papers?.find(x => x.id === p2);
+    return p?.title || p2;
+  };
+  if (state.qaMode !== 'compare') {
+    // 单篇：范围 = 正在读的论文（随阅读自动切换，无需选择器）
+    el.hidden = !state.current;
+    el.innerHTML = state.current
+      ? `<span class="chip chip-static" title="当前问答范围 = 正在阅读的论文">${icon('doc')} ${esc(state.current.title || state.current.id)}</span>`
+      : '';
   } else {
+    // 对比：chips（可移除）+ 虚线「＋添加」chip（即选文入口）
     el.hidden = false;
-    el.innerHTML = ids.map(p2 => {
-      const p = state.qaAllPapers?.find(x => x.id === p2) || state.papers?.find(x => x.id === p2);
-      return `<span class="chip">${esc(p?.title || p2)}<button onclick="qaRemove('${p2}')">${icon('close')}</button></span>`;
-    }).join('');
+    el.innerHTML = ids.map(p2 =>
+      `<span class="chip">${esc(paperName(p2))}<button onclick="qaRemove('${p2}')" title="移除">${icon('close')}</button></span>`).join('') +
+      `<button class="chip chip-add" id="qa-pick-toggle" title="添加要对比的论文">${icon('plus')} 添加论文</button>`;
   }
   const hint = $('#qa-parse-hint');
   if (hint) {
-    const waiting = [...state.qaPapers]
-      .map(p2 => state.qaAllPapers.find(x => x.id === p2))
+    const waiting = ids
+      .map(p2 => state.qaAllPapers?.find(x => x.id === p2))
       .filter(p2 => p2 && p2.parse_status !== 'parsed');
     hint.hidden = !waiting.length;
     if (waiting.length) hint.innerHTML = icon('clock', 12) + " " + waiting.map(p2 =>
@@ -1478,6 +1486,8 @@ function renderPickList(filter) {
         <div class="qa-pick-gbody">${g.papers.map(item).join('')}</div>
       </div>`).join('')
     : '<p class="muted" style="padding:8px">无匹配</p>');
+  const panelWasOpen = !$('#qa-pick-panel')?.hidden;
+  const panelFilter = $('#qa-pick-filter')?.value.toLowerCase() || '';
   $$('.qa-pick-item input', el).forEach(cb => cb.onchange = () => {
     const id = cb.dataset.id;
     if (cb.checked) {
@@ -1488,7 +1498,13 @@ function renderPickList(filter) {
       if (p && p.parse_status !== 'parsed') autoParseForQA(id, p);   // 未解析 → 自动入解析队列
     } else state.qaPapers.delete(id);
     $('#qa-pick-count').textContent = state.qaPapers.size;
-    renderQaScope(); renderSumBubble(); renderQaTab();
+    renderQaScope(); renderSumBubble();
+    renderQaTab();
+    // 勾选后保持面板展开 + 搜索词（否则每选一篇面板就收起，多选体验很差）
+    if (panelWasOpen) {
+      const p2 = $('#qa-pick-panel');
+      if (p2) { p2.hidden = false; renderPickList(panelFilter); const f2 = $('#qa-pick-filter'); f2?.focus(); }
+    }
   });
 }
 async function loadSession(sid) {

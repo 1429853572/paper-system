@@ -157,6 +157,11 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
 .cite { color: var(--primary); cursor: pointer; font-size: var(--fs-sm); vertical-align: super; }
 .preset-qs { padding: 0 16px 8px; display: flex; flex-direction: column; gap: 6px; }
 .preset-qs button { text-align: left; border: 1px dashed var(--border); background: none; border-radius: var(--r-md); padding: 7px 10px; font-size: var(--fs-sm); color: var(--muted); }
+.chip-add { border: 1px dashed var(--border); background: none; color: var(--muted);
+            cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.chip-add:hover { border-color: var(--primary); color: var(--primary); background: var(--hover); }
+.chip-static { display: inline-flex; align-items: center; gap: 5px; }
+
 .qa-mode { display: flex; gap: 2px; padding: 8px 16px 0; }
 .qa-mode button { border: none; background: none; padding: 4px 10px; border-radius: var(--r-sm);
                   color: var(--muted); font-size: var(--fs-sm); display: inline-flex; align-items: center; gap: 5px; }
@@ -325,16 +330,21 @@ table.list th { color: var(--muted); font-weight: 500; }
 
 /* ===== 问答选文面板 ===== */
 .qa-picker { position: relative; padding: 8px 14px 0; }
-.qa-pick-panel { position: absolute; z-index: 30; left: 14px; right: 14px; top: calc(100% - 6px);
-  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
-  box-shadow: 0 8px 24px rgba(0,0,0,.14); padding: 8px; max-height: 300px; display: flex; flex-direction: column; }
-.qa-pick-list, #qa-pick-list { overflow-y: auto; margin-top: 6px; }
-.qa-pick-item { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--r-sm);
-  font-size: var(--fs-base); cursor: pointer; }
+.qa-pick-panel { position: absolute; z-index: 30; left: 16px; right: 16px; top: calc(100% + 2px);
+                 background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
+                 box-shadow: 0 10px 28px rgba(0,0,0,.14); padding: 10px 12px 8px; }
+.qa-pick-head { display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-sm);
+                font-weight: 600; padding-bottom: 6px; border-bottom: 1px solid var(--line-soft); margin-bottom: 6px; }
+.qa-pick-head .muted { font-weight: 400; font-size: var(--fs-xs); }
+.qa-pick-panel input { margin-bottom: 6px; }
+#qa-pick-list { max-height: 240px; overflow-y: auto; }
+.qa-pick-item { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--r-xs);
+                font-size: var(--fs-sm); cursor: pointer; }
 .qa-pick-item:hover { background: var(--hover); }
 .qa-pick-item.on { background: var(--tint-primary); }
-.qa-pick-item span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.qa-pick-item input { width: auto; flex: none; }
+.qa-pick-item input { accent-color: var(--primary); margin: 0; }
+.qa-pick-ghead { font-size: var(--fs-xs); color: var(--muted); padding: 6px 8px 2px; cursor: pointer; }
+.qa-pick-gbody { padding-left: 4px; }
 .chip { max-width: 240px; }
 .chip span, .chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; }
 .qa-input textarea { flex: 1; min-width: 0; }
