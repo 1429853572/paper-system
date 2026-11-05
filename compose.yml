@@ -1,0 +1,91 @@
+services:
+  mineru:
+    image: mineru:4.1.6
+    container_name: paper-system-mineru
+    restart: unless-stopped
+    ports: ["8000:8000"]
+    environment:
+      MINERU_MODEL_SOURCE: local
+    entrypoint: ["mineru-kit"]
+    command: ["api-server", "--host", "0.0.0.0", "--port", "8000"]
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/v1/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 10m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  ollama:
+    image: ollama/ollama:0.40.14   # 版本锁定（里程碑6随离线包固化）
+    container_name: paper-system-ollama
+    restart: unless-stopped
+    ports: ["11434:11434"]
+    volumes: ["./models/ollama:/root/.ollama"]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 2m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  app:
+    image: papersys-app:v1
+    build: ./app
+    profiles: ["app"]
+    container_name: paper-system-app
+    restart: unless-stopped
+    depends_on:
+      mineru:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    ports: ["8001:8001"]
+    env_file: .env
+    environment:
+      MINERU_BASE_URL: http://mineru:8000
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - ./app:/app   # 代码挂载：更新=git pull + restart（镜像仍为可复现部署主载体）
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8001/api/health',timeout=4)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 1m
+
+  caddy:
+    image: caddy:2.11.7-alpine   # 版本锁定
+    profiles: ["app"]
+    container_name: paper-system-caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports: ["7861:7861"]
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

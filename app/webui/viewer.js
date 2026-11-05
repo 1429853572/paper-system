@@ -1,0 +1,1234 @@
+/* paper-system 前端逻辑（原生 JS，无框架） */
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+
+const state = {
+  me: null, papers: [], filter: '', q: '',
+  current: null,          // 当前论文 dict
+  pdfDoc: null, pageNum: 1, scale: 1.0,
+  view: 'orig', blocks: [], pairs: [], versions: [],
+  selected: new Set(),    // 多选 paper_ids
+  qaPapers: new Set(),    // 问答 scope
+  qaSession: '', health: {},
+};
+
+/* ---------------- 基础 ---------------- */
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    headers: {'Content-Type': 'application/json', ...(opts.headers || {})},
+    ...opts,
+  });
+  if (r.status === 401) { location.href = '/login'; throw new Error('未登录'); }
+  if (!r.ok) {
+    let d = {}; try { d = await r.json(); } catch {}
+    throw new Error(d.detail || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+function toast(msg, ms = 2500) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), ms);
+}
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+
+/* ---------------- 健康自检 ---------------- */
+async function pollHealth() {
+  try {
+    state.health = await api('/api/health');
+    const ok = state.health.db && state.health.ollama;
+    $('#health-dot').className = 'health-dot ' + (ok ? 'ok' : 'bad');
+    $('#health-dot').title = `db:${state.health.db} mineru:${state.health.mineru} ollama:${state.health.ollama}`;
+  } catch { $('#health-dot').className = 'health-dot bad'; }
+}
+setInterval(pollHealth, 20000);
+
+/* ---------------- 文献库 ---------------- */
+state.collections = [];
+state.currentCollection = '';
+
+async function loadCollections() {
+  const d = await api('/api/collections');
+  state.collections = d.collections;
+  state.totalPapers = d.total;
+  renderCollections();
+}
+function renderCollections() {
+  const el = $('#collections');
+  const total = state.papers.length;  // 仅当前视图
+  const row = (id, name, count, active, deletable) => `
+    <div class="col-item ${active ? 'on' : ''}" data-id="${id}">
+      <span class="col-name">📁 ${esc(name)}</span>
+      <span class="col-count">${count}</span>
+      ${deletable ? `<button class="col-del" title="删除文献库">✕</button>` : ''}
+    </div>`;
+  el.innerHTML =
+    row('', '全部文献', state.totalPapers ?? state.papers.length, state.currentCollection === '', false) +
+    state.collections.map(c => row(c.id, c.name, c.papers, state.currentCollection === c.id, true)).join('') +
+    `<button class="col-new" id="col-new">＋ 新建文献库</button>
+    <div class="col-new-form" id="col-new-form" hidden>
+      <input id="col-new-name" placeholder="文献库名称，回车创建" maxlength="50">
+      <div><button class="btn small primary" id="col-new-ok">创建</button>
+      <button class="btn small" id="col-new-cancel">取消</button></div>
+    </div>`;
+  $$('.col-item', el).forEach(item => item.onclick = e => {
+    if (e.target.classList.contains('col-del')) return;
+    state.currentCollection = item.dataset.id;
+    $('#dz-target').textContent =
+      state.collections.find(c => c.id === item.dataset.id)?.name || '默认文献库';
+    renderCollections(); loadPapers();
+  });
+  $$('.col-del', el).forEach(btn => btn.onclick = async e => {
+    e.stopPropagation();
+    const cid = e.target.closest('.col-item').dataset.id;
+    const name = state.collections.find(c => c.id === cid)?.name || '';
+    if (!confirm(`删除文献库「${name}」？库内论文保留（变为未分库）`)) return;
+    await api('/api/collections/' + cid, {method: 'DELETE'});
+    if (state.currentCollection === cid) state.currentCollection = '';
+    loadCollections(); loadPapers();
+  });
+  $('#col-new').onclick = () => {
+    const form = $('#col-new-form');
+    form.hidden = !form.hidden;
+    if (!form.hidden) $('#col-new-name').focus();
+  };
+  const createCol = async () => {
+    const name = $('#col-new-name').value.trim();
+    if (!name) { toast('请输入名称'); return; }
+    try {
+      const d = await api('/api/collections', {method: 'POST', body: JSON.stringify({name})});
+      $('#col-new-name').value = '';
+      $('#col-new-form').hidden = true;
+      state.currentCollection = d.id;
+      $('#dz-target').textContent = d.name;
+      loadCollections(); loadPapers();
+    } catch (e) { toast('创建失败: ' + e.message); }
+  };
+  $('#col-new-ok').onclick = createCol;
+  $('#col-new-name').onkeydown = e => { if (e.key === 'Enter') createCol(); if (e.key === 'Escape') $('#col-new-form').hidden = true; };
+  $('#col-new-cancel').onclick = () => { $('#col-new-form').hidden = true; };
+  // 批量移动下拉
+  $('#batch-move').innerHTML = '<option value="">移入…</option>' +
+    state.collections.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('') +
+    '<option value="__none__">未分库</option>';
+}
+
+/* ---------------- 文库 ---------------- */
+async function renderContentSearch() {
+  const el = $('#paper-list');
+  el.innerHTML = '<p class="muted" style="padding:14px">全文检索中…</p>';
+  try {
+    const d = await api('/api/search', {method: 'POST', body: JSON.stringify({query: state.q.trim(), top_k: 20})});
+    if (!d.hits.length) { el.innerHTML = '<p class="muted" style="padding:14px">标题与全文均无匹配</p>'; return; }
+    el.innerHTML = `<div style="padding:8px 14px" class="muted">🔎 全文命中 ${d.hits.length} 处（点击跳转）</div>` +
+      d.hits.map(h => {
+        const p = state.qaAllPapers?.find(x => x.id === h.paper_id) || state.papers.find(x => x.id === h.paper_id) || {};
+        return `<div class="paper-item" data-id="${h.paper_id}" data-page="${h.page_index}">
+          <div class="info"><div class="name">${esc(p.title || h.paper_id)}</div>
+          <div class="meta">📄 第${h.page_index + 1}页</div>
+          <div class="muted" style="font-size:11px;padding:2px 0">${esc(h.text.slice(0, 90))}</div></div></div>`;
+      }).join('');
+    $$('.paper-item', el).forEach(item => item.onclick = async () => {
+      await openPaper(item.dataset.id);
+      jumpEvidence(+item.dataset.page);
+    });
+  } catch (e) { el.innerHTML = `<p class="muted" style="padding:14px">检索失败: ${esc(e.message)}</p>`; }
+}
+async function loadPapers() {
+  const params = new URLSearchParams({q: state.q.trim(), collection_id: state.currentCollection});
+  const d = await api('/api/papers?' + params);
+  state.papers = d.papers;
+  renderPapers();
+}
+function statusBadge(p) {
+  if (p.deleted_at) return '<span class="badge err">回收站</span>';
+  const m = {parsed: '<span class="badge ok">已解析</span>',
+             parsing: '<span class="badge run">解析中</span>',
+             pending: '<span class="badge run">排队中</span>',
+             failed: '<span class="badge err">失败</span>'};
+  return m[p.parse_status] || '';
+}
+function renderPapers() {
+  const el = $('#paper-list');
+  if (state.q && state.q.trim().length >= 2) { renderContentSearch(); return; }
+  if (!state.papers.length) { el.innerHTML = '<p class="muted" style="padding:20px">暂无论文，上传 PDF 开始</p>'; return; }
+  el.innerHTML = state.papers.map(p => `
+    <div class="paper-item ${state.current?.id === p.id ? 'sel' : ''}" data-id="${p.id}">
+      ${state.selectMode ? `<input type="checkbox" ${state.selected.has(p.id) ? 'checked' : ''}>` : ''}
+      <div class="info">
+        <div class="name">${esc(p.title || p.id)}</div>
+        <div class="meta">${statusBadge(p)}
+          ${p.visibility === 'private' ? '<span class="badge priv">私人</span>' : ''}
+          <span>${(p.page_count || '?')}页</span><span>${p.file_size ? (p.file_size/1048576).toFixed(1) + 'M' : ''}</span>
+        </div>
+      </div>
+    </div>`).join('');
+  $$('.paper-item', el).forEach(item => {
+    const id = item.dataset.id;
+    item.onclick = e => {
+      if (e.target.type === 'checkbox') { toggleSelect(id, e.target.checked); return; }
+      if (state.selectMode) { toggleSelect(id, !state.selected.has(id)); return; }
+      openPaper(id);   // 普通模式：单击任意位置直接打开
+    };
+  });
+}
+function toggleSelect(id, on) {
+  on ? state.selected.add(id) : state.selected.delete(id);
+  $('#batch-bar').classList.toggle('show', state.selectMode && state.selected.size > 0);
+}
+
+/* 上传 */
+const dz = $('#dropzone');
+dz.onclick = () => $('#file-input').click();
+$('#file-input').onchange = e => uploadFiles(e.target.files);
+['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
+dz.addEventListener('drop', e => uploadFiles(e.dataTransfer.files));
+async function uploadFiles(files) {
+  const pdfs = [...files].filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (!pdfs.length) { toast('仅支持 PDF'); return; }
+  const vis = $('#vis-private').checked ? 'private' : 'shared';
+  const col = state.currentCollection ? `&collection_id=${state.currentCollection}` : '';
+  const fd = new FormData();
+  pdfs.forEach(f => fd.append('files', f));
+  const r = await fetch(`/api/papers/upload?visibility=${vis}${col}`, {method: 'POST', body: fd});
+  if (!r.ok) { toast((await r.json()).detail || '上传失败'); return; }
+  const d = await r.json();
+  const ok = d.results.filter(x => x.status === 'queued').length;
+  const dup = d.results.filter(x => x.status === 'duplicate').length;
+  const rej = d.results.filter(x => x.status === 'rejected');
+  toast(`已排队 ${ok} 篇${dup ? `，去重跳过 ${dup} 篇` : ''}${rej.length ? `，拒收 ${rej.length} 篇：${rej[0].reason}` : ''}`);
+  loadPapers(); loadCollections();
+}
+
+/* 多选模式与批量操作 */
+state.selectMode = false;
+$('#sel-toggle').onclick = () => {
+  state.selectMode = !state.selectMode;
+  $('#sel-toggle').classList.toggle('primary', state.selectMode);
+  if (!state.selectMode) { state.selected.clear(); $('#batch-bar').classList.remove('show'); }
+  renderPapers();
+};
+$('#batch-cancel').onclick = () => {
+  state.selected.clear(); $('#batch-bar').classList.remove('show');
+  state.selectMode = false; $('#sel-toggle').classList.remove('primary');
+  renderPapers();
+};
+$('#batch-translate').onclick = async () => {
+  await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [...state.selected]})});
+  toast(`已加入翻译队列（${state.selected.size} 篇）`); $('#batch-cancel').click();
+};
+$('#batch-delete').onclick = async () => {
+  if (!confirm(`删除选中的 ${state.selected.size} 篇？（进回收站，30 天内可恢复）`)) return;
+  for (const id of state.selected) await api('/api/papers/' + id, {method: 'DELETE'});
+  toast('已移入回收站'); $('#batch-cancel').click(); loadPapers();
+};
+$('#batch-move').onchange = async e => {
+  if (!state.selected.size) return;
+  const v = e.target.value;
+  if (!v) return;
+  const cid = v === '__none__' ? null : v;
+  for (const id of state.selected) await api('/api/papers/' + id, {method: 'PATCH', body: JSON.stringify({collection_id: cid})});
+  toast(`已移动 ${state.selected.size} 篇`);
+  e.target.value = ''; $('#batch-cancel').click(); loadPapers(); loadCollections();
+};
+
+/* 搜索 */
+$('#lib-search').oninput = e => { state.q = e.target.value; loadPapers(); };
+
+/* ---------------- 阅读器 ---------------- */
+let pdfjsLib = null;
+async function initPdfJs() {
+  pdfjsLib = await import('/static/vendor/pdfjs/pdf.min.mjs');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdfjs/pdf.worker.min.mjs';
+}
+async function openPaper(id) {
+  const d = await api('/api/papers/' + id);
+  state.current = d.paper; state.blocks = d.blocks;
+  renderPapers();
+  $('#page-title').textContent = d.paper.title || d.paper.id;
+  // PDF
+  try {
+    state.pdfDoc = await pdfjsLib.getDocument(`/api/papers/${id}/pdf`).promise;
+    state.pageNum = 1; state.scale = 1.2;
+    $('#pdf-toolbar').hidden = false;
+    renderPage();
+  } catch (e) { toast('PDF 加载失败: ' + e.message); }
+  // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
+  state.pairs = []; state.versions = []; state.assets = null;
+  renderContentView();
+  loadBilingual(id);
+  refreshJobState();          // 解析/翻译控制按钮状态
+  // 问答 scope 默认当前论文
+  state.qaPapers.clear(); state.qaPapers.add(id);
+  renderQaScope();
+}
+async function renderPage() {
+  const page = await state.pdfDoc.getPage(state.pageNum);
+  $('#pg-label').textContent = `${state.pageNum} / ${state.pdfDoc.numPages}`;
+  $('#zoom-label').textContent = Math.round(state.scale * 100) + '%';
+  const host = $('#pdf-host');
+  $$('.hl-rect', host).forEach(x => x.remove());
+  $$('.pdf-host canvas').forEach(x => x.remove());
+  const vp = page.getViewport({scale: state.scale});
+  const canvas = document.createElement('canvas');
+  canvas.width = vp.width; canvas.height = vp.height;
+  host.appendChild(canvas);
+  await page.render({canvasContext: canvas.getContext('2d'), viewport: vp}).promise;
+  drawHighlights(page, vp);
+}
+function drawHighlights(page, vp) {
+  // 当前激活 block 有 bbox（归一化）→ 在对应页高亮
+  const active = $('.blk.active');
+  if (!active || !active.dataset.bbox) return;
+  const bboxes = JSON.parse(active.dataset.bbox);
+  const host = $('#pdf-host');
+  for (const b of bboxes || []) {
+    if (!b || b.length < 4) continue;
+    const [x0, y0, x1, y1] = b;  // 归一化 [0,1]，原点左下（PDF）→ 转左上
+    const rect = document.createElement('div');
+    rect.className = 'hl-rect';
+    rect.style.left = (x0 * vp.width) + 'px';
+    rect.style.top = ((1 - y1) * vp.height) + 'px';
+    rect.style.width = ((x1 - x0) * vp.width) + 'px';
+    rect.style.height = ((y1 - y0) * vp.height) + 'px';
+    host.appendChild(rect);
+  }
+}
+$('#pg-prev').onclick = () => { if (state.pageNum > 1) { state.pageNum--; renderPage(); } };
+$('#pg-next').onclick = () => { if (state.pdfDoc && state.pageNum < state.pdfDoc.numPages) { state.pageNum++; renderPage(); } };
+$('#zoom-in').onclick = () => { state.scale = Math.min(3, state.scale + 0.2); renderPage(); };
+$('#zoom-out').onclick = () => { state.scale = Math.max(0.5, state.scale - 0.2); renderPage(); };
+
+/* 内容视图（统一走 switchView，保证 mainView/view 两级状态一致） */
+$$('.view-tabs [data-v]').forEach(b => b.onclick = () => switchView(b.dataset.v));
+async function loadBilingual(id) {
+  try {
+    const d = await api(`/api/papers/${id}/bilingual`);
+    state.pairs = d.pairs; state.versions = d.versions;
+    const vs = $('#version-select');
+    if (d.versions.length > 1) {
+      vs.hidden = false;
+      vs.innerHTML = d.versions.map(v =>
+        `<option value="${v.cache_key}">${esc(v.model)} · ${v.at.slice(0, 10)} · ${v.blocks}段</option>`).join('');
+    } else vs.hidden = true;
+    renderContentView();
+  } catch { state.pairs = []; }
+}
+$('#version-select').onchange = e => {
+  const d = e.target.value;
+  api(`/api/papers/${state.current.id}/bilingual?cache_key=${d}`).then(x => {
+    state.pairs = x.pairs; renderContentView();
+  });
+};
+/* 解析/翻译控制按钮：按论文实时 jobstate 切换 */
+function renderJobButtons(js) {
+  const tb = $('#translate-btn');
+  let extra = $('#parse-ctrl');
+  if (!extra) {
+    extra = document.createElement('button');
+    extra.id = 'parse-ctrl'; extra.className = 'btn small';
+    extra.onclick = parseCtrl;
+    $('.view-tabs').insertBefore(extra, $('#translate-btn'));
+  }
+  if (js.parsing) {
+    extra.textContent = '⏹ 取消解析'; extra.classList.add('danger');
+  } else if (js.parse_status === 'failed') {
+    extra.textContent = '▶ 重新解析'; extra.classList.remove('danger');
+  } else {
+    extra.textContent = '↻ 重新解析'; extra.classList.remove('danger');
+  }
+  if (js.translating) {
+    tb.textContent = '⏹ 取消翻译'; tb.onclick = cancelTranslate;
+  } else {
+    tb.textContent = '🌐 翻译全文'; tb.onclick = startTranslate;
+  }
+  /* 进度条 */
+  const strip = $('#job-progress');
+  const tp = js.translate_progress, pp = js.parse_progress;
+  if (tp) {
+    const st = tp.status === 'queued' ? '排队中' : '翻译中';
+    const pct = tp.total ? Math.round(100 * tp.done / tp.total) : 0;
+    strip.hidden = false;
+    strip.innerHTML = `<span>${st} ${tp.done}/${tp.total} 段</span>
+      <div class="progress"><i style="width:${pct}%"></i></div>
+      <span class="muted">完成后自动出现双语视图 · 全部任务见「任务中心」</span>`;
+  } else if (pp) {
+    strip.hidden = false;
+    strip.innerHTML = `<span>${pp.status === 'queued' ? '解析排队中（GPU 队列）' : pp.status === 'pending_gate' ? '等待 GPU 就绪…' : '解析中'}</span>
+      <div class="progress"><i style="width:${pp.total ? Math.round(100 * pp.done / pp.total) : 5}%"></i></div>
+      <span class="muted">全部任务见「任务中心」</span>`;
+  } else {
+    strip.hidden = true;
+  }
+}
+async function refreshJobState() {
+  if (!state.current) return;
+  try {
+    const js = await api(`/api/papers/${state.current.id}/jobstate`);
+    renderJobButtons(js);
+    if (js.translating) watchTranslation();   // 进行中→自动轮询完成刷新
+  } catch {}
+}
+async function parseCtrl() {
+  const pid = state.current.id;
+  const js = await api(`/api/papers/${pid}/jobstate`);
+  if (js.parsing) {
+    if (!confirm('取消解析当前论文？')) return;
+    await api(`/api/papers/${pid}/cancel-parse`, {method: 'POST'});
+    toast('解析已取消');
+  } else {
+    await api(`/api/papers/${pid}/parse`, {method: 'POST'});
+    toast('解析任务已开始（插队执行）');
+  }
+  refreshJobState(); loadPapers();
+}
+async function startTranslate() {
+  try {
+    await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [state.current.id]})});
+    toast('翻译任务已加入队列，完成后自动出现双语视图');
+  } catch (e) { toast(e.message); }
+  refreshJobState();
+}
+async function cancelTranslate() {
+  if (!confirm('取消翻译当前论文？（已完成段落会保留）')) return;
+  await api(`/api/papers/${state.current.id}/cancel-translate`, {method: 'POST'});
+  toast('翻译已取消');
+  refreshJobState();
+}
+/* 翻译进行中轮询：完成自动刷新视图 */
+let watching = null;
+function watchTranslation() {
+  clearInterval(watching);
+  watching = setInterval(async () => {
+    if (!state.current) { clearInterval(watching); return; }
+    const d = await api(`/api/papers/${state.current.id}/bilingual`);
+    if (d.versions.length && (state.versions.length === 0 ||
+        d.versions[0].cache_key !== state.versions[0].cache_key)) {
+      clearInterval(watching); toast('翻译完成 ✓');
+      state.versions = d.versions; state.pairs = d.pairs; renderContentView();
+    }
+    refreshJobState();
+  }, 4000);
+}
+$('#translate-btn').onclick = startTranslate;
+function switchView(v, s) {
+  // s = 阅读子视图；v ∈ read|qa|meta|assets|json；兼容旧调用（orig/bilingual/zh → read+v）
+  if (['orig', 'bilingual', 'zh'].includes(v)) { s = v; v = 'read'; }
+  if (v === 'read' && s) state.rpane.readingView = s;
+  state.mainView = v;
+  state.view = v === 'read' ? (s || state.rpane.readingView || 'orig') : v;
+  $$('.view-tabs [data-v]').forEach(x => x.classList.toggle('on', x.dataset.v === v));
+  $('#r-subtabs').hidden = v !== 'read';
+  if (v === 'qa' && state.rpane.split) {
+    // 分屏：顶部阅读视图 + 底部问答 dock
+    const top = state.rpane.readingView || 'orig';
+    state.view = top;
+    $$('.r-subtabs [data-s]').forEach(x => x.classList.toggle('on', x.dataset.s === top));
+    renderContentView();
+    renderQaUI($('#qa-dock-body'));
+    return;
+  }
+  if (v !== 'qa') $('#qa-dock').hidden = true;
+  $$('.r-subtabs [data-s]').forEach(x => x.classList.toggle('on', x.dataset.s === state.view));
+  renderContentView();
+}
+function renderContentView() {
+  const el = $('#content-view');
+  if (!state.current) { el.innerHTML = '<p class="muted">选择左侧论文开始阅读</p>'; return; }
+  if (state.mainView === 'read' || ['orig','bilingual','zh'].includes(state.view)) {
+    // 阅读：走下方 orig/bilingual/zh 分支
+  } else if (state.view === 'qa') { renderQaTab(); return; }
+  if (state.view === 'meta') { renderMeta(); return; }
+  if (state.view === 'assets') { renderAssets(); return; }
+  if (state.view === 'json') {
+    el.innerHTML = `<pre style="font-size:11px">${esc(JSON.stringify(state.blocks, null, 2))}</pre>`;
+    return;
+  }
+  if (state.view === 'bilingual') {
+    if (!state.pairs.length) {
+      el.innerHTML = `<p class="muted">尚无译文。点击右上「翻译全文」开始（未配置翻译 key 请到设置页配置）。</p>`;
+      return;
+    }
+    const SKIP = new Set(['equation', 'image', 'chart', 'ref_text', 'page_number', 'aside_text']);
+    el.innerHTML = '<div class="pairs">' + state.pairs.map(p => {
+      const zh = p.zh ? esc(p.zh)
+        : (SKIP.has(p.type) ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
+      return `<div class="pair en blk" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.en)}</div>
+              <div class="pair zh blk" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${zh}</div>`;
+    }).join('') + '</div>';
+  } else if (state.view === 'zh') {
+    const zh = state.pairs.filter(p => p.zh);
+    el.innerHTML = zh.length ? zh.map(p =>
+      `<div class="blk zh" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.zh)}</div>`).join('')
+      : '<p class="muted">尚无中文译文。</p>';
+  } else {  // orig
+    el.innerHTML = state.blocks.map(b => `
+      <div class="blk" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}'>
+        ${b.type === 'title' ? '<h3>' : ''}${esc(b.text)}${b.type === 'title' ? '</h3>' : ''}
+      </div>`).join('');
+  }
+  // 段落点击 → 跳页 + 高亮
+  $$('.blk', el).forEach(x => x.onclick = () => {
+    $$('.blk').forEach(y => y.classList.remove('active'));
+    x.classList.add('active');
+    const page = parseInt(x.dataset.page ?? '0') + 1;
+    if (state.pdfDoc && page >= 1 && page <= state.pdfDoc.numPages) {
+      state.pageNum = page; renderPage();  // renderPage 会依据 data-bbox 画高亮
+    }
+  });
+}
+
+/* 阅读子页签（原文/双语/中文） */
+$$('.r-subtabs [data-s]').forEach(b => b.onclick = () => switchView('read', b.dataset.s));
+
+/* ---------------- 页签切换 ---------------- */
+$$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.dataset.page));
+function switchPage(page) {
+  $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
+  $('#page-title').textContent = {reader: '阅读', tasks: '任务中心',
+    trash: '回收站', settings: '设置', admin: '管理'}[page];
+  for (const p of ['reader', 'tasks', 'trash', 'settings', 'admin']) {
+    $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
+  }
+  ({tasks: renderTasks, trash: renderTrash,
+    settings: renderSettings, admin: renderAdmin})[page]?.();
+}
+window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
+
+/* ---------------- 任务中心 ---------------- */
+async function renderTasks() {
+  const d = await api('/api/jobs?limit=100');
+  const isAdmin = state.me.role === 'admin';
+  const usage = await api('/api/usage');
+  const rows = d.jobs.map(j => {
+    const pct = j.progress_total ? Math.round(100 * j.progress_done / j.progress_total) : 0;
+    const st = {queued: '排队', pending_gate: '等待GPU', running: '进行中', done: '完成',
+                failed: '失败', canceled: '已取消'}[j.status] || j.status;
+    return `<tr>
+      <td>${esc(j.username || '')}</td><td>${j.job_type}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">${esc(j.title || j.paper_id || '')}</td>
+      <td>${j.priority === 'interactive' ? '⚡手动' : 'bg'}</td>
+      <td>${st}${j.error ? `<div class="muted" style="font-size:11px">${esc(j.error.slice(0, 80))}</div>` : ''}</td>
+      <td><div class="progress"><i style="width:${pct}%"></i></div><span class="muted" style="font-size:11px">${j.progress_done}/${j.progress_total}</span></td>
+      <td class="row-actions">
+        ${['failed', 'canceled'].includes(j.status) ? `<button class="btn small" onclick="retryJob(${j.id})">重试</button>` : ''}
+        ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" onclick="cancelJob(${j.id})">取消</button>` : ''}
+      </td></tr>`;
+  }).join('');
+  const usageRows = usage.by_user.map(u =>
+    `<tr><td>${esc(u.username)}</td><td>${u.key_source}</td><td>${u.purpose}</td>
+     <td>${u.p.toLocaleString()} / ${u.c.toLocaleString()}</td><td>${u.calls}</td></tr>`).join('');
+  $('#page-tasks').innerHTML = `
+    <div class="card">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <h2 style="flex:1">任务队列</h2>
+        ${isAdmin ? `<button class="btn small" onclick="pauseQueue()">暂停批量</button>
+        <button class="btn small" onclick="resumeQueue()">恢复批量</button>` : ''}
+      </div>
+      <table class="list"><tr><th>用户</th><th>类型</th><th>论文</th><th>优先级</th><th>状态</th><th>进度</th><th></th></tr>
+      ${rows || '<tr><td colspan="7" class="muted">暂无任务</td></tr>'}</table>
+    </div>
+    <div class="card"><h2>Token 用量</h2>
+      <table class="list"><tr><th>用户</th><th>key来源</th><th>用途</th><th>prompt/completion</th><th>调用</th></tr>
+      ${usageRows || '<tr><td colspan="5" class="muted">暂无用量</td></tr>'}</table></div>`;
+}
+window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderTasks(); };
+window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderTasks(); };
+window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: 'POST'}); toast('批量已暂停（手动任务不受影响）'); };
+window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); };
+
+/* SSE 实时进度 */
+async function watchJobs() {
+  const es = new EventSource('/api/jobs/stream');
+  es.onmessage = e => {
+    const ev = JSON.parse(e.data);
+    if (state.current && ev.paper_id === state.current.id && ev.job_type === 'parse' && ev.status === 'done') {
+      openPaper(state.current.id);  // 解析完成刷新视图
+      loadPapers();
+    }
+    if (ev.job_type === 'parse' && (ev.status === 'done' || ev.status === 'failed')) {
+      api('/api/papers').then(d => {
+        state.qaAllPapers = d.papers;
+        if (state.view === 'qa') {
+          renderPickList($('#qa-pick-filter')?.value.toLowerCase() || '');
+          renderQaScope();
+          if (ev.status === 'done') toast(`《${(d.papers.find(x => x.id === ev.paper_id) || {}).title || ''}》解析完成，可以提问了`);
+        }
+      });
+    }
+    if (['#page-tasks'].some(s => $(s).style.display !== 'none')) renderTasks();
+  };
+}
+
+/* ---------------- 右栏页签：文献信息 / 导读 / 图表 ---------------- */
+const SUMMARY_NAMES = {problem: '研究问题', core_idea: '核心思想', method: '方法', datasets: '数据集',
+  baselines: '基线', metrics: '指标', ablation: '消融', complexity: '复杂度', limitations: '局限'};
+
+async function renderMeta() {
+  const p = state.current;
+  if (!p) { $('#content-view').innerHTML = '<p class="muted">选择论文后查看文献信息</p>'; return; }
+  const pid = p.id;
+  const d = await api('/api/papers/' + pid);
+  const paper = d.paper;
+  const notes = await api(`/api/papers/${pid}/notes`);
+  const refs = await api(`/api/papers/${pid}/references`);
+  state._refs = refs.references;
+  const kw = (() => { try { return JSON.parse(paper.keywords || '[]'); } catch { return []; } })();
+
+  $('#content-view').innerHTML = `
+    <div class="meta-head card">
+      <h2 id="m-title" style="margin-bottom:8px">${esc(paper.title || paper.id)}</h2>
+      <div class="meta-line">👤 <span id="m-authors">${esc(paper.authors || '—')}</span></div>
+      <div class="meta-line" id="m-rank"><span class="muted">期刊分区：</span><button class="btn small" onclick="loadRank('${pid}')">查询</button></div>
+      <div class="meta-line">📚 <span id="m-src">${esc([paper.journal, paper.year, paper.doi ? 'DOI: ' + paper.doi : ''].filter(Boolean).join(' · ') || '—')}</span>
+        ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">✓ 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>
+      <div class="meta-line">⭐ <span id="m-stars">${[1,2,3,4,5].map(i => `<span class="star ${i <= (notes.importance||0) ? 'on' : ''}" data-i="${i}">★</span>`).join('')}</span>
+        🏷 <span id="m-tags">${esc(notes.tags || '') || '<i class=muted>点击右侧添加</i>'}</span></div>
+      <div class="meta-actions">
+        <button class="btn small" onclick="editMeta('${pid}')">✏️ 编辑</button>
+        <button class="btn small" onclick="extractMeta('${pid}')">🤖 AI 提取</button>
+        <button class="btn small" onclick="verifyMeta('${pid}')">🌐 联网校准</button>
+        <button class="btn small" onclick="copyCite('${pid}')">✂ 引用</button>
+        <a class="btn small" href="/api/papers/${pid}/pdf" download="原始.pdf">⬇ PDF</a>
+        <button class="btn small" onclick="parseCtrl()">↻ 重新解析</button>
+      </div>
+    </div>
+    <div class="card"><h3>摘要 ${kw.length ? '<span class="muted" style="font-weight:400;font-size:12px">关键词: ' + esc(kw.join(' · ')) + '</span>' : ''}</h3>
+      <p style="font-size:13px; line-height:1.7">${esc(paper.abstract || '（无——可点 AI 提取）')}</p></div>
+    <div class="card"><h3>📝 备注</h3>
+      <textarea id="m-notes" placeholder="记录阅读笔记…（自动保存）" style="min-height:70px">${esc(notes.notes || '')}</textarea></div>
+    <div class="card"><h3>References (${refs.references.length}) <input id="ref-search" placeholder="搜索…" style="width:140px; font-size:12px; margin-left:8px; display:inline-block"></h3>
+      <div class="ref-list" id="ref-list"></div></div>
+    <div class="card"><h3>📁 分库</h3>
+      <select id="m-collection" style="max-width:240px"><option value="">未分库</option></select></div>`;
+
+  // 分库下拉
+  const colSel = $('#m-collection');
+  state.collections.forEach(c2 => colSel.insertAdjacentHTML('beforeend',
+    `<option value="${c2.id}" ${paper.collection_id === c2.id ? 'selected' : ''}>${esc(c2.name)}</option>`));
+  colSel.onchange = () => api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: colSel.value || null})});
+
+  // 星级
+  $$('#m-stars .star').forEach(s => s.onclick = async () => {
+    const val = +s.dataset.i === notes.importance ? 0 : +s.dataset.i;
+    await api(`/api/papers/${pid}/notes`, {method: 'PUT', body: JSON.stringify({...notes, importance: val})});
+    notes.importance = val; renderMeta();
+  });
+  // 标签（点行尾进入编辑）
+  $('#m-tags').onclick = async () => {
+    const v = prompt('标签（逗号分隔）:', notes.tags || '');
+    if (v === null) return;
+    await api(`/api/papers/${pid}/notes`, {method: 'PUT', body: JSON.stringify({...notes, tags: v})});
+    notes.tags = v; renderMeta();
+  };
+  // 备注自动保存
+  let noteTimer;
+  $('#m-notes').oninput = e => {
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(() => api(`/api/papers/${pid}/notes`, {method: 'PUT', body: JSON.stringify({...notes, notes: e.target.value})}).then(() => toast('已保存', 1000)), 800);
+  };
+  // 参考文献渲染+搜索
+  const renderRefs = q => {
+    const list = refs.references.filter(r => !q || r.text.toLowerCase().includes(q));
+    $('#ref-list').innerHTML = list.map(r =>
+      `<div class="ref-item" onclick="jumpEvidence(${r.page_index})">📄 ${esc(r.text.slice(0, 150))}</div>`).join('') ||
+      '<p class="muted">无匹配</p>';
+  };
+  renderRefs('');
+  $('#ref-search').oninput = e => renderRefs(e.target.value.toLowerCase());
+}
+
+window.editMeta = (pid) => {
+  const p = state.current;
+  const f = (label, key, val) => prompt(label, val || '');
+  const title = f('标题', 'title', p.title);
+  if (title === null) return;
+  const authors = f('作者（逗号分隔）', 'authors', p.authors);
+  const journal = f('期刊/会议', 'journal', p.journal);
+  const year = f('年份', 'year', p.year);
+  const doi = f('DOI', 'doi', p.doi);
+  api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({title, authors, journal, year, doi})})
+    .then(() => { toast('已保存'); openPaper(pid); });
+};
+window.reindexPaper = async (pid) => {
+  if (!confirm('重建该论文的检索索引？（不影响解析/翻译结果）')) return;
+  await api(`/api/papers/${pid}/reindex`, {method: 'POST'});
+  toast('索引重建任务已入队');
+};
+window.verifyMeta = async (pid) => {
+  toast('联网校准中…（arXiv/CrossRef，只发送标题）');
+  try {
+    const r = await api(`/api/papers/${pid}/verify-meta`, {method: 'POST'});
+    if (r.verified) toast(`✓ 已按 ${r.candidate.source} 校准（标题相似度 ${r.candidate.match}）`);
+    else toast('⚠ ' + r.message);
+    openPaper(pid); renderMeta();
+  } catch (e) { toast('校准失败: ' + e.message); }
+};
+window.loadRank = async (pid) => {
+  const el = $('#m-rank');
+  el.innerHTML = '<span class="muted">期刊分区：查询中…</span>';
+  try {
+    const r = await api(`/api/papers/${pid}/journal-rank`);
+    if (r.found) {
+      const bits = [r.cas && `中科院${r.cas}区`, r.cas_small && `小类${r.cas_small}`,
+                    r.jcr && `JCR ${r.jcr}`, r.impact_factor && `IF ${r.impact_factor}`].filter(Boolean);
+      el.innerHTML = `<span class="badge ok">📊</span> ${esc(bits.join(' · ') || '无分区数据')}
+        <span class="muted" style="font-size:11px">via easyScholar${r.cached ? '（缓存）' : ''}</span>`;
+    } else {
+      el.innerHTML = `<span class="muted">期刊分区：${esc(r.message)}</span>
+        <button class="btn small" onclick="loadRank('${pid}')">重查</button>`;
+    }
+  } catch (e) { el.innerHTML = `<span class="muted">期刊分区：查询失败 ${esc(e.message)}</span>`; }
+};
+window.extractMeta = async (pid) => {
+  toast('AI 提取中…（约 10 秒）');
+  try {
+    await api(`/api/papers/${pid}/extract-meta`, {method: 'POST'});
+    toast('提取完成'); openPaper(pid); renderMeta();
+  } catch (e) { toast('提取失败: ' + e.message); }
+};
+window.copyCite = async (pid) => {
+  const d = await api('/api/papers/' + pid);
+  const p = d.paper;
+  const authors = (p.authors || '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  const citeGB = `${authors.map(a => a.split(' ').slice(-1)[0]).join(', ')}等. ${p.title}[J]. ${p.journal || ''}, ${p.year || ''}.`;
+  const citeBib = `@article{${(p.title || 'paper').slice(0, 20).replace(/\W+/g, '')}${p.year || ''},\n  title = {${p.title}},\n  author = {${p.authors}},\n  journal = {${p.journal || ''}},\n  year = {${p.year || ''}},\n  doi = {${p.doi || ''}}\n}`;
+  const pick = prompt('1 = GB/T 7714\n2 = BibTeX\n输入序号复制：', '1');
+  if (pick === '1') { navigator.clipboard.writeText(citeGB); toast('GB/T 7714 已复制'); }
+  if (pick === '2') { navigator.clipboard.writeText(citeBib); toast('BibTeX 已复制'); }
+};
+
+/* ---------------- 右栏页签：问答 / 导读（与文章并排） ---------------- */
+function renderQaTab() {   // 整栏模式入口
+  renderQaUI($('#content-view'));
+}
+state.rpane = { split: false, top: 55, readingView: 'orig' };
+function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock body（分屏）
+  const pid = state.current?.id;
+  container.innerHTML = `
+    <div class="qa-scope" id="qa-scope"></div>
+    <div class="qa-picker">
+      <button class="btn small" id="qa-pick-toggle">📄 选择论文（<span id="qa-pick-count">0</span>）</button>
+      <div class="qa-pick-panel" id="qa-pick-panel" hidden>
+        <input id="qa-pick-filter" placeholder="过滤标题…" style="font-size:12px">
+        <div id="qa-pick-list"></div>
+      </div>
+    </div>
+    <div class="qa-parse-hint" id="qa-parse-hint" hidden></div>
+    <div class="qa-msgs" id="qa-msgs">
+      <div id="qa-sum-bubble"></div>
+      <div id="qa-msg-list"></div>
+    </div>
+    <div class="preset-qs" id="preset-qs"></div>
+    <div class="qa-input">
+      <textarea id="qa-text" placeholder="对着左侧文章提问…（Ctrl+Enter 发送）"></textarea>
+      <button class="btn primary" id="qa-send">发送</button>
+    </div>`;
+  if (!state.qaPapers.size && pid) state.qaPapers.add(pid);   // 默认=当前论文
+  renderQaScope();
+  populateQaPicker();
+  api('/api/presets').then(presets => {
+    const el = $('#preset-qs');
+    if (!el) return;
+    const qs = [...presets.questions];
+    if (state.qaPapers.size >= 2) qs.unshift('对比所选论文的方法、数据集与实验结果有何异同？');
+    el.innerHTML = qs.map(q =>
+      `<button onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('');
+  });
+  $('#qa-pick-toggle').onclick = () => {
+    const panel = $('#qa-pick-panel');
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) { renderPickList($('#qa-pick-filter').value.toLowerCase()); $('#qa-pick-filter').focus(); }
+  };
+  $('#qa-pick-filter').oninput = e => renderPickList(e.target.value.toLowerCase());
+  $('#qa-send').onclick = sendQa;
+  $('#qa-text').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) sendQa(); };
+  // 会话恢复（就近取最近会话，输入区上方提示）
+  api('/api/chat/sessions').then(d => {
+    if (!state.qaSession && d.sessions.length) state.qaSession = d.sessions[0].id;
+    if (state.qaSession) loadSession(state.qaSession);
+    else renderSumBubble();
+  });
+}
+
+/* 导读 = 对话首条默认回答 */
+async function renderSumBubble() {
+  const el = $('#qa-sum-bubble');
+  if (!el) return;
+  const pid = [...state.qaPapers][0] || state.current?.id;
+  if (!pid) { el.innerHTML = ''; return; }
+  const cached = state._sumCache?.[pid];
+  if (cached) { drawSummary(cached.summary, pid, '#qa-sum-bubble', true); return; }
+  const d = await api(`/api/papers/${pid}/summary`).catch(() => null);
+  if (d && d.summary) {
+    state._sumCache = state._sumCache || {};
+    state._sumCache[pid] = d;
+    drawSummary(d.summary, pid, '#qa-sum-bubble', true);
+  } else {
+    el.innerHTML = `<div class="msg assistant"><div class="bubble">
+      <b>📋 导读</b>　<span class="muted">开始提问前，可先生成本篇的结构化导读：</span><br>
+      <button class="btn small primary" style="margin-top:6px" onclick="genSumBubble('${pid}')">✨ 生成导读</button>
+    </div></div>`;
+  }
+}
+window.genSumBubble = async pid => {
+  const el = $('#qa-sum-bubble');
+  el.innerHTML = '<div class="msg assistant"><div class="bubble">📋 导读生成中…（全文直读，约 20-60 秒）</div></div>';
+  try {
+    const d = await api(`/api/papers/${pid}/summary`, {method: 'POST', body: JSON.stringify({session_id: state.qaSession})});
+    if (d.session_id) state.qaSession = d.session_id;
+    state._sumCache = state._sumCache || {};
+    state._sumCache[pid] = d;
+    drawSummary(d, pid, '#qa-sum-bubble', true);
+    toast('导读已生成，并存入当前会话');
+  } catch (e) {
+    el.innerHTML = `<div class="msg assistant"><div class="bubble">生成失败: ${esc(e.message)} <button class="btn small" onclick="genSumBubble('${pid}')">重试</button></div></div>`;
+  }
+}
+
+/* ---- 分屏 ---- */
+function applyRpaneMode() {
+  const dock = $('#qa-dock'), handle = $('#rpane-handle'), top = $('#rpane-top');
+  if (!dock) return;
+  dock.hidden = !state.rpane.split;
+  handle.hidden = !state.rpane.split;
+  $('#split-toggle').classList.toggle('primary', state.rpane.split);
+  if (state.rpane.split) {
+    top.style.flex = 'none';
+    top.style.height = state.rpane.top + '%';
+  } else {
+    top.style.flex = '1 1 auto';
+    top.style.height = '';
+  }
+}
+function toggleSplit() {
+  state.rpane.split = !state.rpane.split;
+  applyRpaneMode();
+  if (state.rpane.split) {
+    // 分屏时：顶部保持阅读视图，问答进驻 dock
+    if (state.view === 'qa') switchView(state.rpane.readingView || 'orig');
+    else if (state.view !== 'qa') { /* 顶部保持当前视图 */ }
+    renderQaUI($('#qa-dock-body'));
+    $('#qa-dock-mode').textContent = '拖动分隔条调高度';
+  } else if (state.view === 'qa') {
+    renderQaUI($('#content-view'));   // 退出分屏，问答回整栏
+  }
+}
+$('#split-toggle').onclick = toggleSplit;
+// 拖拽分隔条
+(() => {
+  const handle = $('#rpane-handle');
+  let dragging = false;
+  handle.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const body = $('.rpane-body').getBoundingClientRect();
+    const pct = Math.min(80, Math.max(25, Math.round(100 * (e.clientY - body.top) / body.height)));
+    state.rpane.top = pct;
+    $('#rpane-top').style.height = pct + '%';
+  });
+  document.addEventListener('mouseup', () => { if (dragging) { dragging = false; } });
+})();
+function renderQaScope() {
+  const el = $('#qa-scope');
+  if (!el) return;
+  el.innerHTML = '问答范围: ' +
+    ([...state.qaPapers].map(p2 => {
+      const p = state.qaAllPapers?.find(x => x.id === p2) || state.papers.find(x => x.id === p2);
+      return `<span class="chip">${esc(p?.title || p2)}<button onclick="qaRemove('${p2}')">✕</button></span>`;
+    }).join('') || '<span class="muted">（空——默认用当前论文，或从下方选文）</span>') +
+    `<button class="btn small" style="margin-left:auto" onclick="exportChat()">⬇ 对话</button>`;
+  const hint = $('#qa-parse-hint');
+  if (hint) {
+    const waiting = [...state.qaPapers]
+      .map(p2 => state.qaAllPapers.find(x => x.id === p2))
+      .filter(p2 => p2 && p2.parse_status !== 'parsed');
+    hint.hidden = !waiting.length;
+    if (waiting.length) hint.innerHTML = '⏳ ' + waiting.map(p2 =>
+      `《${esc((p2.title || '').slice(0, 20))}》${p2.parse_status === 'failed' ? '解析失败，将自动重试' : '正在解析，完成后可对其提问'}`).join('，');
+  }
+}
+window.qaRemove = pid => { state.qaPapers.delete(pid); renderQaScope(); renderSumBubble(); renderQaTab(); };
+window.qaAddCurrent = () => {
+  if (!state.current) { toast('当前没有打开的论文'); return; }
+  state.qaPapers.add(state.current.id); renderQaScope(); renderSumBubble();
+};
+window.askPreset = q => { $('#qa-text').value = q; sendQa(); };
+window.autoParseForQA = async (pid, p) => {
+  if (p.parse_status === 'parsing' || p.parse_status === 'pending') return;   // 已在队列
+  try {
+    await api(`/api/papers/${pid}/parse`, {method: 'POST'});
+    p.parse_status = 'pending';
+    toast(`《${(p.title || '').slice(0, 26)}》尚未解析——已自动加入解析队列（插队）`);
+    renderPickList($('#qa-pick-filter')?.value.toLowerCase() || '');
+    renderQaScope();
+  } catch (e) { toast(`解析入队失败: ${e.message}`); }
+};
+async function populateQaPicker() {
+  if (!state.qaAllPapers) {
+    const d = await api('/api/papers');
+    state.qaAllPapers = d.papers;
+  }
+  const toggle = $('#qa-pick-toggle');
+  if (!toggle) return;
+  $('#qa-pick-count').textContent = state.qaPapers.size;
+}
+function renderPickList(filter) {
+  const el = $('#qa-pick-list');
+  if (!el) return;
+  const list = state.qaAllPapers.filter(p => !filter || (p.title || '').toLowerCase().includes(filter));
+  el.innerHTML = list.map(p => {
+    const st = p.parse_status !== 'parsed'
+      ? `<span class="badge run">${p.parse_status === 'failed' ? '解析失败' : '⏳解析中'}</span>` : '';
+    return `<label class="qa-pick-item ${state.qaPapers.has(p.id) ? 'on' : ''}">
+      <input type="checkbox" ${state.qaPapers.has(p.id) ? 'checked' : ''} data-id="${p.id}">
+      <span>${esc(p.title || p.id)}</span>${st}
+    </label>`;}).join('') || '<p class="muted" style="padding:8px">无匹配</p>';
+  $$('.qa-pick-item input', el).forEach(cb => cb.onchange = () => {
+    const id = cb.dataset.id;
+    if (cb.checked) {
+      if (state.qaPapers.size >= 10) { cb.checked = false; toast('对比最多 10 篇'); return; }
+      state.qaPapers.add(id);
+      const p = state.qaAllPapers.find(x => x.id === id);
+      if (p && p.parse_status !== 'parsed') autoParseForQA(id, p);   // 未解析 → 自动入解析队列
+    } else state.qaPapers.delete(id);
+    $('#qa-pick-count').textContent = state.qaPapers.size;
+    renderQaScope(); renderSumBubble(); renderQaTab();
+  });
+}
+async function loadSession(sid) {
+  state.qaSession = sid;
+  const el = $('#qa-msgs');
+  if (!el) return;
+  if (!sid) { el.innerHTML = ''; return; }
+  const d = await api(`/api/chat/sessions/${sid}/messages`);
+  const list = $('#qa-msg-list');
+  if (!list) return;
+  const MARKER = '请生成这篇论文的科研导读';
+  const msgs = [];
+  for (let i = 0; i < d.messages.length; i++) {
+    const m = d.messages[i];
+    if (m.role === 'user' && m.content === MARKER) { i++; continue; }  // 导读对由气泡展示，跳过
+    try { m._ev = JSON.parse(m.evidence || '[]'); } catch { m._ev = []; }
+    msgs.push(m);
+  }
+  list.innerHTML = msgs.map((m, i) =>
+    `<div class="msg ${m.role}"><div class="bubble" data-mi="${i}">${m.role === 'assistant' ? renderCites(m.content, m._ev) : esc(m.content)}</div></div>`).join('');
+  msgs.forEach((m, i) => {
+    if (m.role === 'assistant' && m._ev?.length) {
+      const el = $(`#qa-msg-list .bubble[data-mi="${i}"]`);
+      if (el) wireCites(el, m._ev);
+    }
+  });
+  renderSumBubble();
+}
+function sendQa() {
+  const text = $('#qa-text')?.value.trim();
+  if (!text) return;
+  if (!state.qaPapers.size) {
+    if (state.current) { state.qaPapers.add(state.current.id); renderQaScope(); }
+    else { toast('请先在范围里加入论文'); return; }
+  }
+  const parsedScope = [...state.qaPapers].filter(p2 => {
+    const pp = state.qaAllPapers.find(x => x.id === p2);
+    return !pp || pp.parse_status === 'parsed';
+  });
+  if (!parsedScope.length) { toast('所选论文尚未解析完成，请稍候'); return; }
+  $('#qa-text').value = '';
+  $('#qa-msg-list').insertAdjacentHTML('beforeend',
+    `<div class="msg user"><div class="bubble">${esc(text)}</div></div>
+     <div class="msg assistant"><div class="bubble" id="qa-live">…</div></div>`);
+  const live = $('#qa-live'); live.id = '';
+  fetch('/api/chat/stream', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({question: text, paper_ids: parsedScope,
+                          mode: 'auto', session_id: state.qaSession})}).then(async r => {
+    if (!r.ok) { live.textContent = (await r.json()).detail; return; }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        if (!line.startsWith('data:')) continue;
+        const ev = JSON.parse(line.slice(5));
+        if (ev.type === 'delta') live.textContent += ev.text;
+        else if (ev.type === 'error') live.textContent += `\n[错误] ${ev.message}`;
+        else if (ev.type === 'done') {
+          state.qaSession = ev.session_id;
+          live.innerHTML = renderCites(live.textContent, ev.evidence);
+          wireCites(live, ev.evidence);
+          // 证据来源分布（跨文献一目了然）
+          const byP = {};
+          (ev.evidence || []).forEach(e2 => { byP[e2.title || e2.paper_id] = (byP[e2.title || e2.paper_id] || 0) + 1; });
+          const origin = Object.entries(byP).map(([t, n]) => `${esc(t)}×${n}`).join('，');
+          if (origin) live.insertAdjacentHTML('beforeend',
+            `<div class="evo-line">证据来源: ${origin}</div>`);
+          if (ev.citations?.illegal?.length) toast('⚠ 部分引用编号无效: ' + ev.citations.illegal.join(','));
+          if (ev.truncated) live.insertAdjacentHTML('beforeend', '<div class="muted" style="font-size:11px;margin-top:6px">⚠ 内容过长，已启用检索取证模式</div>');
+        }
+      }
+    }
+  });
+}
+async function renderSummaryTab() {
+  const pid = state.current?.id;
+  if (!pid) { $('#content-view').innerHTML = '<p class="muted">选择论文后生成导读（也可先用上方选文）</p>'; return; }
+  const d = await api(`/api/papers/${pid}/summary`);
+  if (!d.summary) {
+    $('#content-view').innerHTML = `<div class="card">
+      <p>基于左侧全文生成科研导读（研究问题 / 核心思想 / 方法 / …，带页码证据）。</p>
+      <button class="btn primary" onclick="genSummary('${pid}')">✨ 生成导读</button></div>`;
+    return;
+  }
+  drawSummary(d.summary, pid);
+}
+$('#menu-toggle').onclick = () => document.querySelector('.sidebar').classList.toggle('open');
+document.addEventListener('click', e => {
+  const sb = document.querySelector('.sidebar');
+  if (sb.classList.contains('open') && !sb.contains(e.target) && e.target.id !== 'menu-toggle') {
+    sb.classList.remove('open');
+  }
+});
+$('#qa-open').onclick = () => { switchPage('reader'); switchView('qa'); };
+
+/* ---------------- 启动 ---------------- */
+async function boot() {
+  try { state.me = await api('/api/me'); }
+  catch { return; }
+  $('#who').textContent = state.me.username + (state.me.role === 'admin' ? ' · 管理员' : '');
+  $('#logout-btn').onclick = async () => { await fetch('/api/logout', {method: 'POST'}); location.href = '/login'; };
+  if (state.me.role === 'admin') $('#nav-admin').hidden = false;
+  // 未配置 key 提示横幅
+  if (!state.me.llm_configured.chat) {
+    $('.main').insertAdjacentHTML('afterbegin',
+      `<div class="check-banner">⚠️ 尚未配置 LLM key——问答/翻译不可用。前往 <a href="#" onclick="switchPage('settings');return false">设置页</a> 配置。</div>`);
+  }
+  await initPdfJs();
+  state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
+  await loadCollections();
+  await loadPapers();
+  watchJobs();
+  pollHealth();
+}
+boot();
+
+/* ================= 跨文献讨论（覆盖层） ================= */
+function mdLite(text) {
+  let h = esc(text);
+  h = h.replace(/(^|\n)((?:\|[^\n]+\|\n)+)/g, (m, pre, block) => {
+    const rows = block.trim().split('\n').filter(r => !/^\|[\s:|-]+\|$/.test(r));
+    const cells = rows.map(r => r.split('|').slice(1, -1).map(c => c.trim()));
+    if (cells.length < 2) return m;
+    return pre + '<table class="tbl-md"><tr>' + cells[0].map(c => `<th>${c}</th>`).join('') + '</tr>' +
+      cells.slice(1).map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('') + '</table>';
+  });
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  h = h.replace(/^#{2,4} (.+)$/gm, '<h4>$1</h4>');
+  h = h.replace(/^- (.+)$/gm, '&bull; $1');
+  return h;
+}
+function renderCites(text, evidence) {
+  return mdLite(text).replace(/\[(\d{1,3})\]/g, (m, n) => {
+    const ev = evidence && evidence[n - 1];
+    const tip = ev ? `${ev.title || ev.paper_id} · 第${ev.page_index + 1}页` : '';
+    return `<span class="cite" data-n="${n}"${tip ? ` title="${esc(tip)}"` : ''}>[${n}]</span>`;
+  });
+}
+function wireCites(container, evidence) {
+  $$('.cite', container).forEach(el => el.onclick = () => {
+    const n = +(el.dataset.n || (el.textContent.match(/\d+/) || [0])[0]);
+    const ev = evidence && evidence[n - 1];
+    if (ev) jumpToEvidence(ev);
+  });
+}
+window.jumpToEvidence = async e => {
+  if (!e) return;
+  if (state.current && state.current.id !== e.paper_id) await openPaper(e.paper_id);
+  if (state.pdfDoc) { state.pageNum = e.page_index + 1; renderPage(); }
+};
+window.jumpEvidence = page => { switchPage('reader'); if (state.pdfDoc) { state.pageNum = page + 1; renderPage(); } };
+
+/* ================= 恢复区：被误删函数重建（以文件末尾声明覆盖） ================= */
+
+/* ---- 回收站 ---- */
+async function renderTrash() {
+  const d = await api('/api/papers?trash=1');
+  $('#page-trash').innerHTML = `<div class="card"><h2>回收站（30 天后自动清理）</h2>
+    <table class="list"><tr><th>标题</th><th>删除时间</th><th></th></tr>
+    ${d.papers.map(p => `<tr><td>${esc(p.title)}</td><td class="muted">${p.deleted_at}</td>
+      <td class="row-actions"><button class="btn small" onclick="restorePaper('${p.id}')">恢复</button>
+      </td></tr>`).join('') || '<tr><td colspan="3" class="muted">回收站为空</td></tr>'}</table></div>`;
+}
+window.restorePaper = async id => { await api(`/api/papers/${id}/restore`, {method: 'POST'}); toast('已恢复'); renderTrash(); loadPapers(); };
+
+/* ---- 设置（BYOK + 术语表 + 测试连接） ---- */
+async function renderSettings() {
+  const d = await api('/api/settings/llm');
+  const tpl = `
+    <label>API 地址 <input name="base_url" placeholder="https://open.bigmodel.cn/api/anthropic"></label>
+    <label>模型 <input name="model" placeholder="glm-4.7"></label>
+    <label>协议 <select name="api_type"><option value="anthropic">anthropic</option><option value="openai">openai</option></select></label>
+    <label>API Key（留空保持不变）<input name="api_key" type="password" placeholder="••••••"></label>`;
+  $('#page-settings').innerHTML = `
+    <div class="card"><h2>LLM 配置（BYOK——各用户自己的 key）</h2>
+      <p class="muted" style="margin-bottom:10px">聊天与翻译可分别配置；embedding 使用本机服务无需配置。密钥加密存储、永不回显。</p>
+      <form id="f-chat"><h3>💬 聊天（问答/导读） ${d.chat.configured ? '✅已配置' : '⚠️未配置'}</h3>${tpl}
+        <button class="btn" type="button" onclick="testLlm('f-chat')">测试连接</button>
+        <button class="btn primary" type="submit">保存聊天配置</button>
+        <span class="muted" style="font-size:12px"> 当前: ${esc(d.chat.base_url)} / ${esc(d.chat.model)}</span>
+      </form>
+      <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
+      <form id="f-translate"><h3>🌐 翻译 ${d.translate.configured ? '✅已配置' : '⚠️未配置'}</h3>${tpl}
+        <button class="btn" type="button" onclick="testLlm('f-translate')">测试连接</button>
+        <button class="btn primary" type="submit">保存翻译配置</button>
+        <span class="muted" style="font-size:12px"> 当前: ${esc(d.translate.base_url)} / ${esc(d.translate.model)}</span>
+      </form>
+    </div>
+    <div class="card"><h3>📖 翻译术语表（全局）</h3>
+      <p class="muted" style="font-size:12px;margin-bottom:8px">规则：keep_en=保留英文 · trans=固定译法 · first_both=首次中英并列。影响后续翻译。</p>
+      <div id="gl-list" style="margin-bottom:10px"></div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+        <input id="gl-term" placeholder="术语，如 Gaussian Splatting" style="flex:2; min-width:150px">
+        <select id="gl-target" style="flex:1; min-width:110px">
+          <option value="keep_en">保留英文</option><option value="trans">固定译法</option><option value="first_both">首次并列</option>
+        </select>
+        <input id="gl-value" placeholder="译法（后两种填）" style="flex:2; min-width:120px">
+        <button class="btn small primary" id="gl-add">添加</button>
+      </div></div>`;
+  const bind = (fid, purpose) => $(`#${fid}`).onsubmit = async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const conf = {base_url: f.get('base_url'), model: f.get('model'), api_type: f.get('api_type')};
+    if (f.get('api_key')) conf.api_key = f.get('api_key');
+    await api('/api/settings/llm', {method: 'PUT', body: JSON.stringify({[purpose]: conf})});
+    toast('已保存'); renderSettings();
+  };
+  bind('f-chat', 'chat'); bind('f-translate', 'translate');
+  for (const [fid, key] of [['f-chat', 'chat'], ['f-translate', 'translate']]) {
+    const form = $('#' + fid);
+    form.base_url.value = d[key].base_url || '';
+    form.model.value = d[key].model || '';
+    if (d[key].configured) form.api_key.placeholder = '已配置（输入新值可更换）';
+  }
+  loadGlossary();
+}
+window.testLlm = async fid => {
+  const f = new FormData($('#' + fid));
+  if (!f.get('api_key')) { toast('请先输入 key'); return; }
+  const r = await api('/api/settings/llm/test', {method: 'POST', body: JSON.stringify({
+    base_url: f.get('base_url'), api_key: f.get('api_key'),
+    model: f.get('model'), api_type: f.get('api_type')})});
+  toast(r.ok ? '✅ ' + r.message : '❌ ' + r.message);
+};
+async function loadGlossary() {
+  const d = await api('/api/glossary');
+  const el = $('#gl-list');
+  if (!el) return;
+  el.innerHTML = d.terms.map(t =>
+    `<span class="chip">${esc(t.term)}${t.target === 'trans' ? ' → ' + esc(t.value) : t.target === 'first_both' ? ' ⇄ ' + esc(t.value) : ' (EN)'}
+     <button onclick="delGlossary('${esc(t.term).replace(/'/g, "\\'")}')">✕</button></span>`).join('') ||
+    '<span class="muted" style="font-size:12px">暂无术语——按需添加以保证全文译名一致</span>';
+  $('#gl-add').onclick = async () => {
+    const term = $('#gl-term').value.trim();
+    if (!term) { toast('请输入术语'); return; }
+    await api('/api/glossary', {method: 'POST', body: JSON.stringify({
+      term, target: $('#gl-target').value, value: $('#gl-value').value.trim()})});
+    $('#gl-term').value = ''; $('#gl-value').value = '';
+    toast('已添加，下次翻译生效'); loadGlossary();
+  };
+}
+window.delGlossary = async term => {
+  await api('/api/glossary/' + encodeURIComponent(term), {method: 'DELETE'});
+  loadGlossary();
+};
+
+/* ---- 管理页 ---- */
+async function renderAdmin() {
+  const users = await api('/api/admin/users');
+  const pool = await api('/api/admin/pool');
+  $('#page-admin').innerHTML = `
+    <div class="card"><h2>邀请码</h2>
+      <button class="btn primary" onclick="createInvite()">生成邀请码（7天有效）</button>
+      <div id="invite-out" style="margin-top:8px"></div></div>
+    <div class="card"><h2>用户与限额</h2>
+      <table class="list"><tr><th>用户</th><th>角色</th><th>论文数</th><th>限额覆盖(JSON)</th><th></th></tr>
+      ${users.users.map(u => `<tr><td>${esc(u.username)}</td><td>${u.role}</td><td>${u.papers}</td>
+        <td><input style="font-size:11px" id="q-${u.id}" value='${esc(u.overrides || '{}')}'></td>
+        <td><button class="btn small" onclick="saveQuota(${u.id})">保存</button></td></tr>`).join('')}
+      </table>
+      <p class="muted" style="font-size:12px;margin-top:6px">示例: {"max_pages":1000,"daily_parse_papers":400} · admin 全豁免</p></div>
+    <div class="card"><h2>公共额度池</h2>
+      <p class="muted" style="margin-bottom:8px">开启后，未配置自己 key 的成员将使用 .env 中的 POOL_API_KEY（消耗你的额度，默认关闭）。</p>
+      <button class="btn ${pool.enabled ? 'danger' : 'primary'}" onclick="togglePool(${!pool.enabled})">
+        ${pool.enabled ? '关闭公共池' : '开启公共池'}</button></div>`;
+}
+window.createInvite = async () => {
+  const d = await api('/api/admin/invite', {method: 'POST'});
+  $('#invite-out').innerHTML = `邀请码: <code style="font-size:16px">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
+};
+window.saveQuota = async uid => {
+  try {
+    const overrides = JSON.parse($('#q-' + uid).value || '{}');
+    await api(`/api/admin/users/${uid}/quota`, {method: 'PUT', body: JSON.stringify(overrides)});
+    toast('已保存');
+  } catch (e) { toast('JSON 格式错误: ' + e.message); }
+};
+window.togglePool = async enable => {
+  await api('/api/admin/pool', {method: 'POST', body: JSON.stringify({enabled: enable})});
+  toast(enable ? '公共池已开启' : '公共池已关闭'); renderAdmin();
+};
+
+/* ---- 图表页签 ---- */
+async function renderAssets() {
+  const pid = state.current?.id;
+  if (!pid) { $('#content-view').innerHTML = '<p class="muted">选择论文后查看图表</p>'; return; }
+  if (!state.assets) state.assets = await api(`/api/papers/${pid}/assets`);
+  const {figures, tables} = state.assets;
+  if (!figures.length && !tables.length) {
+    $('#content-view').innerHTML = '<p class="muted">未提取到图表</p>'; return;
+  }
+  $('#content-view').innerHTML =
+    (figures.length ? `<div class="card"><h2>🖼 图 (${figures.length})</h2>` +
+      figures.map(f => `<div class="asset" onclick="jumpEvidence(${f.page_index})">
+        ${f.label ? `<span class="asset-badge">${esc(f.label)}</span>` : ''}
+        <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}">
+        ${f.extra_images?.length ? `<p class="muted" style="font-size:11px">（含 ${f.extra_images.length} 张子图，点击查看本页）</p>` : ''}
+        <p class="muted" style="font-size:12px">📄 第${f.page_index + 1}页 · ${esc(f.caption || '（无题注）')}</p>
+      </div>`).join('') + '</div>' : '') +
+    (tables.length ? `<div class="card"><h2>📋 表 (${tables.length})</h2>` +
+      tables.map(t => `<div class="asset" onclick="jumpEvidence(${t.page_index})">
+        ${t.label ? `<span class="asset-badge">${esc(t.label)}</span>` : ''}
+        ${t.html ? `<div class="tbl">${t.html}</div>` : ''}
+        <p class="muted" style="font-size:12px">📄 第${t.page_index + 1}页 · ${esc(t.caption || '（无题注）')}</p>
+      </div>`).join('') + '</div>' : '');
+}
+
+/* ---- 导读绘制（气泡/整栏两用） ---- */
+function drawSummary(s, pid, target = '#content-view', asBubble = false) {
+  const t = $(target);
+  const sec = Object.entries(s.sections || {});
+  t.innerHTML = (asBubble ? '<div class="msg assistant"><div class="bubble" style="width:100%">' : '<div class="card">') +
+    (asBubble ? '<b>📋 导读</b>' : '<h2>科研导读</h2>') +
+    (sec.length ? sec.map(([k, v]) =>
+      `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><p>${renderCites(v, s.evidence)}</p></div>`).join('')
+      : '<p class="muted">导读内容为空，请重新生成。</p>') +
+    (s.evidence?.length ? `<p class="muted" style="font-size:12px">证据: ${s.evidence.map(e =>
+      `<span class="cite" data-eid="${e.evidence_id}">[${e.evidence_id}] 第${e.page_index + 1}页</span>`).join(' ')}</p>` : '') +
+    `</div>${asBubble ? '</div>' : ''}<button class="btn small" onclick="genSumBubble('${pid}')">↻ 重新生成</button>`;
+  $$('.cite', t).forEach(el => {
+    if (el.dataset.eid) {
+      const ev = (s.evidence || []).find(x => String(x.evidence_id) === el.dataset.eid);
+      if (ev) el.onclick = () => jumpToEvidence(ev);
+    } else wireCites(t, s.evidence);
+  });
+}
+
+/* ---- 对话导出 ---- */
+window.exportChat = () => {
+  if (!state.qaSession) { toast('当前还没有对话记录'); return; }
+  location.href = `/api/chat/sessions/${state.qaSession}/export`;
+};

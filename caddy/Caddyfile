@@ -1,0 +1,8 @@
+# paper-system 反代（局域网 http；公网 HTTPS 时在此改站点地址即可）
+:7861 {
+	encode gzip
+	reverse_proxy app:8001 {
+		# SSE 流式进度/问答必需：禁用缓冲
+		flush_interval -1
+	}
+}

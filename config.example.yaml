@@ -1,0 +1,38 @@
+# paper-system 配置（非敏感调优项；敏感项一律在 .env）
+# 复制为 config.yaml 使用；缺省时程序内建默认值与下面一致
+
+limits:
+  # ---- member 默认限额（admin 全豁免；管理页可按用户微调） ----
+  max_file_mb: 100          # 单文件大小上限
+  max_pages: 500            # PDF 页数上限
+  daily_parse_papers: 200   # 每用户日解析篇数
+  translate_concurrency: 2  # 每用户翻译并发
+  max_queued_jobs: 50       # 每用户在队任务数
+  disk_quota_gb: 20         # 每用户磁盘配额
+  max_tier: standard        # member 可用最高解析档位 (flash/basic/standard; advanced 限 admin)
+
+  # ---- 全局（保护 GPU，admin 也生效） ----
+  global_daily_parse: 600   # 全局日解析产能上限
+
+scheduler:
+  parse_workers: 1          # 解析 worker（GPU 串行）
+  translate_workers: 4      # 翻译 worker 池总并发
+  embed_backfill_batch: 32  # embedding 后台回填批大小（控 ollama 峰值显存）
+  poll_interval_sec: 10     # 队列轮询间隔
+  retry_max: 3              # 失败重试次数（指数退避）
+
+rag:
+  chunk_tokens: 650
+  overlap_tokens: 100
+  vector_top_k: 15
+  bm25_top_k: 15
+  fts_top_k: 15
+
+qa:
+  fulltext_max_tokens: 60000   # 单篇全文直读的 token 预算
+  multi_paper_max: 10          # 跨论文对比上限
+  context_char_budget: 90000   # 多篇拼接的字符预算（约1:1.5 token）
+
+retention:
+  trash_days: 30            # 回收站保留天数
+  backup_keep: 7            # 备份保留份数

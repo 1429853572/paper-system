@@ -1,0 +1,217 @@
+"""检索层：分块 → embedding(BGE-M3 via Ollama) → FTS5 + 向量余弦 → RRF 融合.
+
+设计依据（计划）：
+- 千篇量级 ≈ 2.5万 chunks，numpy 暴力余弦毫秒级，不引向量库
+- chunks.embedding 为 float32 BLOB；embedding NULL = 未回填
+- FTS5 冗余 owner_id/visibility，检索免 join、按可见性过滤
+- rerank 留接口（首版不启用）
+"""
+from __future__ import annotations
+
+import json
+import math
+import struct
+from typing import Any
+
+import httpx
+import numpy as np
+
+from .config import EMBED_DIMS, EMBED_MODEL, OLLAMA_BASE_URL, config
+from .db import db
+
+# ---- 分块（入库时调用） ----
+
+def build_chunks(paper_id: str, run_id: str, blocks: list) -> int:
+    """按 block 边界聚合 chunk：~800 字符目标，重叠靠块级重复上一 chunk 尾块。
+
+    返回 chunk 数。chunk.page_index 取首 block 页（0 基）。
+    """
+    target = int(config.get("rag", "chunk_tokens")) * 1.3  # ≈字符数（英文 ~1.3 char/token）
+    overlap_chars = int(config.get("rag", "overlap_tokens")) * 1.3
+    chunks: list[tuple[str, str, int]] = []  # (text, block_ids_json, page_index)
+    cur: list[Any] = []
+    cur_len = 0
+
+    def flush() -> None:
+        nonlocal cur, cur_len
+        if not cur:
+            return
+        text = "\n\n".join(b["text"] for b in cur if b["text"].strip())
+        if text.strip():
+            chunks.append((
+                text,
+                json.dumps([b["block_id"] for b in cur]),
+                int(cur[0]["page_index"]),
+            ))
+        # 重叠：保留尾部块直到 overlap 字符
+        tail: list[Any] = []
+        tlen = 0
+        for b in reversed(cur):
+            if tlen + len(b["text"]) > overlap_chars and tail:
+                break
+            tail.insert(0, b)
+            tlen += len(b["text"])
+        cur, cur_len = tail, tlen
+
+    for row in blocks:
+        b = dict(row)
+        if cur and cur_len + len(b.get("text", "")) > target:
+            flush()
+        cur.append(b)
+        cur_len += len(b.get("text", ""))
+    # 引用列表单独成块时跳过索引价值有限——保持原样入库
+    flush()
+    # 尾部重叠残余并入
+    if cur:
+        text = "\n\n".join(b["text"] for b in cur if b["text"].strip())
+        if text.strip() and (not chunks or chunks[-1][0] != text):
+            chunks.append((text, json.dumps([b["block_id"] for b in cur]), int(cur[0]["page_index"])))
+
+    with db.write() as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO chunks(paper_id,parse_run_id,chunk_index,text,block_ids,page_index) "
+            "VALUES(?,?,?,?,?,?)",
+            [(paper_id, run_id, i, t, bids, pg) for i, (t, bids, pg) in enumerate(chunks)],
+        )
+        # FTS 同步（冗余可见性列）
+        paper = c.execute("SELECT owner_id, visibility FROM papers WHERE id=?", (paper_id,)).fetchone()
+        c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (paper_id,))
+        c.executemany(
+            "INSERT INTO chunks_fts(text,paper_id,owner_id,visibility,chunk_row) VALUES(?,?,?,?,?)",
+            [(t, paper_id, paper["owner_id"], paper["visibility"],
+              f"{run_id}:{i}") for i, (t, bids, pg) in enumerate(chunks)],
+        )
+    return len(chunks)
+
+
+# ---- embedding（Ollama OpenAI 兼容接口，本地无 key） ----
+
+def _pack(vec: list[float]) -> bytes:
+    return struct.pack(f"<{len(vec)}f", *vec)
+
+
+def _unpack(blob: bytes) -> np.ndarray:
+    return np.array(struct.unpack(f"<{len(blob)//4}f", blob), dtype=np.float32)
+
+
+def embed_texts(texts: list[str], batch_size: int | None = None) -> list[list[float]]:
+    """批量调用本地 Ollama；批大小上限控 GPU 峰值。"""
+    bs = batch_size or int(config.get("scheduler", "embed_backfill_batch"))
+    out: list[list[float]] = []
+    with httpx.Client(timeout=120) as http:
+        for i in range(0, len(texts), bs):
+            batch = [t[:6000] for t in texts[i:i + bs]]  # BGE-M3 8192 token，留余量
+            r = http.post(
+                f"{OLLAMA_BASE_URL}/v1/embeddings",
+                json={"model": EMBED_MODEL, "input": batch},
+            )
+            r.raise_for_status()
+            data = r.json()["data"]
+            data.sort(key=lambda x: x["index"])
+            out.extend(d["embedding"] for d in data)
+    return out
+
+
+def backfill_embeddings(paper_id: str, progress_cb=None) -> int:
+    """为一个论文未回填的 chunks 计算 embedding。返回处理条数。"""
+    rows = db.all(
+        "SELECT id, text FROM chunks WHERE paper_id=? AND embedding IS NULL ORDER BY chunk_index",
+        (paper_id,),
+    )
+    if not rows:
+        return 0
+    done = 0
+    bs = int(config.get("scheduler", "embed_backfill_batch"))
+    for i in range(0, len(rows), bs):
+        part = rows[i:i + bs]
+        vecs = embed_texts([r["text"] for r in part], batch_size=bs)
+        with db.write() as c:
+            for row, vec in zip(part, vecs):
+                c.execute("UPDATE chunks SET embedding=? WHERE id=?", (_pack(vec), row["id"]))
+        done += len(part)
+        if progress_cb:
+            progress_cb(done, len(rows))
+    return done
+
+
+# ---- 检索 ----
+
+def _rrf(rankings: list[list[int]], k: int = 60) -> dict[int, float]:
+    """Reciprocal Rank Fusion：输入各路召回的 id 排名列表。"""
+    scores: dict[int, float] = {}
+    for ranking in rankings:
+        for rank, cid in enumerate(ranking):
+            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
+    return scores
+
+
+def search(query: str, *, user_id: int, is_admin: bool,
+           paper_ids: list[str] | None = None, top_k: int | None = None) -> list[dict[str, Any]]:
+    """混合检索（可见性过滤）。返回 [{chunk_id, paper_id, text, page_index, score}]。
+
+    - 管理员可检索全部；普通用户限 shared + 自己的 private
+    - paper_ids 限定范围（跨论文对比/单篇证据模式）
+    """
+    k = top_k or int(config.get("rag", "fts_top_k"))
+
+    vis_clause, vis_args = "", []
+    if not is_admin:
+        vis_clause = " AND (visibility='shared' OR owner_id=?)"
+        vis_args = [user_id]
+    paper_clause, paper_args = "", []
+    if paper_ids:
+        paper_clause = f" AND paper_id IN ({','.join('?' * len(paper_ids))})"
+        paper_args = list(paper_ids)
+
+    # 1) FTS5 关键词
+    fts_ids: list[int] = []
+    try:
+        q = " ".join(query.replace('"', "").split()[:12])  # 简单 token 化
+        rows = db.all(
+            "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? "
+            f"AND 1=1{vis_clause}{paper_clause} LIMIT ?",
+            (q, *vis_args, *paper_args, k),
+        )
+        fts_ids = [r["rowid"] for r in rows]
+    except Exception:
+        fts_ids = []
+
+    # 2) 向量余弦
+    vec_ids: list[int] = []
+    try:
+        qvec = np.array(embed_texts([query])[0], dtype=np.float32)
+        qn = qvec / (np.linalg.norm(qvec) + 1e-9)
+        rows = db.all(
+            "SELECT c.id, c.embedding FROM chunks c JOIN papers p ON p.id=c.paper_id "
+            f"WHERE c.embedding IS NOT NULL{vis_clause.replace('visibility', 'p.visibility').replace('owner_id', 'p.owner_id')}{paper_clause}",
+            (*vis_args, *paper_args),
+        )
+        if rows:
+            mat = np.stack([_unpack(r["embedding"]) for r in rows])
+            mat = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9)
+            sims = mat @ qn
+            order = np.argsort(-sims)[:k]
+            vec_ids = [int(rows[i]["id"]) for i in order]
+    except Exception:
+        vec_ids = []
+
+    # 3) RRF 融合
+    merged = _rrf([fts_ids, vec_ids])
+    ranked = sorted(merged.items(), key=lambda x: -x[1])[:k]
+    if not ranked:
+        return []
+    placeholders = ",".join("?" * len(ranked))
+    rows = db.all(
+        f"SELECT id, paper_id, text, page_index, block_ids FROM chunks WHERE id IN ({placeholders})",
+        tuple(cid for cid, _ in ranked),
+    )
+    score_map = dict(ranked)
+    out = [dict(r) | {"score": score_map[r["id"]]} for r in rows]
+    out.sort(key=lambda x: -x["score"])
+    return out
+
+
+# ---- 库存/重建 ----
+
+def index_version() -> str:
+    return f"{EMBED_MODEL}:{EMBED_DIMS}:v1"

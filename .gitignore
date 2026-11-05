@@ -1,0 +1,8 @@
+data/
+models/
+.env
+offline-images/
+build.log
+MinerU/
+__pycache__/
+*.pyc

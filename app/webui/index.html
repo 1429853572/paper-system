@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>paper-system</title>
+<link rel="stylesheet" href="/static/vendor/pdfjs/pdf_viewer.css">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ======= 文库侧栏 ======= -->
+  <aside class="sidebar">
+    <header>
+      <span class="title">📚 我的文库</span>
+      <span id="health-dot" class="health-dot bad" title="服务状态"></span>
+      <span id="who" class="muted" style="font-size:12px"></span>
+      <button class="btn small" id="logout-btn">退出</button>
+    </header>
+    <div class="collections" id="collections"></div>
+    <div class="search"><input id="lib-search" placeholder="搜索标题…">
+      <button class="btn small" id="sel-toggle" title="批量选择">☑ 多选</button></div>
+    <div class="batch-bar" id="batch-bar">
+      <button class="btn small primary" id="batch-translate">批量翻译</button>
+      <button class="btn small danger" id="batch-delete">删除</button>
+      <select id="batch-move" style="width:auto; font-size:12px"><option value="">移入…</option></select>
+      <button class="btn small" id="batch-cancel">取消</button>
+    </div>
+    <div class="paper-list" id="paper-list"></div>
+    <div class="dropzone" id="dropzone">
+      <div style="font-size:26px">📄</div>
+      <div><b>上传文献</b></div>
+      <div class="muted">拖拽 PDF 到这里，或点击选择<br>多文件支持 · 当前上传到：<span id="dz-target">全部文献</span></div>
+      <input type="file" id="file-input" multiple accept=".pdf" hidden>
+    </div>
+    <footer>
+      <label style="font-size:12px;display:flex;gap:4px;align-items:center">
+        <input type="checkbox" id="vis-private" style="width:auto"> 仅自己可见
+      </label>
+    </footer>
+  </aside>
+
+  <!-- ======= 主区 ======= -->
+  <main class="main">
+    <nav class="topbar">
+      <button class="btn small" id="menu-toggle">☰</button>
+      <span class="title" id="page-title">阅读</span>
+      <div class="topnav">
+        <button data-page="reader" class="on">阅读</button>
+        <button data-page="tasks">任务中心</button>
+        <button data-page="trash">回收站</button>
+        <button data-page="settings">设置</button>
+        <button data-page="admin" id="nav-admin" hidden>管理</button>
+        <button class="btn small primary" id="qa-open">💬 问答</button>
+      </div>
+    </nav>
+
+    <!-- 阅读页 -->
+    <div class="page" id="page-reader" style="display:flex; padding:0; flex:1">
+      <div class="reader">
+        <div class="pane-left" id="pane-left">
+          <div class="pdf-toolbar" id="pdf-toolbar" hidden>
+            <button id="pg-prev">◀</button>
+            <span id="pg-label">- / -</span>
+            <button id="pg-next">▶</button>
+            <button id="zoom-out">－</button>
+            <span id="zoom-label">100%</span>
+            <button id="zoom-in">＋</button>
+          </div>
+          <div class="pdf-host" id="pdf-host"></div>
+        </div>
+        <div class="pane-right">
+          <div class="view-tabs">
+            <button data-v="read" class="on">📖 阅读</button>
+            <button data-v="qa">💬问答</button>
+            <button data-v="meta">文献信息</button>
+            <button data-v="assets">图表</button>
+            <button data-v="json" title="调试视图">JSON</button>
+            <span class="spacer"></span>
+            <button class="btn small" id="split-toggle" title="问答分屏：上下两块，可拖拽调高度">⇕ 分屏</button>
+          </div>
+          <div class="view-tabs r-subtabs" id="r-subtabs">
+            <button data-s="orig" class="on">原文</button>
+            <button data-s="bilingual">双语对照</button>
+            <button data-s="zh">中文</button>
+            <span class="spacer"></span>
+            <button class="btn small primary" id="translate-btn">🌐 翻译</button>
+            <select id="version-select" style="width:auto; font-size:12px" hidden></select>
+          </div>
+          <div id="job-progress" hidden></div>
+          <div class="rpane-body">
+            <div class="rpane-top" id="rpane-top">
+              <div class="content-view" id="content-view"><p class="muted">选择左侧论文开始阅读</p></div>
+            </div>
+            <div class="rpane-handle" id="rpane-handle" hidden></div>
+            <div class="qa-dock" id="qa-dock" hidden>
+              <div class="qa-dock-head">💬 论文问答 <span class="muted" style="font-size:11px" id="qa-dock-mode"></span></div>
+              <div class="qa-dock-body" id="qa-dock-body"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 任务中心 -->
+    <div class="page" id="page-tasks" style="display:none"></div>
+    <!-- 导读 -->
+    <!-- 回收站 -->
+    <div class="page" id="page-trash" style="display:none"></div>
+    <!-- 设置 -->
+    <div class="page" id="page-settings" style="display:none"></div>
+    <!-- 管理 -->
+    <div class="page" id="page-admin" style="display:none"></div>
+  </main>
+</div>
+
+<div id="toast"></div>
+
+<script type="module" src="/static/viewer.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# paper-system CLI wrapper（宿主机使用）
+# 用法: ./psys add paper1.pdf dir2/   ./psys ask "..." --papers p001,p002
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# 读取 .env 的 PAPERSYS_API_TOKEN 与端口
+if [[ -f .env ]]; then
+    export PAPERSYS_API_TOKEN=$(grep -E '^PAPERSYS_API_TOKEN=' .env | cut -d= -f2-)
+    WEB_PORT=$(grep -E '^WEB_PORT=' .env | cut -d= -f2- || true)
+    export PAPERSYS_URL="http://127.0.0.1:${WEB_PORT:-7861}"
+fi
+
+exec docker compose exec -T app python cli.py "$@"
