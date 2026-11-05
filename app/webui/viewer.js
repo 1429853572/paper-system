@@ -721,12 +721,12 @@ $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.data
 function switchPage(page) {
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
   $('#page-title').textContent = {reader: '阅读', collections: '文库管理',
-    trash: '回收站', settings: '设置', admin: '管理'}[page];
-  for (const p of ['reader', 'collections', 'trash', 'settings', 'admin']) {
+    trash: '回收站', settings: '设置'}[page];
+  for (const p of ['reader', 'collections', 'trash', 'settings']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
   ({collections: renderCollectionsPage, trash: renderTrash,
-    settings: renderSettings, admin: renderAdmin})[page]?.();
+    settings: renderSettings})[page]?.();
 }
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
 
@@ -1290,7 +1290,6 @@ async function boot() {
   catch { return; }
   $('#who').textContent = state.me.username + (state.me.role === 'admin' ? ' · 管理员' : '');
   $('#logout-btn').onclick = async () => { await fetch('/api/logout', {method: 'POST'}); location.href = '/login'; };
-  if (state.me.role === 'admin') $('#nav-admin').hidden = false;
   // 未配置 key 提示横幅
   if (!state.me.llm_configured.chat) {
     $('.main').insertAdjacentHTML('afterbegin',
@@ -1359,37 +1358,43 @@ window.restorePaper = async id => { await api(`/api/papers/${id}/restore`, {meth
 /* ---- 设置（BYOK + 术语表 + 测试连接） ---- */
 async function renderSettings() {
   const d = await api('/api/settings/llm');
-  const tpl = `
-    <label>API 地址 <input name="base_url" placeholder="https://open.bigmodel.cn/api/anthropic"></label>
-    <label>模型 <input name="model" placeholder="glm-4.7"></label>
-    <label>协议 <select name="api_type"><option value="anthropic">anthropic</option><option value="openai">openai</option></select></label>
-    <label>API Key（留空保持不变）<input name="api_key" type="password" placeholder="••••••"></label>`;
+  const isAdmin = state.me?.role === 'admin';
+  const tpl = (purpose, cfg, conf) => `
+    <div class="set-card">
+      <div class="set-head">${purpose === 'chat' ? '💬 聊天（问答/导读）' : '🌐 翻译'} ${conf.configured ? '<span class="badge ok">已配置</span>' : '<span class="badge err">未配置</span>'}</div>
+      <form id="f-${purpose}">
+        <label>API 地址 <input name="base_url" value="${esc(conf.base_url)}" placeholder="https://open.bigmodel.cn/api/anthropic"></label>
+        <label>模型 <input name="model" value="${esc(conf.model)}" placeholder="glm-4.7"></label>
+        <label>协议 <select name="api_type"><option value="anthropic" ${conf.base_url.includes('anthropic') ? 'selected' : ''}>anthropic</option><option value="openai" ${!conf.base_url.includes('anthropic') ? 'selected' : ''}>openai</option></select></label>
+        <label>API Key ${conf.configured ? '<span class="muted" style="font-size:11px">已保存（留空不变）</span>' : ''} <input name="api_key" type="password" placeholder="${conf.configured ? '••••••（输入可更换）' : '粘贴 API Key'}"></label>
+        <div class="set-actions">
+          <button class="btn" type="button" onclick="testLlm('f-${purpose}')">⚡ 测试</button>
+          <button class="btn primary" type="submit">💾 保存</button>
+        </div>
+      </form>
+    </div>`;
   $('#page-settings').innerHTML = `
-    <div class="card"><h2>LLM 配置（BYOK——各用户自己的 key）</h2>
-      <p class="muted" style="margin-bottom:10px">聊天与翻译可分别配置；embedding 使用本机服务无需配置。密钥加密存储、永不回显。</p>
-      <form id="f-chat"><h3>💬 聊天（问答/导读） ${d.chat.configured ? '✅已配置' : '⚠️未配置'}</h3>${tpl}
-        <button class="btn" type="button" onclick="testLlm('f-chat')">测试连接</button>
-        <button class="btn primary" type="submit">保存聊天配置</button>
-        <span class="muted" style="font-size:12px"> 当前: ${esc(d.chat.base_url)} / ${esc(d.chat.model)}</span>
-      </form>
-      <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
-      <form id="f-translate"><h3>🌐 翻译 ${d.translate.configured ? '✅已配置' : '⚠️未配置'}</h3>${tpl}
-        <button class="btn" type="button" onclick="testLlm('f-translate')">测试连接</button>
-        <button class="btn primary" type="submit">保存翻译配置</button>
-        <span class="muted" style="font-size:12px"> 当前: ${esc(d.translate.base_url)} / ${esc(d.translate.model)}</span>
-      </form>
-    </div>
-    <div class="card"><h3>📖 翻译术语表（全局）</h3>
-      <p class="muted" style="font-size:12px;margin-bottom:8px">规则：keep_en=保留英文 · trans=固定译法 · first_both=首次中英并列。影响后续翻译。</p>
-      <div id="gl-list" style="margin-bottom:10px"></div>
-      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
-        <input id="gl-term" placeholder="术语，如 Gaussian Splatting" style="flex:2; min-width:150px">
-        <select id="gl-target" style="flex:1; min-width:110px">
-          <option value="keep_en">保留英文</option><option value="trans">固定译法</option><option value="first_both">首次并列</option>
-        </select>
-        <input id="gl-value" placeholder="译法（后两种填）" style="flex:2; min-width:120px">
-        <button class="btn small primary" id="gl-add">添加</button>
-      </div></div>`;
+    <div class="set-grid">
+      <div class="set-col">
+        <h2 class="page-h">🔑 LLM 配置（BYOK）</h2>
+        <p class="muted" style="font-size:12px;margin:2px 0 12px">聊天/翻译各自独立；embedding 本机运行无需配置。密钥加密存储、永不回显。</p>
+        ${tpl('chat', d.chat, d.chat)}
+        ${tpl('translate', d.translate, d.translate)}
+      </div>
+      <div class="set-col">
+        <h2 class="page-h">📖 翻译术语表（全局）</h2>
+        <div id="gl-list" style="margin:10px 0"></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <input id="gl-term" placeholder="术语" style="flex:2;min-width:120px">
+          <select id="gl-target" style="flex:1;min-width:100px">
+            <option value="keep_en">保留英文</option><option value="trans">固定译法</option><option value="first_both">首次并列</option>
+          </select>
+          <input id="gl-value" placeholder="译法" style="flex:2;min-width:100px">
+          <button class="btn small primary" id="gl-add">＋</button>
+        </div>
+        ${isAdmin ? '<div id="admin-zone" style="margin-top:22px"></div>' : ''}
+      </div>
+    </div>`;
   const bind = (fid, purpose) => $(`#${fid}`).onsubmit = async e => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1399,16 +1404,35 @@ async function renderSettings() {
     toast('已保存'); renderSettings();
   };
   bind('f-chat', 'chat'); bind('f-translate', 'translate');
-  for (const [fid, key] of [['f-chat', 'chat'], ['f-translate', 'translate']]) {
-    const form = $('#' + fid);
-    const q = n => form.querySelector(`[name=${n}]`);
-    if (q('base_url')) q('base_url').value = d[key].base_url || '';
-    if (q('model')) q('model').value = d[key].model || '';
-    if (d[key].configured && q('api_key')) q('api_key').placeholder = '已配置（输入新值可更换）';
-  }
   loadGlossary();
+  if (isAdmin) renderAdminZone();
 }
-window.testLlm = async fid => {
+async function renderAdminZone() {
+  const el = $('#admin-zone');
+  if (!el) return;
+  const users = await api('/api/admin/users');
+  const pool = await api('/api/admin/pool');
+  el.innerHTML = `
+    <h2 class="page-h">👑 管理（仅管理员可见）</h2>
+    <div class="set-card">
+      <div class="set-head">邀请码</div>
+      <button class="btn small primary" onclick="createInvite()">＋ 生成（7天）</button>
+      <div id="invite-out" style="margin-top:8px;font-size:13px"></div>
+    </div>
+    <div class="set-card">
+      <div class="set-head">用户与限额 <span class="muted" style="font-size:11px">覆盖示例 {"max_pages":1000}</span></div>
+      <table class="list">${users.users.map(u => `<tr>
+        <td>${esc(u.username)} ${u.role === 'admin' ? '<span class="badge priv">admin</span>' : ''}</td>
+        <td>${u.papers} 篇</td>
+        <td style="width:40%"><input style="font-size:11px" id="q-${u.id}" value='${esc(u.overrides || '{}')}'></td>
+        <td><button class="btn small" onclick="saveQuota(${u.id})">💾</button></td></tr>`).join('')}</table>
+    </div>
+    <div class="set-card">
+      <div class="set-head">公共额度池 <span class="muted" style="font-size:11px">未配置 key 的成员将使用你的 POOL key</span></div>
+      <button class="btn small ${pool.enabled ? 'danger' : 'primary'}" onclick="togglePool(${!pool.enabled})">${pool.enabled ? '关闭' : '开启'}</button>
+    </div>`;
+}
+ = async fid => {
   const f = new FormData($('#' + fid));
   if (!f.get('api_key')) { toast('请先输入 key'); return; }
   const r = await api('/api/settings/llm/test', {method: 'POST', body: JSON.stringify({
@@ -1438,41 +1462,6 @@ window.delGlossary = async term => {
   loadGlossary();
 };
 
-/* ---- 管理页 ---- */
-async function renderAdmin() {
-  const users = await api('/api/admin/users');
-  const pool = await api('/api/admin/pool');
-  $('#page-admin').innerHTML = `
-    <div class="card"><h2>邀请码</h2>
-      <button class="btn primary" onclick="createInvite()">生成邀请码（7天有效）</button>
-      <div id="invite-out" style="margin-top:8px"></div></div>
-    <div class="card"><h2>用户与限额</h2>
-      <table class="list"><tr><th>用户</th><th>角色</th><th>论文数</th><th>限额覆盖(JSON)</th><th></th></tr>
-      ${users.users.map(u => `<tr><td>${esc(u.username)}</td><td>${u.role}</td><td>${u.papers}</td>
-        <td><input style="font-size:11px" id="q-${u.id}" value='${esc(u.overrides || '{}')}'></td>
-        <td><button class="btn small" onclick="saveQuota(${u.id})">保存</button></td></tr>`).join('')}
-      </table>
-      <p class="muted" style="font-size:12px;margin-top:6px">示例: {"max_pages":1000,"daily_parse_papers":400} · admin 全豁免</p></div>
-    <div class="card"><h2>公共额度池</h2>
-      <p class="muted" style="margin-bottom:8px">开启后，未配置自己 key 的成员将使用 .env 中的 POOL_API_KEY（消耗你的额度，默认关闭）。</p>
-      <button class="btn ${pool.enabled ? 'danger' : 'primary'}" onclick="togglePool(${!pool.enabled})">
-        ${pool.enabled ? '关闭公共池' : '开启公共池'}</button></div>`;
-}
-window.createInvite = async () => {
-  const d = await api('/api/admin/invite', {method: 'POST'});
-  $('#invite-out').innerHTML = `邀请码: <code style="font-size:16px">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
-};
-window.saveQuota = async uid => {
-  try {
-    const overrides = JSON.parse($('#q-' + uid).value || '{}');
-    await api(`/api/admin/users/${uid}/quota`, {method: 'PUT', body: JSON.stringify(overrides)});
-    toast('已保存');
-  } catch (e) { toast('JSON 格式错误: ' + e.message); }
-};
-window.togglePool = async enable => {
-  await api('/api/admin/pool', {method: 'POST', body: JSON.stringify({enabled: enable})});
-  toast(enable ? '公共池已开启' : '公共池已关闭'); renderAdmin();
-};
 
 /* ---- 图表页签 ---- */
 async function renderAssets() {

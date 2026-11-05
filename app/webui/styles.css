@@ -603,3 +603,15 @@ table.list input[type=checkbox] { width: auto; }
 .col-arrow-none { width: 14px; display: inline-block; }
 .col-item.on .col-name { font-weight: 600; }
 .lib-tree .col-arrow { font-size: 15px; }
+
+/* 设置页双栏布局 */
+.set-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .set-grid { grid-template-columns: 1fr; } }
+.page-h { font-size: 15px; margin-bottom: 8px; }
+.set-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+            padding: 14px; margin-bottom: 12px; }
+.set-head { font-weight: 600; font-size: 13.5px; margin-bottom: 10px; display: flex;
+            gap: 8px; align-items: center; }
+.set-card label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.set-card input, .set-card select { margin-top: 3px; font-size: 13px; }
+.set-actions { display: flex; gap: 8px; margin-top: 4px; }
