@@ -1283,10 +1283,12 @@ async def chat_stream(request: Request):
 
     cfg = prepared["cfg"]
     evidence = prepared["evidence"]
+    quote = (body.get("quote") or "").strip()[:800]
+    q_full = f"{question}\n\n用户引用的原文：\n{quote}" if quote else question
     messages = [
         {"role": "system", "content": qa.SYSTEM},
         {"role": "user", "content": (
-            f"证据材料：\n\n{prepared['context']}\n\n问题：{question}\n\n请回答（标注 [n] 证据编号）："
+            f"证据材料：\n\n{prepared['context']}\n\n问题：{q_full}\n\n请回答（标注 [n] 证据编号）："
         )},
     ]
 

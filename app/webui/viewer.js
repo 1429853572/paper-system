@@ -845,6 +845,11 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       <div id="qa-msg-list"></div>
     </div>
     <div class="preset-qs" id="preset-qs"></div>
+    <div class="qa-quote" id="qa-quote" hidden>
+      <span class="muted" style="font-size:11px">📎 引用</span>
+      <div class="qa-quote-text" id="qa-quote-text"></div>
+      <button class="btn small" id="qa-quote-clear" title="移除引用">✕</button>
+    </div>
     <div class="qa-input">
       <textarea id="qa-text" placeholder="对着左侧文章提问…（Ctrl+Enter 发送）"></textarea>
       <button class="btn primary" id="qa-send">发送</button>
@@ -867,7 +872,12 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
   };
   $('#qa-pick-filter').oninput = e => renderPickList(e.target.value.toLowerCase());
   $('#qa-send').onclick = sendQa;
+  $('#qa-quote-clear').onclick = clearQuote;
   $('#qa-text').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) sendQa(); };
+  $('#qa-text').oninput = e => {   // 自动长高（上限 150px）
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(150, e.target.scrollHeight) + 'px';
+  };
   // 会话恢复（就近取最近会话，输入区上方提示）
   api('/api/chat/sessions').then(d => {
     if (!state.qaSession && d.sessions.length) state.qaSession = d.sessions[0].id;
@@ -1062,12 +1072,15 @@ function sendQa() {
   });
   if (!parsedScope.length) { toast('所选论文尚未解析完成，请稍候'); return; }
   $('#qa-text').value = '';
+  const quote = state.qaQuote || '';
   $('#qa-msg-list').insertAdjacentHTML('beforeend',
-    `<div class="msg user"><div class="bubble">${esc(text)}</div></div>
+    `<div class="msg user"><div class="bubble">${quote ? '<div class="muted" style="font-size:11px;border-left:2px solid #c9d2ee;padding-left:6px;margin-bottom:4px">📎 ' + esc(quote.split('\n> ')[1]?.slice(0, 80) || '') + '…</div>' : ''}${esc(text)}</div></div>
      <div class="msg assistant"><div class="bubble" id="qa-live">…</div></div>`);
   const live = $('#qa-live'); live.id = '';
+  clearQuote();
+  const ta = $('#qa-text'); ta.style.height = '';
   fetch('/api/chat/stream', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({question: text, paper_ids: parsedScope,
+    body: JSON.stringify({question: text, quote, paper_ids: parsedScope,
                           mode: 'auto', session_id: state.qaSession})}).then(async r => {
     if (!r.ok) { live.textContent = (await r.json()).detail; return; }
     const reader = r.body.getReader();
@@ -1601,9 +1614,7 @@ function followupButtons(sections) {
       const b = e.target.closest('button'); if (!b || !lastSel) return;
       const {text, page} = lastSel;
       if (b.dataset.a === 'cp') { copyText(text, '选中文字'); hideBar(); return; }
-      const quote = `（第${(page ?? 0) + 1}页）\n> ${text.slice(0, 500)}\n`;
-      $('#qa-text').value = `关于这段内容${quote}我的问题是：`;
-      $('#qa-text').focus();
+      setQuote(text, page);   // 引用独立成块，输入框留给问题
       hideBar();
     };
     return bar;
@@ -1831,3 +1842,22 @@ window.fitPdf = () => {
   if (zo) zo.addEventListener('click', () => state.fitWidth = false);
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => applyVsplit(), 250); });
 })();
+
+/* 划词引用块（输入框保持干净） */
+state.qaQuote = '';
+window.setQuote = (text, page) => {
+  state.qaQuote = `（第${(page ?? 0) + 1}页）\n> ${text.slice(0, 600)}`;
+  const box = $('#qa-quote');
+  if (!box) return;
+  box.hidden = !state.qaQuote;
+  $('#qa-quote-text').textContent = text.slice(0, 160) + (text.length > 160 ? '…' : '');
+  $('#qa-text').focus();
+  $('#qa-text').placeholder = '针对上方引用提问…';
+};
+window.clearQuote = () => {
+  state.qaQuote = '';
+  const box = $('#qa-quote');
+  if (box) box.hidden = true;
+  const t = $('#qa-text');
+  if (t) t.placeholder = '对着左侧文章提问…（Ctrl+Enter 发送）';
+};
