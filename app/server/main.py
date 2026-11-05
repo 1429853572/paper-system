@@ -947,6 +947,42 @@ def paper_journal_rank(paper_id: str, request: Request, force: int = 0):
     return get_journal_rank(p["journal"], force=bool(force))
 
 
+@app.get("/api/statuses")
+def papers_statuses(request: Request):
+    """全部论文的 解析/翻译状态 + 每篇 token 用量（文库管理行内展示）."""
+    u = require(request)
+    vis = "" if u["role"] == "admin" else " AND (visibility='shared' OR owner_id=?)"
+    args = () if u["role"] == "admin" else (u["id"],)
+    papers = db.all(f"SELECT id, parse_status FROM papers WHERE deleted_at IS NULL{vis}", args)
+    # 每篇最新 parse/translate 任务
+    latest: dict[str, dict] = {}
+    for j in db.all(
+        "SELECT j.* FROM jobs j WHERE j.job_type IN ('parse','translate') "
+        "AND j.id IN (SELECT MAX(id) FROM jobs WHERE job_type IN ('parse','translate') GROUP BY paper_id, job_type)"
+    ):
+        latest.setdefault(j["paper_id"], {})[j["job_type"]] = j
+    tokens = {r["paper_id"]: r for r in db.all(
+        "SELECT paper_id, SUM(prompt_tokens) p, SUM(completion_tokens) c, COUNT(*) calls "
+        "FROM llm_calls WHERE paper_id IS NOT NULL GROUP BY paper_id")}
+    out = {}
+    for p in papers:
+        lj = latest.get(p["id"], {})
+        pj, tj = lj.get("parse"), lj.get("translate")
+        tk = tokens.get(p["id"])
+        out[p["id"]] = {
+            "parse_status": p["parse_status"],
+            "parsing": bool(pj and pj["status"] in ("queued", "pending_gate", "running")),
+            "parse_job": {"id": pj["id"], "status": pj["status"],
+                          "error": pj["error"]} if pj else None,
+            "translating": bool(tj and tj["status"] in ("queued", "pending_gate", "running")),
+            "translate_job": {"id": tj["id"], "status": tj["status"],
+                              "done": tj["progress_done"], "total": tj["progress_total"],
+                              "error": tj["error"]} if tj else None,
+            "tokens": {"p": tk["p"], "c": tk["c"], "calls": tk["calls"]} if tk else None,
+        }
+    return {"statuses": out}
+
+
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
 def reindex_paper(paper_id: str, request: Request):

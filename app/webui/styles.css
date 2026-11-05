@@ -346,3 +346,17 @@ table.list th { color: var(--muted); font-weight: 500; }
 #page-reader { overflow: hidden; }
 .view-tabs, .r-subtabs { position: sticky; top: 0; z-index: 6; }
 .r-subtabs { top: 0; }
+
+/* 队列浮层 */
+#queue-btn { position: relative; }
+#queue-btn .qbadge { background: var(--err); color: #fff; border-radius: 9px; padding: 0 6px;
+                     font-size: 11px; margin-left: 4px; }
+.queue-pop { position: fixed; top: 52px; right: 16px; width: 460px; max-width: 92vw; z-index: 70;
+             background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+             box-shadow: 0 12px 40px rgba(0,0,0,.16); }
+.qp-head { display: flex; gap: 8px; align-items: center; padding: 10px 14px;
+           border-bottom: 1px solid var(--border); }
+.qp-head b { flex: 1; }
+.qp-body { max-height: 56vh; overflow-y: auto; padding: 6px 10px; }
+.qp-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 7px 6px;
+          border-bottom: 1px solid #f0f1f5; font-size: 13px; }

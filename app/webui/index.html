@@ -49,10 +49,10 @@
       <div class="topnav">
         <button data-page="reader" class="on">阅读</button>
         <button data-page="collections">📚 文库</button>
-        <button data-page="tasks">任务中心</button>
         <button data-page="trash">回收站</button>
         <button data-page="settings">设置</button>
         <button data-page="admin" id="nav-admin" hidden>管理</button>
+        <button class="btn small" id="queue-btn" hidden>⏳ 队列 <span class="qbadge" id="qbadge">0</span></button>
         <button class="btn small primary" id="qa-open">💬 问答</button>
       </div>
     </nav>
@@ -106,8 +106,6 @@
 
     <!-- 文库管理 -->
     <div class="page" id="page-collections" style="display:none"></div>
-    <!-- 任务中心 -->
-    <div class="page" id="page-tasks" style="display:none"></div>
     <!-- 导读 -->
     <!-- 回收站 -->
     <div class="page" id="page-trash" style="display:none"></div>
@@ -118,6 +116,13 @@
   </main>
 </div>
 
+<div class="queue-pop" id="queue-pop" hidden>
+  <div class="qp-head"><b>任务队列</b>
+    <button class="btn small" onclick="pauseQueue()">暂停批量</button>
+    <button class="btn small" onclick="resumeQueue()">恢复</button>
+    <button class="btn small" onclick="toggleQueue(false)">✕</button></div>
+  <div class="qp-body" id="queue-list"></div>
+</div>
 <div id="toast"></div>
 
 <script type="module" src="/static/viewer.js"></script>

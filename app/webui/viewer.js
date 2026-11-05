@@ -493,57 +493,57 @@ $$('.r-subtabs [data-s]').forEach(b => b.onclick = () => switchView('read', b.da
 $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.dataset.page));
 function switchPage(page) {
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
-  $('#page-title').textContent = {reader: '阅读', collections: '文库管理', tasks: '任务中心',
+  $('#page-title').textContent = {reader: '阅读', collections: '文库管理',
     trash: '回收站', settings: '设置', admin: '管理'}[page];
-  for (const p of ['reader', 'collections', 'tasks', 'trash', 'settings', 'admin']) {
+  for (const p of ['reader', 'collections', 'trash', 'settings', 'admin']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
-  ({collections: renderCollectionsPage, tasks: renderTasks, trash: renderTrash,
+  ({collections: renderCollectionsPage, trash: renderTrash,
     settings: renderSettings, admin: renderAdmin})[page]?.();
 }
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
 
-/* ---------------- 任务中心 ---------------- */
-async function renderTasks() {
-  const d = await api('/api/jobs?limit=100');
-  const isAdmin = state.me.role === 'admin';
-  const usage = await api('/api/usage');
-  const rows = d.jobs.map(j => {
-    const pct = j.progress_total ? Math.round(100 * j.progress_done / j.progress_total) : 0;
-    const st = {queued: '排队', pending_gate: '等待GPU', running: '进行中', done: '完成',
-                failed: '失败', canceled: '已取消'}[j.status] || j.status;
-    return `<tr>
-      <td>${esc(j.username || '')}</td><td>${j.job_type}</td>
-      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">${esc(j.title || j.paper_id || '')}</td>
-      <td>${j.priority === 'interactive' ? '⚡手动' : 'bg'}</td>
-      <td>${st}${j.error ? `<div class="muted" style="font-size:11px">${esc(j.error.slice(0, 80))}</div>` : ''}</td>
-      <td><div class="progress"><i style="width:${pct}%"></i></div><span class="muted" style="font-size:11px">${j.progress_done}/${j.progress_total}</span></td>
-      <td class="row-actions">
-        ${['failed', 'canceled'].includes(j.status) ? `<button class="btn small" onclick="retryJob(${j.id})">重试</button>` : ''}
-        ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" onclick="cancelJob(${j.id})">取消</button>` : ''}
-      </td></tr>`;
-  }).join('');
-  const usageRows = usage.by_user.map(u =>
-    `<tr><td>${esc(u.username)}</td><td>${u.key_source}</td><td>${u.purpose}</td>
-     <td>${u.p.toLocaleString()} / ${u.c.toLocaleString()}</td><td>${u.calls}</td></tr>`).join('');
-  $('#page-tasks').innerHTML = `
-    <div class="card">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-        <h2 style="flex:1">任务队列</h2>
-        ${isAdmin ? `<button class="btn small" onclick="pauseQueue()">暂停批量</button>
-        <button class="btn small" onclick="resumeQueue()">恢复批量</button>` : ''}
-      </div>
-      <table class="list"><tr><th>用户</th><th>类型</th><th>论文</th><th>优先级</th><th>状态</th><th>进度</th><th></th></tr>
-      ${rows || '<tr><td colspan="7" class="muted">暂无任务</td></tr>'}</table>
-    </div>
-    <div class="card"><h2>Token 用量</h2>
-      <table class="list"><tr><th>用户</th><th>key来源</th><th>用途</th><th>prompt/completion</th><th>调用</th></tr>
-      ${usageRows || '<tr><td colspan="5" class="muted">暂无用量</td></tr>'}</table></div>`;
+/* ---------------- 队列浮层（替代任务中心页） ---------------- */
+async function refreshQueueBadge() {
+  try {
+    const d = await api('/api/jobs?limit=200');
+    const active = d.jobs.filter(j => ['queued', 'pending_gate', 'running'].includes(j.status));
+    const btn = $('#queue-btn'), badge = $('#qbadge');
+    btn.hidden = !active.length;
+    badge.textContent = active.length;
+    if (!$('#queue-pop').hidden) renderQueueList(d.jobs);
+  } catch {}
 }
-window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderTasks(); };
-window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderTasks(); };
+async function renderQueueList(all) {
+  const jobs = all || (await api('/api/jobs?limit=200')).jobs;
+  const st = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
+              failed: '失败', canceled: '已取消'};
+  const live = jobs.filter(j => ['queued', 'pending_gate', 'running', 'failed'].includes(j.status)).slice(0, 30);
+  $('#queue-list').innerHTML = live.map(j => `
+    <div class="qp-row">
+      <span class="badge ${j.status === 'failed' ? 'err' : 'run'}">${st[j.status] || j.status}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.title || j.paper_id || '')}</span>
+      <span class="muted" style="font-size:11px">${j.job_type}${j.progress_total ? ' ' + j.progress_done + '/' + j.progress_total : ''}</span>
+      ${['failed', 'canceled'].includes(j.status) ? `<button class="btn small" onclick="retryJob(${j.id})">重试</button>` : ''}
+      ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" onclick="cancelJob(${j.id})">取消</button>` : ''}
+      ${j.error ? `<div class="muted" style="font-size:11px;width:100%">${esc(j.error.slice(0, 90))}</div>` : ''}
+    </div>`).join('') || '<p class="muted" style="padding:10px">无进行中任务</p>';
+}
+window.toggleQueue = async show => {
+  const pop = $('#queue-pop');
+  pop.hidden = show === undefined ? !pop.hidden : !show;
+  if (!pop.hidden) renderQueueList();
+};
+$('#queue-btn').onclick = e => { e.stopPropagation(); toggleQueue(); };
+document.addEventListener('click', e => {
+  const pop = $('#queue-pop');
+  if (!pop.hidden && !pop.contains(e.target) && e.target.id !== 'queue-btn') pop.hidden = true;
+});
+window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderQueueList(); refreshQueueBadge(); };
+window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderQueueList(); refreshQueueBadge(); };
 window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: 'POST'}); toast('批量已暂停（手动任务不受影响）'); };
 window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); };
+setInterval(refreshQueueBadge, 8000);
 
 /* SSE 实时进度 */
 async function watchJobs() {
@@ -564,7 +564,10 @@ async function watchJobs() {
         }
       });
     }
-    if (['#page-tasks'].some(s => $(s).style.display !== 'none')) renderTasks();
+    refreshQueueBadge();
+    // 文库管理页打开时同步行内状态
+    const cp = $('#page-collections');
+    if (cp && cp.style.display !== 'none') renderCollectionsPage();
   };
 }
 
@@ -1261,29 +1264,48 @@ window.exportChat = () => {
 /* ---- 📚 文库管理页 ---- */
 async function renderCollectionsPage() {
   const d = await api('/api/collections');
+  state._statuses = (await api('/api/statuses')).statuses;
   const el = $('#page-collections');
   const cards = await Promise.all(d.collections.map(async c => {
     const papers = (await api('/api/papers?collection_id=' + c.id)).papers;
-    const paperRows = papers.map(p => `
-      <tr><td style="max-width:340px;overflow:hidden;text-overflow:ellipsis">${esc(p.title || p.id)}</td>
-      <td>${p.parse_status === 'parsed' ? '✓' : '⏳'}</td>
-      <td class="row-actions">
-        <button class="btn small" onclick="viewPaper('${p.id}')">阅读</button>
-        <select style="width:auto;font-size:11px;padding:2px 4px" onchange="movePaper('${p.id}', this.value, this)">
-          <option value="">移入…</option>
-          ${d.collections.filter(x => x.id !== c.id).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}
-          <option value="__none__">未分库</option>
-        </select>
-        <button class="btn small danger" onclick="delPaperFromLib('${p.id}')">删除</button>
-      </td></tr>`).join('');
+    const paperRows = papers.map(p => {
+      const st = state._statuses?.[p.id] || {};
+      const pj = st.parse_job, tj = st.translate_job;
+      const parseBadge = st.parsing
+        ? `<span class="badge run" title="${esc(pj?.error || '')}">⏳解析${pj?.status === 'queued' ? '(排队)' : ''}</span>`
+        : p.parse_status === 'parsed' ? '<span class="badge ok">✓已解析</span>'
+        : p.parse_status === 'failed'
+          ? `<span class="badge err" title="${esc(pj?.error || '解析失败')}">✗失败</span>
+             <button class="btn small" onclick="retryPaperJob('${p.id}')">重试</button>`
+          : '<span class="badge run">排队中</span>';
+      const trBadge = st.translating
+        ? `<span class="badge run">🌐${tj ? tj.done + '/' + tj.total : ''}</span>`
+        : tj?.status === 'failed'
+          ? `<span class="badge err" title="${esc(tj.error || '')}">译✗</span>
+             <button class="btn small" onclick="retryPaperJob('${p.id}')">重试</button>`
+          : (tj?.status === 'done' ? '<span class="badge ok">✓已译</span>' : '<span class="muted">—</span>');
+      const tk = st.tokens;
+      const tkBadge = tk ? `<span class="muted" title="prompt/completion tokens">${(tk.p + tk.c).toLocaleString()} tok</span>` : '';
+      return `<tr>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">${esc(p.title || p.id)}</td>
+        <td>${parseBadge}</td><td>${trBadge}</td><td>${tkBadge}</td>
+        <td class="row-actions">
+          <button class="btn small" onclick="viewPaper('${p.id}')">阅读</button>
+          <select style="width:auto;font-size:11px;padding:2px 4px" onchange="movePaper('${p.id}', this.value, this)">
+            <option value="">移入…</option>
+            ${d.collections.filter(x => x.id !== c.id).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}
+            <option value="__none__">未分库</option>
+          </select>
+          <button class="btn small danger" onclick="delPaperFromLib('${p.id}')">删除</button>
+        </td></tr>`;}).join('');
     return `<div class="card">
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
         <h2 style="margin:0;flex:1">📁 ${esc(c.name)} <span class="muted" style="font-size:13px">(${papers.length} 篇)</span></h2>
         <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">✏️ 重命名</button>
         <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">删除库</button>
       </div>
-      <table class="list"><tr><th>论文</th><th>解析</th><th></th></tr>
-      ${paperRows || '<tr><td colspan="3" class="muted">空库——阅读页上传时选择此库，或在侧栏多选移入</td></tr>'}</table>
+      <table class="list"><tr><th>论文</th><th>解析</th><th>翻译</th><th>用量</th><th></th></tr>
+      ${paperRows || '<tr><td colspan="5" class="muted">空库——阅读页上传时选择此库，或在侧栏多选移入</td></tr>'}</table>
     </div>`;
   }));
   el.innerHTML = `
@@ -1339,4 +1361,10 @@ window.lightbox = (src, caption) => {
   lb.querySelector('img').src = src;
   lb.querySelector('.lb-cap').textContent = caption || '';
   lb.classList.add('open');
+};
+
+window.retryPaperJob = async pid => {
+  await api(`/api/papers/${pid}/parse`, {method: 'POST'}).catch(() => {});
+  await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [pid]})}).catch(() => {});
+  toast('已重新入队'); renderCollectionsPage();
 };
