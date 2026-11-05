@@ -419,7 +419,7 @@ function drawOverlays(wrap) {
 function pdfScrollToPage(n, noFollow) {
   const wrap = _pdfBuilt?.wraps?.get(n - 1);
   if (!wrap) return;
-  state._suppressFollow = !noFollow ? false : true;   // 程序滚动时抑制回调跟随右侧
+  state._suppressFollow = !!noFollow;   // 来自右侧同步的滚动(noFollow)不再回推右侧，防环
   wrap.scrollIntoView({block: 'start'});
   setTimeout(() => { state._suppressFollow = false; }, 350);
   $('#pg-label').textContent = `${n} / ${state.pdfDoc.numPages}`;
@@ -635,7 +635,7 @@ function renderContentView() {
   } else if (state.view === 'zh') {
     const zh = state.pairs.filter(p => p.zh);
     el.innerHTML = zh.length ? zh.map(p =>
-      `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.zh)}</div>`).join('')
+      `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.zh)}</div>`).join('')
       : '<p class="muted">尚无中文译文。</p>';
   } else {  // orig
     el.innerHTML = state.blocks.map(b => {
@@ -2092,7 +2092,7 @@ window.figCropPass = async () => {
 /* ===== PDF→右侧 点击联动：点 PDF 任意位置，右侧定位对应块 ===== */
 (() => {
   $('#pdf-host').addEventListener('click', async e => {
-    if (!state.current || !state.syncLink) return;
+    if (!state.current) return;
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed) return;   // 划词选择不触发
     const wrap = e.target.closest('.pdf-page');
