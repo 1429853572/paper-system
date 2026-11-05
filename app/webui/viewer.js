@@ -285,6 +285,7 @@ async function openPaper(id) {
     if (['orig', 'bilingual', 'zh'].includes(state.view)) renderContentView();   // 聚合就绪→升级原图裁剪
   }).catch(() => {});
   state._refs = null;   // 引用缓存随论文重置
+  state.showLayout = false; $('#layout-btn')?.classList.remove('on');   // 布局框不跨篇残留
   loadBilingual(id).then(() => {   // 有译文默认双语，否则原文
     if (state.versions.length && state.view === 'orig') switchView('read', 'bilingual');
     else renderContentView();
@@ -560,13 +561,14 @@ function renderContentView() {
         : p.zh ? katexify(esc(p.zh))
         : (p.type === 'image' || p.type === 'equation' ? '' :
            `<span class="fill-hint" data-bid="${p.block_id}">补译</span>`);
-      return `<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
-              <div class="pair zh blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${p.block_id}')">${zhBody}</div>`;
+      const isTitle = p.type === 'title';
+      return `<div class="pair en blk ${isTitle ? 'blk-title' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
+              <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${p.block_id}')">${zhBody}</div>`;
     }).join('') + '</div>';
   } else if (state.view === 'zh') {
     const zh = state.pairs.filter(p => p.zh);
     el.innerHTML = zh.length ? zh.map(p =>
-      `<div class="blk zh" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.zh)}</div>`).join('')
+      `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.zh)}</div>`).join('')
       : '<p class="muted">尚无中文译文。</p>';
   } else {  // orig
     el.innerHTML = state.blocks.map(b => {
