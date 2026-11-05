@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -277,6 +277,9 @@ class Database:
             c.execute("PRAGMA journal_mode=WAL")
 
     def _migrate(self, c: sqlite3.Connection, from_v: int) -> None:
+        if from_v < 11:
+            # 段落合并功能已下线（端点随 238e5c8 一并移除）→ 删掉空表
+            c.execute("DROP TABLE IF EXISTS block_merges")
         if from_v < 4:
             c.executescript("""
                 ALTER TABLE papers ADD COLUMN meta_source TEXT;

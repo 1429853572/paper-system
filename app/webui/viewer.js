@@ -370,11 +370,9 @@ async function openPaper(id) {
     if (['orig', 'bilingual', 'zh'].includes(state.view)) renderContentView();   // 聚合就绪→升级原图裁剪
   }).catch(() => {});
   state._refs = null;   // 引用缓存随论文重置
-  loadMerges(id);
   state.showLayout = false; $('#layout-btn')?.classList.remove('on');   // 布局框不跨篇残留
   refreshJobState();   // 先取完整标志
   loadBilingual(id).then(() => {   // 翻译完成才默认双语；未完成/未开始停在原文
-    applyMergesToPairs();
     if (state.translatedComplete && state.view === 'orig') switchView('read', 'bilingual');
     else renderContentView();
     restorePos(id);
@@ -794,10 +792,9 @@ function renderContentView() {
       `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.zh)}</div>`).join('')
       : '<p class="muted">尚无中文译文。</p>';
   } else {  // orig
-    el.innerHTML = buildRenderBlocks().map(b => {
+    el.innerHTML = state.blocks.map(b => {
       const aux = ['page_number', 'footer', 'header', 'aside_text', 'page_footnote'].includes(b.type) ? ' blk-aux' : '';
       return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}'>
-        ${b._merged ? `<span class="merge-badge" onclick="event.stopPropagation();unmerge('${b.block_id}')" title="已人工合并，点击拆分">⛓ 已合并</span>` : ''}
         ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
       </div>`;}).join('');
   }
@@ -805,13 +802,6 @@ function renderContentView() {
   figCropPass();   // PDF 原图裁剪（异步，pdfDoc 未就绪则跳过）
   // 段落点击 → 跳页 + 高亮
   $$('.blk', el).forEach(x => x.onclick = e => {
-    if (e.ctrlKey || e.metaKey) {   // Ctrl+点击 = 合并多选
-      const bid = x.dataset.bid;
-      if (state.mergeSel.has(bid)) { state.mergeSel.delete(bid); x.classList.remove('merge-sel'); }
-      else { state.mergeSel.add(bid); x.classList.add('merge-sel'); }
-      updateMergeBar();
-      return;
-    }
     $$('.blk.active').forEach(y => { y.classList.remove('active'); y.style.removeProperty('--hlc'); });
     applyActiveStyle(x);
     const page = parseInt(x.dataset.page ?? '0') + 1;
@@ -1166,7 +1156,7 @@ async function renderSumBubble() {
     state._sumCache[pid] = d;
     drawSummary(d.summary, pid, '#qa-sum-bubble', true);
   } else {
-    el.innerHTML = head + `<div class="msg assistant"><div class="bubble">
+    el.innerHTML = (state._sumHead || '') + `<div class="msg assistant"><div class="bubble">
       <span class="muted">开始提问前，可先生成该篇的结构化导读：</span><br>
       <button class="btn small primary" style="margin-top:6px" onclick="genSumBubble('${pid}')">✨ 生成导读</button>
     </div></div>`;
@@ -2433,82 +2423,6 @@ document.addEventListener('keydown', e => {
 });
 
 $('#toc-btn').onclick = () => toggleToc();
-
-/* ===== 段落合并（识别错拆修正）===== */
-state.mergeSel = new Set();      // Ctrl+点选中的 bid
-state.merges = [];               // [{head_bid, member_bids}]
-state.mergeMap = {};             // member_bid -> head 伪块
-window.buildRenderBlocks = () => {
-  const map = {};
-  state.merges.forEach(m => m.member_bids.forEach(b => map[b] = m.head_bid));
-  state.mergeMap = map;
-  const heads = new Set(state.merges.map(m => m.head_bid));
-  const members = new Set();
-  state.merges.forEach(m => m.member_bids.forEach(b => members.add(b)));
-  const out = [];
-  for (const b of state.blocks) {
-    if (members.has(b.block_id) && !heads.has(b.block_id)) continue;   // 被并成员跳过
-    if (heads.has(b.block_id)) {
-      const m = state.merges.find(x => x.head_bid === b.block_id);
-      const grp = m.member_bids.map(id => state.blocks.find(x => x.block_id === id)).filter(Boolean);
-      const bbox = (() => { try {
-        const bs = grp.flatMap(x => parseBoxes(x.bbox));
-        if (!bs.length) return null;
-        return JSON.stringify([Math.min(...bs.map(b=>b[0])), Math.min(...bs.map(b=>b[1])),
-                               Math.max(...bs.map(b=>b[2])), Math.max(...bs.map(b=>b[3]))]);
-      } catch { return null; } })();
-      out.push({...b, text: grp.map(x => x.text).join('\n\n'), bbox, _merged: true});
-    } else out.push(b);
-  }
-  return out;
-};
-window.applyMergesToPairs = () => {   // 双语/中文：合并组内 en/zh 顺序拼接
-  if (!state.merges.length) return;
-  const drop = new Set();
-  state.merges.forEach(m => m.member_bids.slice(1).forEach(b => drop.add(b)));
-  state.pairs = state.pairs.filter(p => !drop.has(p.block_id));
-  state.merges.forEach(m => {
-    const head = state.pairs.find(p => p.block_id === m.head_bid);
-    if (!head) return;
-    const grp = m.member_bids.map(id => state.pairs.find(p => p.block_id === id)).filter(Boolean);
-    head.en = grp.map(p => p.en).filter(Boolean).join('\n\n');
-    head.zh = grp.map(p => p.zh).filter(Boolean).join('\n\n') || head.zh;
-  });
-};
-window.loadMerges = async pid => {
-  state.merges = (await api(`/api/papers/${pid}/merges`)).merges;
-  state.mergeSel.clear();
-};
-window.doMerge = async () => {
-  if (state.mergeSel.size < 2) { toast('Ctrl+点击至少两段'); return; }
-  const order = state.blocks.filter(b => state.mergeSel.has(b.block_id)).map(b => b.block_id);
-  await api(`/api/papers/${state.current.id}/merges`, {method: 'POST',
-    body: JSON.stringify({member_bids: order})});
-  toast(`已合并 ${order.length} 段`);
-  await loadMerges(state.current.id);
-  renderContentView();
-};
-window.unmerge = async headBid => {
-  if (!confirm('拆回原段落？')) return;
-  await api(`/api/papers/${state.current.id}/merges/${headBid}`, {method: 'DELETE'});
-  toast('已拆分');
-  await loadMerges(state.current.id);
-  renderContentView();
-};
-
-window.updateMergeBar = () => {
-  let bar = $('#merge-bar');
-  if (!bar) {
-    bar = document.createElement('div');
-    bar.id = 'merge-bar'; bar.hidden = true;
-    bar.innerHTML = `<b id="mb-n"></b> 段选中
-      <button class="btn small primary" onclick="doMerge()">⛓ 合并</button>
-      <button class="btn small" onclick="state.mergeSel.clear();$$('.blk.merge-sel').forEach(x=>x.classList.remove('merge-sel'));updateMergeBar()">取消</button>`;
-    $('.pane-right').appendChild(bar);
-  }
-  bar.hidden = state.mergeSel.size < 1;
-  $('#mb-n').textContent = state.mergeSel.size;
-};
 
 window.addSubLib = async pid => {
   const name = prompt('子库名称：');
