@@ -661,8 +661,10 @@ function renderContentView() {
       const pg = +blk.dataset.page;
       if (state.pdfDoc && pg >= 0 && pg + 1 !== state.pageNum) {
         state.pageNum = pg + 1;
+        window._hoverClear && window._hoverClear();
         renderPage({noFollow: true});
-      } else if (state._lastVP) {
+      } else {
+        window._hoverClear && window._hoverClear();
         redrawHl();
       }
       savePos();
@@ -1907,23 +1909,44 @@ const renderBlockBody = b => {
   document.addEventListener('mouseout', e => {
     if (e.target.closest && e.target.closest('.blk')) clear();
   });
+  // 滚动/渲染时清除，防止蓝框滞留
+  window._hoverClear = clear;
+  $('#pdf-host').addEventListener('scroll', clear);
+  const cv = $('#content-view'); cv && cv.addEventListener('scroll', clear);
 })();
 
 /* ===== 左右分栏拖动 + 自适应 ===== */
 state.vsplit = parseFloat(localStorage.getItem('ps-vsplit') || '50');   // 左栏百分比
 state.fitWidth = true;   // PDF 随栏宽自适应（手动缩放后关闭，拖动/换论文恢复）
+state.sideMode = localStorage.getItem('ps-side') || 'both';
 window.applyVsplit = (fire = true) => {
   const reader = $('.reader');
   if (!reader || innerWidth <= 880) return;   // 小屏堆叠布局不动
-  const pl = $('#pane-left'), pr = $('.pane-right');
-  pl.style.width = state.vsplit + '%';
-  pl.style.flex = 'none';
-  pr.style.width = 'auto';          // 右栏弹性填充剩余空间（否则残留 50% 出空白）
+  const pl = $('#pane-left'), pr = $('.pane-right'), vh = $('#v-handle'), sr = $('#side-restore');
+  const mode = state.sideMode;
+  if (mode === 'text') {            // 只看文字
+    pl.style.width = '0'; pl.style.overflow = 'hidden'; pl.style.borderRight = 'none';
+    vh.style.display = 'none';
+    sr.hidden = false; sr.textContent = '‹ 显示 PDF'; sr.onclick = () => { state.sideMode = 'both'; localStorage.setItem('ps-side', 'both'); applyVsplit(); };
+  } else if (mode === 'pdf') {      // 只看 PDF
+    pl.style.width = '100%'; pl.style.borderRight = 'none';
+    vh.style.display = 'none';
+    sr.hidden = false; sr.textContent = '显示文字 ›'; sr.onclick = () => { state.sideMode = 'both'; localStorage.setItem('ps-side', 'both'); applyVsplit(); };
+  } else {                          // 双栏
+    pl.style.width = state.vsplit + '%';
+    pl.style.overflow = ''; pl.style.borderRight = '';
+    pl.style.flex = 'none';
+    vh.style.display = '';
+    sr.hidden = true;
+  }
+  pr.style.width = 'auto';
   pr.style.flex = '1 1 auto';
   pr.style.minWidth = 0;
   pr.classList.toggle('narrow', pr.getBoundingClientRect().width < 560);
   if (fire) fitPdf();
 };
+$('#va-l').onclick = e => { e.stopPropagation(); state.sideMode = 'text'; localStorage.setItem('ps-side', 'text'); applyVsplit(); };
+$('#va-r').onclick = e => { e.stopPropagation(); state.sideMode = 'pdf'; localStorage.setItem('ps-side', 'pdf'); applyVsplit(); };
 window.fitPdf = () => {
   if (!state.pdfDoc || !state.fitWidth) return;
   const w = $('#pane-left').clientWidth - 24;
@@ -1940,7 +1963,7 @@ window.fitPdf = () => {
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
     const r = $('.reader').getBoundingClientRect();
-    const pct = Math.min(72, Math.max(24, Math.round(100 * (e.clientX - r.left) / r.width)));
+    const pct = Math.min(99, Math.max(1, Math.round(100 * (e.clientX - r.left) / r.width)));
     if (pct !== state.vsplit) { state.vsplit = pct; applyVsplit(); }
   });
   document.addEventListener('mouseup', () => {

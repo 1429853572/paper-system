@@ -552,3 +552,15 @@ table.list input[type=checkbox] { width: auto; }
 .pdf-page { margin: 10px auto; }
 .pdf-ph { display: flex; align-items: center; justify-content: center; color: #778;
           background: #444; font-size: 13px; }
+
+/* 分栏箭头 + 单侧恢复 */
+.v-arrows { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            display: flex; flex-direction: column; gap: 3px; opacity: 0; transition: opacity .15s; }
+.v-handle:hover .v-arrows, .v-arrows:hover { opacity: 1; }
+.v-arrows button { width: 18px; height: 20px; border: 1px solid var(--border); background: var(--panel);
+                   border-radius: 4px; color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer; }
+.v-arrows button:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+.side-restore { position: absolute; top: 50%; z-index: 20; transform: translateY(-50%);
+                background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+                padding: 14px 5px; font-size: 12px; color: var(--primary); writing-mode: vertical-lr;
+                box-shadow: 0 4px 14px rgba(0,0,0,.12); }

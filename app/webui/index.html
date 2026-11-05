@@ -77,7 +77,13 @@
           </div>
           <div class="pdf-host" id="pdf-host"></div>
         </div>
-        <div class="v-handle" id="v-handle" title="左右拖动调整 PDF/文字占比（双击复位 50/50）"></div>
+        <div class="v-handle" id="v-handle" title="拖动调整占比 · 双击复位">
+          <div class="v-arrows">
+            <button id="va-l" title="收起 PDF，只看文字">‹</button>
+            <button id="va-r" title="收起文字，只看 PDF">›</button>
+          </div>
+        </div>
+        <button class="side-restore" id="side-restore" hidden></button>
         <div class="pane-right">
           <div class="view-tabs">
             <button data-v="read" class="on">📖 阅读</button>
