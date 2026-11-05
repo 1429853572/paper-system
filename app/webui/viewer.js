@@ -285,6 +285,7 @@ async function openPaper(id) {
     if (['orig', 'bilingual', 'zh'].includes(state.view)) renderContentView();   // 聚合就绪→升级原图裁剪
   }).catch(() => {});
   state._refs = null;   // 引用缓存随论文重置
+  $('#link-toggle')?.classList.toggle('on', state.syncLink);   // 开关状态校准
   state.showLayout = false; $('#layout-btn')?.classList.remove('on');   // 布局框不跨篇残留
   refreshJobState();   // 先取完整标志
   loadBilingual(id).then(() => {   // 翻译完成才默认双语；未完成/未开始停在原文
@@ -2198,3 +2199,23 @@ window.flashRefBlock = async blockId => {
   const b = state.blocks.find(x => x.block_id === blockId);
   if (b) pdfFlashBlock(b);
 };
+
+/* ===== 联动诊断（Ctrl+Shift+L）===== */
+window.linkDiag = () => {
+  const d = {
+    开关: state.syncLink ? '开' : '关',
+    当前视图: state.view, 主视图: state.mainView,
+    块观察器: state._blkObs ? '挂载中' : '未挂载',
+    PDF页观察器: state._pdfPageObs ? '挂载中' : '未挂载',
+    PDF连续视图: _pdfBuilt ? `已建 ${_pdfBuilt.wraps.size} 页` : '未建',
+    当前页: state.pageNum, 抑制回环: !!state._suppressFollow,
+    论文: state.current?.id || '无',
+  };
+  const msg = Object.entries(d).map(([k, v]) => `${k}: ${v}`).join('  |  ');
+  console.log('[联动诊断]', d);
+  toast(msg, 6000);
+  copyText(msg, '诊断信息');
+};
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') { e.preventDefault(); linkDiag(); }
+});
