@@ -573,3 +573,4 @@ table.list input[type=checkbox] { width: auto; }
 .blk.active { background: color-mix(in srgb, var(--hlc, #f0d878) 14%, transparent) !important;
               box-shadow: inset 3px 0 0 var(--hlc, #e6a23c), inset 0 0 0 1px color-mix(in srgb, var(--hlc, #ccc) 45%, transparent);
               border-radius: 4px; }
+.translatingNow {}

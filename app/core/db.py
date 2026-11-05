@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -282,6 +282,12 @@ class Database:
                 ALTER TABLE papers ADD COLUMN meta_source TEXT;
                 ALTER TABLE papers ADD COLUMN meta_verified_at TEXT;
             """)
+        if from_v < 8:
+            # 译文幂等：同 paper+cache_key+block 唯一（部分翻译重跑不再产生重复行）
+            c.execute("DELETE FROM translations WHERE rowid NOT IN ("
+                      "SELECT MIN(rowid) FROM translations GROUP BY paper_id, cache_key, block_id)")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_trans_unique "
+                      "ON translations(paper_id, cache_key, block_id)")
         if from_v < 7:
             try:
                 c.execute("ALTER TABLE blocks ADD COLUMN asset_path TEXT")

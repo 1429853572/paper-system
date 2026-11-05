@@ -179,7 +179,7 @@ def translate_paper(user_id: int, paper_id: str, run_id: str,
 
     with db.write() as c:
         c.executemany(
-            "INSERT INTO translations(paper_id,parse_run_id,cache_key,block_id,text_zh,"
+            "INSERT OR REPLACE INTO translations(paper_id,parse_run_id,cache_key,block_id,text_zh,"
             "model,created_by) VALUES(?,?,?,?,?,?,?)",
             rows,
         )

@@ -286,8 +286,9 @@ async function openPaper(id) {
   }).catch(() => {});
   state._refs = null;   // 引用缓存随论文重置
   state.showLayout = false; $('#layout-btn')?.classList.remove('on');   // 布局框不跨篇残留
-  loadBilingual(id).then(() => {   // 有译文默认双语，否则原文
-    if (state.versions.length && state.view === 'orig') switchView('read', 'bilingual');
+  refreshJobState();   // 先取完整标志
+  loadBilingual(id).then(() => {   // 翻译完成才默认双语；未完成/未开始停在原文
+    if (state.translatedComplete && state.view === 'orig') switchView('read', 'bilingual');
     else renderContentView();
     restorePos(id);
   });
@@ -524,6 +525,8 @@ async function refreshJobState() {
   if (!state.current) return;
   try {
     const js = await api(`/api/papers/${state.current.id}/jobstate`);
+    state.translatedComplete = js.translated;
+    state.translatingNow = js.translating;
     renderJobButtons(js);
     if (js.translating) watchTranslation();   // 进行中→自动轮询完成刷新
   } catch {}
@@ -568,12 +571,14 @@ function watchTranslation() {
   clearInterval(watching);
   watching = setInterval(async () => {
     if (!state.current) { clearInterval(watching); return; }
-    const d = await api(`/api/papers/${state.current.id}/bilingual`);
-    if (d.versions.length && (state.versions.length === 0 ||
-        d.versions[0].cache_key !== state.versions[0].cache_key)) {
+    const js = await api(`/api/papers/${state.current.id}/jobstate`);
+    state.translatingNow = js.translating;
+    if (!js.translating && js.translated) {   // 真正完成（非部分译文）
       clearInterval(watching); toast('翻译完成 ✓');
-      state.versions = d.versions; state.pairs = d.pairs; renderContentView();
-      refreshJobState();   // 译文就绪 → 按钮即时转 ✓
+      state.translatedComplete = true;
+      const d = await api(`/api/papers/${state.current.id}/bilingual`);
+      state.versions = d.versions; state.pairs = d.pairs;
+      if (state.view !== 'zh') switchView('read', 'bilingual'); else renderContentView();
     }
     refreshJobState();
   }, 4000);
@@ -616,8 +621,11 @@ function renderContentView() {
     return;
   }
   if (state.view === 'bilingual') {
-    if (!state.pairs.length) {
-      el.innerHTML = `<p class="muted">尚无译文。点击右上「翻译全文」开始（未配置翻译 key 请到设置页配置）。</p>`;
+    if (!state.translatedComplete) {
+      el.innerHTML = `<div class="card"><p>${
+        state.translatingNow
+          ? '⏳ 翻译进行中——完成后此处自动展示双语对照。'
+          : '尚未完成翻译。点击右上「🌐 翻译全文」开始/继续。'}</p></div>`;
       return;
     }
     const SKIP = new Set(['equation', 'image', 'chart', 'ref_text', 'page_number', 'aside_text']);
