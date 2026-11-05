@@ -895,6 +895,7 @@ async function populateQaPicker() {
     const d = await api('/api/papers');
     state.qaAllPapers = d.papers;
   }
+  if (!state.collections?.length) await loadCollections();   // 分组依赖文献库列表
   const toggle = $('#qa-pick-toggle');
   if (!toggle) return;
   $('#qa-pick-count').textContent = state.qaPapers.size;
@@ -902,14 +903,33 @@ async function populateQaPicker() {
 function renderPickList(filter) {
   const el = $('#qa-pick-list');
   if (!el) return;
-  const list = state.qaAllPapers.filter(p => !filter || (p.title || '').toLowerCase().includes(filter));
-  el.innerHTML = list.map(p => {
+  const item = p => {
     const st = p.parse_status !== 'parsed'
       ? `<span class="badge run">${p.parse_status === 'failed' ? '解析失败' : '⏳解析中'}</span>` : '';
     return `<label class="qa-pick-item ${state.qaPapers.has(p.id) ? 'on' : ''}">
       <input type="checkbox" ${state.qaPapers.has(p.id) ? 'checked' : ''} data-id="${p.id}">
       <span>${esc(p.title || p.id)}</span>${st}
-    </label>`;}).join('') || '<p class="muted" style="padding:8px">无匹配</p>';
+    </label>`;};
+  // 按文献库分组（过滤时跨组匹配；空组隐藏）
+  const match = p => !filter || (p.title || '').toLowerCase().includes(filter);
+  const cols = [...(state.collections || [])].sort((a, b) =>
+    (b.name === '默认文献库') - (a.name === '默认文献库'));
+  const groups = cols.map(c => ({
+    name: c.name, papers: state.qaAllPapers.filter(p => p.collection_id === c.id && match(p)),
+  }));
+  const orphan = state.qaAllPapers.filter(p => !p.collection_id && match(p));
+  if (orphan.length) groups.push({name: '未分库', papers: orphan});
+  const visible = groups.filter(g => g.papers.length);
+  const matched = visible.reduce((s, g) => s + g.papers.length, 0);
+  el.innerHTML = (matched
+    ? visible.map((g, i) => `
+      <div class="qa-pick-group" data-gi="${i}">
+        <div class="qa-pick-ghead" onclick="this.nextElementSibling.hidden=!this.nextElementSibling.hidden">
+          <span>📁 ${esc(g.name)}</span><span class="muted" style="font-size:11px">${g.papers.length} 篇 ▾</span>
+        </div>
+        <div class="qa-pick-gbody">${g.papers.map(item).join('')}</div>
+      </div>`).join('')
+    : '<p class="muted" style="padding:8px">无匹配</p>');
   $$('.qa-pick-item input', el).forEach(cb => cb.onchange = () => {
     const id = cb.dataset.id;
     if (cb.checked) {

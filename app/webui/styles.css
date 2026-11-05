@@ -375,3 +375,10 @@ table.list input[type=checkbox] { width: auto; }
           padding: 3px 6px; font-size: 12px; }
 .paper-item:hover .pi-del { display: inline-block; }
 .pi-del:hover { background: var(--err); color: #fff; }
+
+/* 选文面板分组 */
+.qa-pick-ghead { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px;
+                 font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer;
+                 border-top: 1px solid #f0f1f5; position: sticky; top: 0; background: var(--panel); }
+.qa-pick-ghead:hover { color: var(--primary); }
+.qa-pick-group:first-child .qa-pick-ghead { border-top: none; }
