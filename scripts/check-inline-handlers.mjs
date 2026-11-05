@@ -46,7 +46,7 @@ const onWindow = new Set([...js.matchAll(/window\.([A-Za-z_$][\w$]*)\s*=/g)].map
 const builtin = new Set([
   'confirm', 'prompt', 'alert', 'parseInt', 'parseFloat', 'String', 'Number', 'Math', 'Date',
   'JSON', 'Boolean', 'Object', 'Array', 'isNaN', 'encodeURIComponent', 'decodeURIComponent',
-  'setTimeout', 'clearTimeout', 'undefined', 'replace', 'toString', 'trim', 'split', 'join',
+  'setTimeout', 'clearTimeout', 'undefined', 'replace', 'toString', 'trim', 'split', 'join', 'void',
 ]);
 
 const missing = [...called].filter(n => !onWindow.has(n) && !builtin.has(n)).sort();

@@ -82,6 +82,8 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - **会话吊销**：users.token_ver（v12）——改密/登出所有设备时 +1，current_user 逐请求比对（auth.check_token_ver）。**给 current_user 增加鉴权语义时记得 ver 校验在 auth 层**。
 - **用户管理**：users.disabled（0=正常 1=禁用 2=已注销匿名化）；禁用/注销时 token_ver+1；登录校验 disabled；管理员不能禁用/删除自己与 admin 账号。audit_log 已启用（登录/改密/删论文/改配额/禁用等，管理区可查）。
 - **登录限速**：按 IP+用户名计数（auth.py _fail_log，内存态），上限 500 键自动清理。
+- **深色模式**：`[data-theme=dark]` 覆盖 :root token（styles.css）；切换按钮在侧栏头部（🌙/☀️，存 ps-theme）。新样式只用 token 变量即可自动适配深色。
+- **批量端点**：`POST /api/papers/batch-delete` 替代 N+1 逐篇 DELETE；前端 batch-delete 按钮已接入。
 - **错误处理**：全局 exception_handler 统一 JSON 500（勿在前端假设 500 是纯文本）；SSE 收尾已包 try（error 事件而非断流）。
 - **安全头**：中间件统一 nosniff/DENY/CSP（CSP 允许 inline style 与 blob——KaTeX/pdf.js 依赖；改前端加载方式时同步 CSP）。
 - **回收站**：软删除 30 天，janitor 每小时清理；"清空回收站"按用户隔离（admin 才全量）。

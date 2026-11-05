@@ -456,9 +456,11 @@ $('#batch-translate').onclick = async () => {
   toast(`已加入翻译队列（${state.selected.size} 篇）`); $('#batch-cancel').click();
 };
 $('#batch-delete').onclick = async () => {
-  if (!confirm(`删除选中的 ${state.selected.size} 篇？（进回收站，30 天内可恢复）`)) return;
-  for (const id of state.selected) await api('/api/papers/' + id, {method: 'DELETE'});
-  toast('已移入回收站'); $('#batch-cancel').click(); loadPapers();
+  if (!confirm(`删除选中的 ${state.selected.size} 篇？（进回收站，${state.health.trash_days || 30} 天内可恢复）`)) return;
+  await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: [...state.selected]})});
+  toast(`已移入回收站 ${state.selected.size} 篇`);
+  state.selected.clear(); $('#batch-bar').classList.remove('show');
+  loadPapers(); loadCollections();
 };
 $('#batch-move').onchange = async e => {
   if (!state.selected.size) return;
@@ -984,7 +986,13 @@ function switchPage(page) {
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
 
 /* ---------------- 队列浮层（替代任务中心页） ---------------- */
+let _badgeAt = 0;
 async function refreshQueueBadge() {
+  if (Date.now() - _badgeAt < 3000) return;   // SSE 事件风暴节流（3s）
+  _badgeAt = Date.now();
+  await _refreshQueueBadge();
+}
+async function _refreshQueueBadge() {
   try {
     const d = await api('/api/jobs?limit=200');
     const active = d.jobs.filter(j => ['queued', 'pending_gate', 'running'].includes(j.status));
@@ -1059,10 +1067,10 @@ async function renderMeta() {
   const p = state.current;
   if (!p) { $('#content-view').innerHTML = '<p class="muted">选择论文后查看文献信息</p>'; return; }
   const pid = p.id;
-  const d = await api('/api/papers/' + pid);
+  const [d, notes, refs] = await Promise.all([
+    api('/api/papers/' + pid), api(`/api/papers/${pid}/notes`), api(`/api/papers/${pid}/references`)
+  ]);
   const paper = d.paper;
-  const notes = await api(`/api/papers/${pid}/notes`);
-  const refs = await api(`/api/papers/${pid}/references`);
   state._refs = refs.references;
   const kw = (() => { try { return JSON.parse(paper.keywords || '[]'); } catch { return []; } })();
 
@@ -1079,6 +1087,14 @@ async function renderMeta() {
         <button class="btn small" onclick="editMeta('${pid}')">${icon('edit')} 编辑</button>
         <button class="btn small" onclick="extractMeta('${pid}')" title="用 AI 补全缺失字段（作者/摘要/关键词）">${icon('bolt')} AI 补全</button>
         <button class="btn small" onclick="copyCite('${pid}')">${icon('copy')} 引用</button>
+        <div class="exp-dd" onmouseover="this.classList.add('open')" onmouseout="this.classList.remove('open')">
+          <button class="btn small" onclick="void(0)">${icon('download')} 导出</button>
+          <div class="exp-menu">
+            <button onclick="window.open('/api/papers/${pid}/export/translation?lang=both')">翻译对照 Markdown</button>
+            <button onclick="window.open('/api/papers/${pid}/markdown')">解析 Markdown</button>
+            <button onclick="window.open('/api/papers/${pid}/export/summary')">科研导读 Markdown</button>
+          </div>
+        </div>
         <a class="btn small" href="/api/papers/${pid}/pdf" download="${canonicalName(paper)}.pdf">${icon('download')} PDF</a>
         <button class="btn small" onclick="parseCtrl()">${icon('retry')} 重新解析</button>
         <button class="btn small" onclick="retranslatePaper('${pid}')" title="换模型/术语表后生成新译文版本">${icon('retry')} 强制重译</button>
@@ -1336,16 +1352,27 @@ async function renderSumBubble() {
 }
 window.genSumBubble = async pid => {
   const el = $('#qa-sum-bubble');
-  el.innerHTML = (state._sumHead || '') + "<div class=\"msg assistant\"><div class=\"bubble\">" + icon('copy') + " 导读生成中…（全文直读，约 20-60 秒）</div></div>";
+  el.innerHTML = (state._sumHead || '') + "<div class=\"msg assistant\"><div class=\"bubble\">" + icon('clock', 12) + " 导读生成中…（全文直读，任务中心可取消）</div></div>";
   try {
-    const d = await api(`/api/papers/${pid}/summary`, {method: 'POST', body: JSON.stringify({session_id: state.qaSession})});
-    if (d.session_id) state.qaSession = d.session_id;
+    const d = await api(`/api/papers/${pid}/summary`, {method: 'POST',
+      body: JSON.stringify({session_id: state.qaSession, async: true})});
+    const jobId = d.job_id;
+    for (let i = 0; i < 150; i++) {          // 轮询任务状态（导读单并发，排队可能较久）
+      await new Promise(r => setTimeout(r, 2000));
+      const js = await api(`/api/jobs/${jobId}`).catch(() => null);
+      if (!js) continue;
+      if (js.status === 'done') break;
+      if (js.status === 'failed') throw new Error(js.error || '生成失败');
+      if (js.status === 'canceled') { el.innerHTML = (state._sumHead || '') + '<p class="muted">导读生成已取消。</p>'; return; }
+    }
+    const d2 = await api(`/api/papers/${pid}/summary`);
+    if (d2.session_id) state.qaSession = d2.session_id;
     state._sumCache = state._sumCache || {};
-    state._sumCache[pid] = d;
-    drawSummary(d, pid, '#qa-sum-bubble', true);
+    state._sumCache[pid] = d2;
+    drawSummary(d2, pid, '#qa-sum-bubble', true);
     toast('导读已生成，并存入当前会话');
   } catch (e) {
-    el.innerHTML = `<div class="msg assistant"><div class="bubble">生成失败: ${esc(e.message)} <button class="btn small" onclick="genSumBubble('${pid}')">重试</button></div></div>`;
+    el.innerHTML = (state._sumHead || '') + `<div class="msg assistant"><div class="bubble">生成失败: ${esc(e.message)} <button class="btn small" onclick="genSumBubble('${pid}')">重试</button></div></div>`;
   }
 }
 
@@ -1797,6 +1824,7 @@ async function renderAdminZone() {
   if (!el) return;
   const users = await api('/api/admin/users');
   const pool = await api('/api/admin/pool');
+  const usage = await api('/api/usage').catch(() => ({rows: []}));
   const audit = await api('/api/admin/audit?limit=50').catch(() => ({rows: []}));
   el.innerHTML = `
     <h2 class="page-h">${icon('crown')} 管理（仅管理员可见）</h2>
@@ -1827,6 +1855,20 @@ async function renderAdminZone() {
              <span class="muted">${esc(r.detail || '').slice(0, 40)}</span>
            </div>`).join('') : '<p class="muted">暂无记录</p>'}
       </div>
+    </div>
+    <div class="set-card">
+      <div class="set-head">${icon('chart')} Token 用量 <span class="muted" style="font-weight:400">按用户（chat+translate）</span></div>
+      <table class="list">${(() => {
+        const byName = {};
+        (usage.by_user || []).forEach(r => {
+          const k = r.username || 'CLI';
+          byName[k] = byName[k] || {chat: 0, translate: 0};
+          if (r.purpose === 'chat') byName[k].chat += r.p + r.c;
+          else if (r.purpose === 'translate') byName[k].translate += r.p + r.c;
+        });
+        return Object.entries(byName).map(([name, t]) =>
+          `<tr><td>${esc(name)}</td><td class="muted" style="font-size:11px">问答 ${(t.chat).toLocaleString()} tok · 翻译 ${(t.translate).toLocaleString()} tok</td></tr>`).join('') || '<tr><td class="muted">暂无用量</td></tr>';
+      })()}</table>
     </div>
     <div class="set-card">
       <div class="set-head">公共额度池 <span class="muted" style="font-size:11px">未配置 key 的成员将使用你的 POOL key</span></div>
@@ -2228,7 +2270,7 @@ window.movePaper = async (pid, v, sel) => {
   toast('已移动'); loadPapers(); renderCollectionsPage();
 };
 window.delPaperFromLib = async pid => {
-  if (!confirm('删除这篇论文？（进回收站，30 天内可恢复）')) return;
+  if (!confirm(`删除这篇论文？（进回收站，${state.health.trash_days || 30} 天内可恢复）`)) return;
   await api('/api/papers/' + pid, {method: 'DELETE'});
   toast('已移入回收站'); loadPapers(); renderCollectionsPage();
 };
@@ -2263,7 +2305,7 @@ window.quickDelete = async pid => {
   if (p?.visibility === 'shared' && state.me?.role !== 'admin') {
     toast('共享论文仅管理员可删除'); return;
   }
-  if (!confirm(`《${(p?.title || pid).slice(0, 40)}》移入回收站？（30 天内可恢复）`)) return;
+  if (!confirm(`《${(p?.title || pid).slice(0, 40)}》移入回收站？（${state.health.trash_days || 30} 天内可恢复）`)) return;
   try {
     await api('/api/papers/' + pid, {method: 'DELETE'});
     toast('已移入回收站');
@@ -2816,6 +2858,21 @@ window.linkDiag = () => {
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') { e.preventDefault(); linkDiag(); }
 });
+
+/* ---- 深色模式切换 ---- */
+state.theme = localStorage.getItem('ps-theme') ||
+  (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+window.applyTheme = () => {
+  document.documentElement.dataset.theme = state.theme;
+  const b = $('#theme-btn');
+  if (b) { b.textContent = state.theme === 'dark' ? '☀️' : '🌙'; b.title = state.theme === 'dark' ? '切换浅色' : '切换深色'; }
+};
+$('#theme-btn').onclick = () => {
+  state.theme = state.theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('ps-theme', state.theme);
+  applyTheme();
+};
+applyTheme();
 
 /* 阅读页键盘：←/→ 翻页、+/- 缩放（输入框聚焦时不响应） */
 document.addEventListener('keydown', e => {

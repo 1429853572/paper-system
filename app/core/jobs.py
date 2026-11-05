@@ -85,6 +85,7 @@ class Scheduler:
             ("embed-worker", self._embed_loop),
             ("meta-worker", self._meta_loop),
             ("translate-worker", self._translate_loop),
+            ("summary-worker", self._summary_loop),
             ("janitor", self._janitor_loop),
         ):
             t = threading.Thread(target=fn, name=name, daemon=True)
@@ -428,6 +429,26 @@ class Scheduler:
             )
             self._wake.set()
 
+    # ================= 导读 worker（LLM 同步调用，单并发） =================
+    def _summary_loop(self) -> None:
+        while not self._stop.is_set():
+            job = self._next_job("summary")
+            if job is None:
+                time.sleep(3)
+                continue
+            if not self._claim(job["id"]):
+                continue
+            try:
+                from . import summarizer
+                user = {"id": job["user_id"]}
+                sid, payload = summarizer.generate(user, job["paper_id"])
+                self._update(job["id"], status="done", progress_done=1, progress_total=1,
+                             payload=json.dumps({"summary_id": sid}, ensure_ascii=False))
+                log.info("导读生成完成 paper=%s", job["paper_id"])
+            except Exception as e:  # noqa: BLE001
+                log.exception("summary job %s 异常", job["id"])
+                self._update(job["id"], status="failed", error=str(e)[:300])
+
     # ================= 管家：回收站清理 + 每日备份 =================
     def _janitor_loop(self) -> None:
         while not self._stop.is_set():
@@ -486,6 +507,7 @@ class Scheduler:
             shutil.rmtree(d, ignore_errors=True)
         with db.write() as c:
             c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (paper_id,))
+            c.execute("DELETE FROM llm_calls WHERE paper_id=?", (paper_id,))
             c.execute("DELETE FROM papers WHERE id=?", (paper_id,))
 
     # ---- 管理 ----

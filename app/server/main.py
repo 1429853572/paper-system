@@ -144,7 +144,8 @@ def health():
         ollama_ok = r.status_code == 200
     except Exception:  # noqa: BLE001
         pass
-    return {"db": True, "mineru": mineru.healthy(), "ollama": ollama_ok}
+    return {"db": True, "mineru": mineru.healthy(), "ollama": ollama_ok,
+            "trash_days": int(config.get("retention", "trash_days"))}
 
 
 # ---------------- 登录/注册 ----------------
@@ -1165,6 +1166,64 @@ def export_session(session_id: str, request: Request):
     return _md_response("\n".join(lines), fname)
 
 
+@app.get("/api/papers/{paper_id}/export/summary")
+def export_summary(paper_id: str, request: Request):
+    """导读导出 Markdown（9 字段 + 证据页码）。"""
+    u = require(request)
+    p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    if p is None:
+        raise HTTPException(404, "论文不存在")
+    _require_visible(u, p)
+    s = db.one("SELECT * FROM summaries WHERE paper_id=? ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    if s is None:
+        raise HTTPException(404, "尚未生成导读")
+    data = json.loads(s["content"])
+    names = {"problem": "研究问题", "core_idea": "核心思想", "method": "方法",
+             "datasets": "数据集", "baselines": "基线", "metrics": "评价指标",
+             "ablation": "消融", "complexity": "复杂度", "limitations": "局限"}
+    lines = [f"# 科研导读 · {p['title']}", "", f"- 模型: {s['model']}", ""]
+    for k, v in (data.get("sections") or {}).items():
+        lines += [f"## {names.get(k, k)}", "", v, ""]
+    lines += ["", f"（由 paper-system 生成 · {s['created_at'][:16]}）"]
+    from core.meta import canonical_name
+    return _md_response("\n".join(lines), f"{canonical_name(p)}_reading-guide.md")
+
+
+@app.post("/api/papers/export/bibtex")
+async def export_bibtex(request: Request):
+    """批量引用导出：多选论文 → 单 .bib 文件。"""
+    u = require(request)
+    body = await request.json()
+    ids = [x for x in (body.get("paper_ids") or [])][:50]
+    if not ids:
+        raise HTTPException(400, "paper_ids 必填")
+    from core.meta import canonical_name
+    entries = []
+    for pid in ids:
+        p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
+        if p is None:
+            continue
+        _require_visible(u, p)
+        key = re.sub(r"\W+", "", (p["title"] or pid)[:24]) + (p["year"] or "")
+        authors = " and ".join(a.strip() for a in (p["authors"] or "").replace(";", ",").split(",") if a.strip())
+        entries.append(
+            f"@article{{{key},\n"
+            f"  title = {{{p['title'] or ''}}},\n"
+            f"  author = {{{authors}}},\n"
+            f"  journal = {{{p['journal'] or ''}}},\n"
+            f"  year = {{{p['year'] or ''}}},\n"
+            f"  doi = {{{p['doi'] or ''}}}\n}}")
+    if not entries:
+        raise HTTPException(404, "没有可导出的论文")
+    from core.meta import canonical_name as _cn
+    fname = "references.bib" if len(entries) > 1 else f"{_cn(dict(p)) if p else 'ref'}.bib"
+    return Response(content=("\n\n".join(entries) + "\n").encode("utf-8"),
+                    media_type="application/x-bibtex",
+                    headers={"Content-Disposition":
+                             f"attachment; filename=\"references.bib\"; "
+                             f"filename*=UTF-8''{__import__('urllib.parse', fromlist=['quote']).quote(fname)}"})
+
+
 @app.post("/api/papers/{paper_id}/verify-meta")
 def verify_meta(paper_id: str, request: Request):
     """联网校准元数据（arXiv/CrossRef；只发标题，标题匹配≥0.75 才写入）。"""
@@ -1228,6 +1287,33 @@ def papers_statuses(request: Request):
             "tokens": {"p": tk["p"], "c": tk["c"], "calls": tk["calls"]} if tk else None,
         }
     return {"statuses": out}
+
+
+@app.post("/api/papers/batch-delete")
+async def batch_delete_papers(request: Request):
+    """批量移入回收站（替代前端 N+1 逐篇 DELETE）。"""
+    u = require(request)
+    body = await request.json()
+    ids = [x for x in (body.get("paper_ids") or [])][:100]
+    n = 0
+    for pid in ids:
+        p = db.one("SELECT id, title, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
+        if p is None:
+            continue
+        _require_visible(u, p)
+        if p["visibility"] == "private" and p["owner_id"] != u["id"] and u["role"] != "admin":
+            continue
+        for j in db.all("SELECT * FROM jobs WHERE paper_id=? AND status IN ('queued','pending_gate','running')", (pid,)):
+            if j["remote_task_id"]:
+                mineru.cancel(j["remote_task_id"])
+            with db.write() as c:
+                c.execute("UPDATE jobs SET status='canceled' WHERE id=?", (j["id"],))
+        with db.write() as c:
+            c.execute("UPDATE papers SET deleted_at=datetime('now') WHERE id=?", (pid,))
+            c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (pid,))
+        audit(u["id"], "batch-delete", p["title"])
+        n += 1
+    return {"ok": True, "count": n}
 
 
 @app.post("/api/trash/empty")
@@ -1619,6 +1705,13 @@ async def paper_summary(paper_id: str, request: Request):
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
+    # 异步模式：入队（任务中心可见进度/可取消），前端轮询 jobstate
+    if body.get("async"):
+        try:
+            job_id = scheduler.enqueue(u["id"], "summary", paper_id, {}, priority="interactive")
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(500, f"任务入队失败: {e}")
+        return {"job_id": job_id}
     try:
         sid, payload = summarizer.generate(u, paper_id)
     except NoKeyError as e:
