@@ -53,7 +53,7 @@
         <button data-page="settings">设置</button>
         <button data-page="admin" id="nav-admin" hidden>管理</button>
         <button class="btn small" id="queue-btn" hidden>⏳ 队列 <span class="qbadge" id="qbadge">0</span></button>
-        <button class="btn small primary" id="qa-open">💬 问答</button>
+        <button class="btn small primary" id="qa-open" title="聚焦问答框">💬 问答</button>
       </div>
     </nav>
 
@@ -74,12 +74,10 @@
         <div class="pane-right">
           <div class="view-tabs">
             <button data-v="read" class="on">📖 阅读</button>
-            <button data-v="qa">💬问答</button>
             <button data-v="meta">文献信息</button>
             <button data-v="assets">图表</button>
             <button data-v="json" title="调试视图">JSON</button>
-            <span class="spacer"></span>
-            <button class="btn small" id="split-toggle" title="开/关 上下分屏：上方阅读、下方问答，中间分隔条可拖动调高度">📄💬 边读边问</button>
+
           </div>
           <div class="view-tabs r-subtabs" id="r-subtabs">
             <button id="link-toggle" class="btn small" title="右侧滚动时左侧 PDF 自动跟页高亮；左侧翻页右侧跟随">🔗 联动</button>
@@ -95,8 +93,8 @@
             <div class="rpane-top" id="rpane-top">
               <div class="content-view" id="content-view"><p class="muted">选择左侧论文开始阅读</p></div>
             </div>
-            <div class="rpane-handle" id="rpane-handle" hidden></div>
-            <div class="qa-dock" id="qa-dock" hidden>
+            <div class="rpane-handle" id="rpane-handle"></div>
+            <div class="qa-dock" id="qa-dock">
               <div class="qa-dock-head">💬 论文问答 <span class="muted" style="font-size:11px" id="qa-dock-mode"></span></div>
               <div class="qa-dock-body" id="qa-dock-body"></div>
             </div>

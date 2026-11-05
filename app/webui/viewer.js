@@ -257,13 +257,16 @@ async function openPaper(id) {
   } catch (e) { toast('PDF 加载失败: ' + e.message); }
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
   state.pairs = []; state.versions = []; state.assets = null;
+  loadBilingual(id).then(() => {   // 有译文默认双语，否则原文
+    if (state.versions.length && state.view === 'orig') switchView('read', 'bilingual');
+    else renderContentView();
+  });
   renderContentView();
-  loadBilingual(id);
   refreshJobState();          // 解析/翻译控制按钮状态
   // 问答 scope 跟随当前论文（用户显式多选了其他论文则保留）
   if (state.qaPapers.size <= 1) {
     state.qaPapers.clear(); state.qaPapers.add(id);
-    if (state.view === 'qa') renderQaTab();
+    renderQaTab();   // dock 常驻，范围变化即刷新
   }
 }
 async function renderPage(opts = {}) {
@@ -441,29 +444,19 @@ function watchTranslation() {
 }
 $('#translate-btn').onclick = startTranslate;
 function switchView(v, s) {
-  // s = 阅读子视图；v ∈ read|qa|meta|assets|json；兼容旧调用（orig/bilingual/zh → read+v）
+  // v ∈ read|meta|assets|json；兼容 orig/bilingual/zh → read+子视图；qa → 聚焦问答框
   if (['orig', 'bilingual', 'zh'].includes(v)) { s = v; v = 'read'; }
+  if (v === 'qa') { switchPage('reader'); $('#qa-text')?.focus(); return; }
   if (v === 'read' && s) state.rpane.readingView = s;
   state.mainView = v;
   state.view = v === 'read' ? (s || state.rpane.readingView || 'orig') : v;
   $$('.view-tabs [data-v]').forEach(x => x.classList.toggle('on', x.dataset.v === v));
   $('#r-subtabs').hidden = v !== 'read';
-  if (v === 'qa' && state.rpane.split) {
-    // 分屏：顶部阅读视图 + 底部问答 dock
-    const top = state.rpane.readingView || 'orig';
-    state.view = top;
-    $$('.r-subtabs [data-s]').forEach(x => x.classList.toggle('on', x.dataset.s === top));
-    renderContentView();
-    renderQaUI($('#qa-dock-body'));
-    return;
-  }
-  if (v !== 'qa') $('#qa-dock').hidden = true;
   $$('.r-subtabs [data-s]').forEach(x => x.classList.toggle('on', x.dataset.s === state.view));
   renderContentView();
 }
 function renderContentView() {
   const el = $('#content-view');
-  if (state.view === 'qa') { renderQaTab(); return; }   // 问答不依赖当前论文（可从面板选文）
   if (!state.current) { el.innerHTML = '<p class="muted">选择左侧论文开始阅读</p>'; return; }
   if (state.mainView === 'read' || ['orig','bilingual','zh'].includes(state.view)) {
     // 阅读：走下方 orig/bilingual/zh 分支
@@ -783,10 +776,9 @@ window.copyCite = async (pid) => {
 };
 
 /* ---------------- 右栏页签：问答 / 导读（与文章并排） ---------------- */
-function renderQaTab() {   // 整栏模式入口
-  renderQaUI($('#content-view'));
+function renderQaTab() {   // 问答常驻 dock
+  renderQaUI($('#qa-dock-body'));
 }
-state.rpane = { split: false, top: 55, readingView: 'orig' };
 function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock body（分屏）
   const pid = state.current?.id;
   container.innerHTML = `
@@ -876,37 +868,12 @@ window.genSumBubble = async pid => {
   }
 }
 
-/* ---- 分屏 ---- */
-function applyRpaneMode() {
-  const dock = $('#qa-dock'), handle = $('#rpane-handle'), top = $('#rpane-top');
-  if (!dock) return;
-  dock.hidden = !state.rpane.split;
-  handle.hidden = !state.rpane.split;
-  $('#split-toggle').classList.toggle('primary', state.rpane.split);
-  if (state.rpane.split) {
-    top.style.flex = 'none';
-    top.style.height = state.rpane.top + '%';
-  } else {
-    top.style.flex = '1 1 auto';
-    top.style.height = '';
-  }
-}
-function toggleSplit() {
-  state.rpane.split = !state.rpane.split;
-  applyRpaneMode();
-  if (state.rpane.split) {
-    // 分屏时：顶部保持阅读视图，问答进驻 dock
-    if (state.view === 'qa') switchView(state.rpane.readingView || 'orig');
-    else if (state.view !== 'qa') { /* 顶部保持当前视图 */ }
-    renderQaUI($('#qa-dock-body'));
-    $('#qa-dock-mode').textContent = '拖动分隔条调高度';
-  } else if (state.view === 'qa') {
-    renderQaUI($('#content-view'));   // 退出分屏，问答回整栏
-  }
-}
-$('#split-toggle').onclick = toggleSplit;
-// 拖拽分隔条
+/* ---- 上下分栏（常驻）：拖动分隔条调阅读/问答占比 ---- */
+state.rpane = { top: parseFloat(localStorage.getItem('ps-rpane-top') || '55'), readingView: 'orig', split: true };
 (() => {
+  const top = $('#rpane-top');
+  const apply = () => { top.style.flex = 'none'; top.style.height = state.rpane.top + '%'; };
+  apply();
   const handle = $('#rpane-handle');
   let dragging = false;
   handle.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
@@ -914,10 +881,11 @@ $('#split-toggle').onclick = toggleSplit;
     if (!dragging) return;
     const body = $('.rpane-body').getBoundingClientRect();
     const pct = Math.min(80, Math.max(25, Math.round(100 * (e.clientY - body.top) / body.height)));
-    state.rpane.top = pct;
-    $('#rpane-top').style.height = pct + '%';
+    state.rpane.top = pct; apply();
   });
-  document.addEventListener('mouseup', () => { if (dragging) { dragging = false; } });
+  document.addEventListener('mouseup', () => {
+    if (dragging) { dragging = false; localStorage.setItem('ps-rpane-top', String(state.rpane.top)); }
+  });
 })();
 function renderQaScope() {
   const el = $('#qa-scope');
@@ -1103,7 +1071,7 @@ document.addEventListener('click', e => {
     sb.classList.remove('open');
   }
 });
-$('#qa-open').onclick = () => { switchPage('reader'); switchView('qa'); };
+$('#qa-open').onclick = () => { switchPage('reader'); $('#qa-text')?.focus(); };
 
 /* ---------------- 启动 ---------------- */
 async function boot() {
@@ -1119,6 +1087,7 @@ async function boot() {
   }
   await initPdfJs();
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
+  renderQaTab();          // 问答 dock 常驻
   await loadCollections();
   await loadPapers();
   watchJobs();
