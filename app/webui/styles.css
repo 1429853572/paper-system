@@ -575,11 +575,6 @@ table.list input[type=checkbox] { width: auto; }
               border-radius: var(--r-xs); }
 
 /* 问答 dock 重开按钮（关闭后悬浮右下） */
-.qa-reopen { position: absolute; right: 18px; bottom: 18px; z-index: 25;
-             background: var(--primary); color: #fff; border: none; border-radius: var(--r-pill);
-             padding: 8px 16px; font-size: var(--fs-sm); cursor: pointer;
-             box-shadow: 0 6px 18px rgba(74,108,247,.4); }
-.qa-reopen:hover { background: var(--primary-dark); }
 .qa-dock-head { display: flex; align-items: center; gap: 8px; }
 
 .hl-flash { animation: hlflash 2.6s ease; pointer-events: none; z-index: 6; }

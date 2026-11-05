@@ -1227,7 +1227,6 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       <textarea id="qa-text" placeholder="对着左侧文章提问…（Ctrl+Enter 发送）"></textarea>
       <button class="btn primary" id="qa-send">发送</button>
     </div>`;
-  if (!state.qaPapers.size && pid) state.qaPapers.add(pid);   // 默认=当前论文
   renderQaScope();
   populateQaPicker();
   api('/api/presets').then(presets => {
@@ -1331,12 +1330,12 @@ window.genSumBubble = async pid => {
 state.rpane = { top: parseFloat(localStorage.getItem('ps-rpane-top') || '55'), readingView: 'orig', split: true };
 state.qaOpen = localStorage.getItem('ps-qa-open') !== '0';
 window.applyQaLayout = () => {
-  const top = $('#rpane-top'), dock = $('#qa-dock'), handle = $('#rpane-handle'), pill = $('#qa-reopen');
+  const top = $('#rpane-top'), dock = $('#qa-dock'), handle = $('#rpane-handle');
   if (state.qaOpen) {
-    dock.hidden = false; handle.hidden = false; pill.hidden = true;
+    dock.hidden = false; handle.hidden = false;
     top.style.flex = 'none'; top.style.height = state.rpane.top + '%';
   } else {
-    dock.hidden = true; handle.hidden = true; pill.hidden = false;
+    dock.hidden = true; handle.hidden = true;
     top.style.flex = '1 1 auto'; top.style.height = '';
   }
 };
@@ -1354,7 +1353,6 @@ window.openQaDock = () => {
   applyQaLayout();
   $('#qa-dock-close').onclick = closeQa;
   $('#qa-export').onclick = exportChat;
-  $('#qa-reopen').onclick = openQaDock;
   const handle = $('#rpane-handle');
   let dragging = false;
   handle.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
@@ -1371,6 +1369,8 @@ window.openQaDock = () => {
 function renderQaScope() {
   const el = $('#qa-scope');
   if (!el) return;
+  const cnt = $('#qa-pick-count');
+  if (cnt) cnt.textContent = state.qaPapers.size;   // 计数随范围实时同步（避免残留旧值）
   const ids = [...state.qaPapers];
   // 范围就是「当前论文」时不占版面；多篇或手动改过范围才显示（可逐篇移除）
   const isDefaultScope = ids.length <= 1 && (!ids.length || ids[0] === state.current?.id);
@@ -1380,7 +1380,7 @@ function renderQaScope() {
   } else {
     el.hidden = false;
     el.innerHTML = ids.map(p2 => {
-      const p = state.qaAllPapers?.find(x => x.id === p2) || state.papers.find(x => x.id === p2);
+      const p = state.qaAllPapers?.find(x => x.id === p2) || state.papers?.find(x => x.id === p2);
       return `<span class="chip">${esc(p?.title || p2)}<button onclick="qaRemove('${p2}')">${icon('close')}</button></span>`;
     }).join('');
   }
@@ -1572,7 +1572,7 @@ document.addEventListener('click', e => {
     sb.classList.remove('open');
   }
 });
-$('#qa-open').onclick = () => { switchPage('reader'); $('#qa-text')?.focus(); };
+$('#qa-open').onclick = () => { switchPage('reader'); openQaDock(); };   // 顶栏「问答」= 唯一入口：关→打开，开→聚焦
 
 /* ---------------- 启动 ---------------- */
 async function boot() {
