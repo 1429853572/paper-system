@@ -251,9 +251,10 @@ async function openPaper(id) {
   // PDF
   try {
     state.pdfDoc = await pdfjsLib.getDocument(`/api/papers/${id}/pdf`).promise;
-    state.pageNum = 1; state.scale = 1.2;
+    state.pageNum = 1; state.fitWidth = true;
     $('#pdf-toolbar').hidden = false;
     renderPage();
+    applyVsplit();   // 按当前分栏宽度自适应首帧
   } catch (e) { toast('PDF 加载失败: ' + e.message); }
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
   state.pairs = []; state.versions = []; state.assets = null;
@@ -1767,4 +1768,48 @@ const renderBlockBody = b => {
   document.addEventListener('mouseout', e => {
     if (e.target.closest && e.target.closest('.blk')) clear();
   });
+})();
+
+/* ===== 左右分栏拖动 + 自适应 ===== */
+state.vsplit = parseFloat(localStorage.getItem('ps-vsplit') || '50');   // 左栏百分比
+state.fitWidth = true;   // PDF 随栏宽自适应（手动缩放后关闭，拖动/换论文恢复）
+window.applyVsplit = (fire = true) => {
+  const reader = $('.reader');
+  if (!reader || innerWidth <= 880) return;   // 小屏堆叠布局不动
+  $('#pane-left').style.width = state.vsplit + '%';
+  $('#pane-left').style.flex = 'none';
+  $('.pane-right').classList.toggle('narrow', $('.pane-right').getBoundingClientRect().width < 560);
+  if (fire) fitPdf();
+};
+window.fitPdf = () => {
+  if (!state.pdfDoc || !state.fitWidth) return;
+  const w = $('#pane-left').clientWidth - 24;
+  state.pdfDoc.getPage(1).then(p1 => {
+    const base = p1.getViewport({scale: 1}).width;
+    const s = Math.max(0.4, Math.min(3, w / base));
+    if (Math.abs(s - state.scale) > 0.02) { state.scale = Math.round(s * 20) / 20; renderPage({noFollow: true}); }
+  });
+};
+(() => {
+  const h = $('#v-handle');
+  let dragging = false;
+  h.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const r = $('.reader').getBoundingClientRect();
+    const pct = Math.min(72, Math.max(24, Math.round(100 * (e.clientX - r.left) / r.width)));
+    if (pct !== state.vsplit) { state.vsplit = pct; applyVsplit(); }
+  });
+  document.addEventListener('mouseup', () => {
+    if (dragging) { dragging = false; localStorage.setItem('ps-vsplit', String(state.vsplit)); }
+  });
+  h.addEventListener('dblclick', () => {
+    state.vsplit = 50; localStorage.setItem('ps-vsplit', '50');
+    state.fitWidth = true; applyVsplit(); toast('已复位 50/50');
+  });
+  // 手动缩放 = 退出自适应；窗口变化重适配
+  const zi = $('#zoom-in'), zo = $('#zoom-out');
+  if (zi) zi.addEventListener('click', () => state.fitWidth = false);
+  if (zo) zo.addEventListener('click', () => state.fitWidth = false);
+  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => applyVsplit(), 250); });
 })();
