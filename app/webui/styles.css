@@ -393,3 +393,9 @@ table.list input[type=checkbox] { width: auto; }
 .rpane-top { border-bottom: none; }
 .qa-dock { border-top: 2px solid var(--border); }
 .qa-dock .qa-picker { padding: 6px 14px 0; }
+
+/* 导读追问建议 */
+.followups { margin: 10px 0 4px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip-q { cursor: pointer; border: 1px dashed #c9d2ee; background: #f6f8ff; color: var(--primary);
+          border-radius: 14px; padding: 3px 12px; font-size: 12px; }
+.chip-q:hover { background: #e8edff; border-style: solid; }

@@ -1300,6 +1300,7 @@ function drawSummary(s, pid, target = '#content-view', asBubble = false) {
     (s.evidence?.length ? `<p class="muted" style="font-size:12px">证据: ${s.evidence.map(e =>
       `<span class="cite" data-eid="${e.evidence_id}">[${e.evidence_id}] 第${e.page_index + 1}页</span>`).join(' ')}</p>` : '') +
     `</div>${asBubble ? '</div>' : ''}<button class="btn small" onclick="genSumBubble('${pid}')">↻ 重新生成</button>`;
+  if (asBubble) t.insertAdjacentHTML('beforeend', followupButtons(s.sections));
   $$('.cite', t).forEach(el => {
     if (el.dataset.eid) {
       const ev = (s.evidence || []).find(x => String(x.evidence_id) === el.dataset.eid);
@@ -1495,3 +1496,23 @@ window.quickDelete = async pid => {
     loadPapers();
   } catch (e) { toast(e.message); }
 };
+
+/* 导读后的追问建议（按章节挑 3-5 个） */
+const FOLLOWUP_QS = {
+  problem: '这个问题之前的主流解法是什么？为什么不够好？',
+  core_idea: '核心思想的关键洞察是什么？与已有方法的本质区别在哪？',
+  method: '方法的关键模块和公式各自起什么作用？整体流程是怎样的？',
+  datasets: '实验用了哪些数据集？规模和训练/测试划分如何？',
+  baselines: '与基线方法相比提升多少？主要优势体现在哪？',
+  metrics: '各评价指标上的具体数字是多少？如何解读？',
+  ablation: '消融实验如何验证每个组件的必要性？去掉哪个掉得最多？',
+  complexity: '计算量和显存开销相比已有方法如何？',
+  limitations: '论文承认的局限有哪些？有什么可能的改进方向？',
+};
+function followupButtons(sections) {
+  const qs = Object.keys(sections || {}).map(k => FOLLOWUP_QS[k]).filter(Boolean).slice(0, 5);
+  if (!qs.length) return '';
+  return `<div class="followups"><span class="muted" style="font-size:12px">💬 可以接着问：</span>` +
+    qs.map(q => `<button class="chip chip-q" onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('') +
+    `</div>`;
+}
