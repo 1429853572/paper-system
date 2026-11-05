@@ -813,23 +813,38 @@ def paper_assets(paper_id: str, request: Request):
         by_page.setdefault(f["page_index"], []).append(f)
     figures = []
     for pg in sorted(by_page):
-        imgs = by_page[pg]
-        numbered = [f for f in imgs if _label(f["caption"], "figure")]
-        others = [f for f in imgs if f not in numbered]
-        for f in sorted(numbered, key=lambda x: int(_re.search(r"(\d+)", _label(x["caption"], "figure")).group(1))):
-            f["label"] = _label(f["caption"], "figure")
-            figures.append(f)
-        if others:
-            if numbered:  # 子图归并到本页第一个编号主图
-                figures[-1]["extra_images"] = [o["image_path"] for o in others]
-                figures[-1]["sub_captions"] = [o["caption"] for o in others if o["caption"]]
+        imgs = sorted(by_page[pg], key=lambda x: ((x.get("bbox") or [0, 0, 0, 0])[1]))
+        numbered, others = [], []
+        for f in imgs:
+            (_label(f["caption"], "figure") if False else None)
+            if _label(f["caption"], "figure"):
+                numbered.append(f)
             else:
-                # 无编号组图（teaser 等）：合并为一张组图卡
-                first = others[0]
+                others.append(f)
+        if not numbered:
+            if imgs:
+                first = imgs[0]
                 first["label"] = f"第{pg + 1}页·组图"
-                first["extra_images"] = [o["image_path"] for o in others[1:]]
-                first["sub_captions"] = [o["caption"] for o in others if o["caption"]]
+                first["extra_images"] = [o["image_path"] for o in imgs[1:]]
+                first["sub_captions"] = [o["caption"] for o in imgs if o["caption"]]
                 figures.append(first)
+            continue
+        # 有编号：未编号子图挂到「bbox 纵向在其上方的最近编号图」
+        assigned: dict[int, list] = {id(n): [] for n in numbered}
+        for o in others:
+            oy = (o.get("bbox") or [0, 0, 0, 0])[1]
+            target = None
+            for n in numbered:
+                ny = (n.get("bbox") or [0, 9, 0, 9])[1]
+                if ny <= oy + 0.02:
+                    target = n  # 保留最下方的上方编号
+            assigned[id(target if target else numbered[0])].append(o)
+        for n in numbered:
+            subs = assigned[id(n)]
+            n["label"] = _label(n["caption"], "figure")
+            n["extra_images"] = [s["image_path"] for s in subs]
+            n["sub_captions"] = [s["caption"] for s in subs if s["caption"]]
+            figures.append(n)
     return {"figures": figures, "tables": tables}
 
 

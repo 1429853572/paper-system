@@ -1765,9 +1765,10 @@ const sanitizeTbl = html => (html || '')
 const renderBlockBody = b => {
   const pid = state.current?.id;
   if (b.type === 'image' && b.asset_path) {
-    const name = b.asset_path.split('/').pop();
-    if (!name) return '';
-    const fig = (state.assets?.figures || []).find(f => f.image_path === b.asset_path);
+    const figs = state.assets?.figures || [];
+    // 子图块（已被聚合进某组）跳过，避免重复渲染
+    if (figs.some(g => (g.extra_images || []).includes(b.asset_path))) return '';
+    const fig = figs.find(f => f.image_path === b.asset_path);
     const subs = fig?.extra_images || [];
     const subCaps = fig?.sub_captions || [];
     const imgs = [name, ...subs.map(p => p.split('/').pop())];
