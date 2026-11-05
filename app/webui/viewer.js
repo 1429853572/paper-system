@@ -490,12 +490,12 @@ $$('.r-subtabs [data-s]').forEach(b => b.onclick = () => switchView('read', b.da
 $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.dataset.page));
 function switchPage(page) {
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
-  $('#page-title').textContent = {reader: '阅读', tasks: '任务中心',
+  $('#page-title').textContent = {reader: '阅读', collections: '文库管理', tasks: '任务中心',
     trash: '回收站', settings: '设置', admin: '管理'}[page];
-  for (const p of ['reader', 'tasks', 'trash', 'settings', 'admin']) {
+  for (const p of ['reader', 'collections', 'tasks', 'trash', 'settings', 'admin']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
-  ({tasks: renderTasks, trash: renderTrash,
+  ({collections: renderCollectionsPage, tasks: renderTasks, trash: renderTrash,
     settings: renderSettings, admin: renderAdmin})[page]?.();
 }
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
@@ -1238,3 +1238,70 @@ window.exportChat = () => {
   if (!state.qaSession) { toast('当前还没有对话记录'); return; }
   location.href = `/api/chat/sessions/${state.qaSession}/export`;
 };
+
+
+/* ---- 📚 文库管理页 ---- */
+async function renderCollectionsPage() {
+  const d = await api('/api/collections');
+  const el = $('#page-collections');
+  const cards = await Promise.all(d.collections.map(async c => {
+    const papers = (await api('/api/papers?collection_id=' + c.id)).papers;
+    const paperRows = papers.map(p => `
+      <tr><td style="max-width:340px;overflow:hidden;text-overflow:ellipsis">${esc(p.title || p.id)}</td>
+      <td>${p.parse_status === 'parsed' ? '✓' : '⏳'}</td>
+      <td class="row-actions">
+        <button class="btn small" onclick="viewPaper('${p.id}')">阅读</button>
+        <select style="width:auto;font-size:11px;padding:2px 4px" onchange="movePaper('${p.id}', this.value, this)">
+          <option value="">移入…</option>
+          ${d.collections.filter(x => x.id !== c.id).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}
+          <option value="__none__">未分库</option>
+        </select>
+        <button class="btn small danger" onclick="delPaperFromLib('${p.id}')">删除</button>
+      </td></tr>`).join('');
+    return `<div class="card">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <h2 style="margin:0;flex:1">📁 ${esc(c.name)} <span class="muted" style="font-size:13px">(${papers.length} 篇)</span></h2>
+        <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">✏️ 重命名</button>
+        <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">删除库</button>
+      </div>
+      <table class="list"><tr><th>论文</th><th>解析</th><th></th></tr>
+      ${paperRows || '<tr><td colspan="3" class="muted">空库——阅读页上传时选择此库，或在侧栏多选移入</td></tr>'}</table>
+    </div>`;
+  }));
+  el.innerHTML = `
+    <div class="card" style="display:flex;gap:10px;align-items:center">
+      <h2 style="margin:0;flex:1">文献库管理</h2>
+      <input id="newlib-name" placeholder="新库名称" style="max-width:240px">
+      <button class="btn primary" onclick="createLibFromPage()">＋ 新建文献库</button>
+    </div>` + (cards.join('') || '<div class="card"><p class="muted">暂无文献库——上传论文时会自动创建「默认文献库」</p></div>');
+}
+window.renameLib = async (cid, oldName) => {
+  const name = prompt('重命名文献库：', oldName);
+  if (!name?.trim() || name === oldName) return;
+  await api('/api/collections/' + cid, {method: 'PATCH', body: JSON.stringify({name: name.trim()})});
+  toast('已重命名'); loadCollections(); renderCollectionsPage();
+};
+window.delLib = async (cid, name) => {
+  if (!confirm(`删除文献库「${name}」？库内论文保留（变为未分库）`)) return;
+  await api('/api/collections/' + cid, {method: 'DELETE'});
+  toast('已删除'); loadCollections(); renderCollectionsPage();
+};
+window.createLibFromPage = async () => {
+  const name = $('#newlib-name').value.trim();
+  if (!name) { toast('请输入库名'); return; }
+  await api('/api/collections', {method: 'POST', body: JSON.stringify({name})});
+  $('#newlib-name').value = '';
+  toast('已创建'); loadCollections(); renderCollectionsPage();
+};
+window.movePaper = async (pid, v, sel) => {
+  if (!v) return;
+  const cid = v === '__none__' ? null : v;
+  await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: cid})});
+  toast('已移动'); loadPapers(); renderCollectionsPage();
+};
+window.delPaperFromLib = async pid => {
+  if (!confirm('删除这篇论文？（进回收站，30 天内可恢复）')) return;
+  await api('/api/papers/' + pid, {method: 'DELETE'});
+  toast('已移入回收站'); loadPapers(); renderCollectionsPage();
+};
+window.viewPaper = pid => { switchPage('reader'); openPaper(pid); };

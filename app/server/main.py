@@ -629,6 +629,21 @@ async def create_collection(request: Request):
     return {"id": cid, "name": name}
 
 
+@app.patch("/api/collections/{cid}")
+async def rename_collection(cid: str, request: Request):
+    u = require(request)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not (1 <= len(name) <= 50):
+        raise HTTPException(400, "库名 1-50 字符")
+    row = db.one("SELECT owner_id FROM collections WHERE id=?", (cid,))
+    if row is None or (row["owner_id"] != u["id"] and u["role"] != "admin"):
+        raise HTTPException(404, "文献库不存在")
+    with db.write() as c:
+        c.execute("UPDATE collections SET name=? WHERE id=?", (name, cid))
+    return {"ok": True}
+
+
 @app.delete("/api/collections/{cid}")
 def delete_collection(cid: str, request: Request):
     u = require(request)
