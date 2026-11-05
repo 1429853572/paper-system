@@ -477,13 +477,13 @@ $('#version-select').onchange = e => {
 };
 /* 解析/翻译控制按钮：按论文实时 jobstate 切换 */
 function renderJobButtons(js) {
-  const tb = $('#translate-btn');
+  // 重新解析按钮（挂在主级页签行）
   let extra = $('#parse-ctrl');
   if (!extra) {
     extra = document.createElement('button');
     extra.id = 'parse-ctrl'; extra.className = 'btn small';
     extra.onclick = parseCtrl;
-    $('.view-tabs').insertBefore(extra, $('#translate-btn'));
+    $('.view-tabs').appendChild(extra);
   }
   if (js.parsing) {
     extra.textContent = '⏹ 取消解析'; extra.classList.add('danger');
@@ -492,16 +492,9 @@ function renderJobButtons(js) {
   } else {
     extra.textContent = '↻ 重新解析'; extra.classList.remove('danger');
   }
-  if (js.translating) {
-    tb.textContent = '⏹ 取消翻译'; tb.onclick = cancelTranslate;
-  } else if (js.translated) {
-    tb.textContent = '✓ 已译';
-    tb.title = '已有完整译文，点击查看双语';
-    tb.onclick = () => { switchView('read', 'bilingual'); toast('已展示最新译文'); };
-  } else {
-    tb.textContent = '🌐 翻译全文'; tb.title = ''; tb.onclick = startTranslate;
-  }
-  /* 进度条 */
+  renderProgressStrip(js);
+}
+function renderProgressStrip(js) {
   const strip = $('#job-progress');
   const tp = js.translate_progress, pp = js.parse_progress;
   if (tp) {
@@ -510,7 +503,7 @@ function renderJobButtons(js) {
     strip.hidden = false;
     strip.innerHTML = `<span>${st} ${tp.done}/${tp.total} 段</span>
       <div class="progress"><i style="width:${pct}%"></i></div>
-      <span class="muted">完成后自动出现双语视图 · 全部任务见「任务中心」</span>`;
+      <button class="btn small danger" onclick="cancelTranslate()">⏹ 取消</button>`;
   } else if (pp) {
     strip.hidden = false;
     strip.innerHTML = `<span>${pp.status === 'queued' ? '解析排队中（GPU 队列）' : pp.status === 'pending_gate' ? '等待 GPU 就绪…' : '解析中'}</span>
