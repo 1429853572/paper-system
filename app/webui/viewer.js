@@ -461,12 +461,7 @@ async function loadBilingual(id) {
   try {
     const d = await api(`/api/papers/${id}/bilingual`);
     state.pairs = d.pairs; state.versions = d.versions;
-    const vs = $('#version-select');
-    if (d.versions.length > 1) {
-      vs.hidden = false;
-      vs.innerHTML = d.versions.map(v =>
-        `<option value="${v.cache_key}">${esc(v.model)} · ${v.at.slice(0, 10)} · ${v.blocks}段</option>`).join('');
-    } else vs.hidden = true;
+    $('#version-select').hidden = true;   // 只展示最新一份（历史版本保留在库，不占界面）
     renderContentView();
   } catch { state.pairs = []; }
 }
@@ -497,8 +492,8 @@ function renderJobButtons(js) {
     tb.textContent = '⏹ 取消翻译'; tb.onclick = cancelTranslate;
   } else if (js.translated) {
     tb.textContent = '✓ 已译';
-    tb.title = `已有完整译文（${js.translated_model || ''}）｜点击重译生成新版本`;
-    tb.onclick = retranslate;
+    tb.title = '已有完整译文，点击查看双语';
+    tb.onclick = () => { switchView('read', 'bilingual'); toast('已展示最新译文'); };
   } else {
     tb.textContent = '🌐 翻译全文'; tb.title = ''; tb.onclick = startTranslate;
   }
@@ -574,6 +569,7 @@ function watchTranslation() {
         d.versions[0].cache_key !== state.versions[0].cache_key)) {
       clearInterval(watching); toast('翻译完成 ✓');
       state.versions = d.versions; state.pairs = d.pairs; renderContentView();
+      refreshJobState();   // 译文就绪 → 按钮即时转 ✓
     }
     refreshJobState();
   }, 4000);
@@ -810,6 +806,7 @@ async function renderMeta() {
         <button class="btn small" onclick="copyCite('${pid}')">✂ 引用</button>
         <a class="btn small" href="/api/papers/${pid}/pdf" download="${canonicalName(paper)}.pdf">⬇ PDF</a>
         <button class="btn small" onclick="parseCtrl()">↻ 重新解析</button>
+        <button class="btn small" onclick="retranslatePaper('${pid}')" title="换模型/术语表后生成新译文版本">🔁 强制重译</button>
       </div>
     </div>
     <div class="card"><h3>摘要 ${kw.length ? '<span class="muted" style="font-weight:400;font-size:12px">关键词: ' + esc(kw.join(' · ')) + '</span>' : ''}</h3>
@@ -2128,3 +2125,10 @@ window.figCropPass = async () => {
     savePos();
   });
 })();
+
+window.retranslatePaper = async pid => {
+  if (!confirm('用当前模型/术语表重新翻译，生成新版本？（消耗 token，旧版本保留）')) return;
+  await api('/api/papers/translate', {method: 'POST',
+    body: JSON.stringify({paper_ids: [pid], force_new_version: true})});
+  toast('重译已入队（完成后自动展示最新版）');
+};
