@@ -1781,7 +1781,30 @@ function exportChat() {
 window.exportChat = exportChat;   // 兼容内联 onclick 调用
 
 
-/* ---- 📚 文库管理页 ---- */
+/* ---- 📚 文库管理页（左库树 + 右条目 + 详情，参考 Zotero/EndNote 的下钻式） ---- */
+state.libSel = localStorage.getItem('ps-lib-sel') || '';   // '' = 全部文献
+state.libPaper = '';                                        // 详情面板选中的论文
+state.libQuery = '';                                        // 管理页搜索词
+state._libQTimer = 0;
+
+function libDescendants(cid, list) {   // 含自身 + 全部子孙
+  const out = [cid];
+  const kids = (list || state.collections).filter(c => c.parent_id === cid);
+  for (const k of kids) out.push(...libDescendants(k.id, list));
+  return out;
+}
+window.selectLib = cid => {
+  state.libSel = cid;
+  state.libPaper = '';
+  localStorage.setItem('ps-lib-sel', cid);
+  renderCollectionsPage();
+};
+window.selectLibPaper = pid => {
+  state.libPaper = state.libPaper === pid ? '' : pid;
+  renderCollectionsPage();
+};
+window.libSearch = q => { state.libQuery = q.trim(); renderCollectionsPage(); };
+
 async function renderCollectionsPage() {
   const d = await api('/api/collections');
   state.collections = d.collections;
@@ -1792,90 +1815,155 @@ async function renderCollectionsPage() {
   const children = {};
   d.collections.forEach(c => (children[c.parent_id || 'root'] ||= []).push(c));
   const openState = cid => colState[cid] !== false;
+  const st = state._statuses || {};
+  const q = state.libQuery.toLowerCase();
+
+  // ---- 当前选中范围（库 + 其子孙，与侧栏一致）----
+  const sel = state.libSel;
+  const scopeIds = sel ? libDescendants(sel, d.collections) : [];
+  const scopeKey = sel || 'all';
+  const scopeName = sel ? (d.collections.find(c => c.id === sel)?.name || '文献库') : '全部文献';
+  const papers = (await api('/api/papers' + (scopeIds.length
+      ? '?collection_id=' + scopeIds.join(',') : ''))).papers;
+  const shown = q ? papers.filter(p => (p.title || '').toLowerCase().includes(q)
+                                  || (p.authors || '').toLowerCase().includes(q)) : papers;
+  const doneTr = papers.filter(p => st[p.id]?.translate_job?.status === 'done').length;
+  const totTok = papers.reduce((s, p) => s + ((st[p.id]?.tokens?.p || 0) + (st[p.id]?.tokens?.c || 0)), 0);
 
   const moveOpts = exclude => d.collections.filter(x => x.id !== exclude)
     .map(x => `<option value="${x.id}">${'\u3000'.repeat(treeDepth(x.id))}${esc(x.name)}</option>`).join('');
 
-  const buildCard = async c => {
+  // ---- 左栏：库树 ----
+  const treeRow = (c, depth) => {
     const kids = children[c.id] || [];
     const open = openState(c.id);
-    const papers = (await api('/api/papers?collection_id=' + c.id)).papers;
-    const st = state._statuses || {};
-    const doneTr = papers.filter(p => st[p.id]?.translate_job?.status === 'done').length;
-    const totTok = papers.reduce((s, p) => s + ((st[p.id]?.tokens?.p || 0) + (st[p.id]?.tokens?.c || 0)), 0);
-    const depth = treeDepth(c.id);
-    const paperRows = papers.map(p => {
-      const s = st[p.id] || {};
-      const tj = s.translate_job;
-      const parseBadge = s.parsing ? '<span class="badge run">⏳解析</span>'
-        : p.parse_status === 'parsed' ? '<span class="badge ok">✓</span>'
-        : '<span class="badge err">✗</span>';
-      const trBadge = s.translating ? `<span class="badge run">🌐${tj ? tj.done + '/' + tj.total : ''}</span>`
-        : tj?.status === 'done' ? '<span class="badge ok">译✓</span>'
-        : tj?.status === 'failed' ? '<span class="badge err">译✗</span>' : '<span class="muted">—</span>';
-      const tk = s.tokens;
-      return `<tr>
-        <td style="width:26px"><input type="checkbox" class="lib-ck" data-cid="${c.id}" data-pid="${p.id}" onchange="libCk('${c.id}')"></td>
-        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">${esc(p.title || p.id)}</td>
-        <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" onclick="retryPaperJob('${p.id}')">↻</button>` : ''}</td>
+    const n = c.papers_total ?? c.papers ?? 0;
+    return `<div class="lib-sel ${sel === c.id ? 'on' : ''}" onclick="selectLib('${c.id}')">
+        <span class="lib-sel-name" style="padding-left:${6 + depth * 14}px">
+          ${kids.length ? `<button class="col-arrow ${open ? '' : 'closed'}" onclick="event.stopPropagation();toggleColOpen('${c.id}')">${open ? '▾' : '▸'}</button>` : '<span class="col-arrow-none"></span>'}
+          📁 ${esc(c.name)}</span>
+        <span class="lib-sel-n">${n}</span>
+      </div>` + (open ? kids.map(k => treeRow(k, depth + 1)).join('') : '');
+  };
+  const sideTree = `<div class="lib-side">
+      <div class="lib-sel ${sel === '' ? 'on' : ''}" onclick="selectLib('')">
+        <span class="lib-sel-name">📚 全部文献</span><span class="lib-sel-n">${d.total}</span></div>
+      ${(children['root'] || []).map(c => treeRow(c, 0)).join('')}
+      ${d.collections.length ? '' : '<p class="muted" style="padding:10px 12px">还没有文献库</p>'}
+    </div>`;
+
+  // ---- 右栏：选中库的论文表 ----
+  const paperRows = shown.map(p => {
+    const s = st[p.id] || {};
+    const tj = s.translate_job;
+    const parseBadge = s.parsing ? '<span class="badge run">⏳解析</span>'
+      : p.parse_status === 'parsed' ? '<span class="badge ok">✓</span>'
+      : '<span class="badge err">✗</span>';
+    const trBadge = s.translating ? `<span class="badge run">🌐${tj ? tj.done + '/' + tj.total : ''}</span>`
+      : tj?.status === 'done' ? '<span class="badge ok">译✓</span>'
+      : tj?.status === 'failed' ? '<span class="badge err">译✗</span>' : '<span class="muted">—</span>';
+    const tk = s.tokens;
+    const owner = d.collections.find(c => c.id === p.collection_id);
+    return `<tr class="lib-paper-row ${state.libPaper === p.id ? 'on' : ''}" onclick="selectLibPaper('${p.id}')">
+        <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" onchange="libCk('${scopeKey}')"></td>
+        <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
+          ${esc(p.title || p.id)}
+          ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size:11px"> · ${esc(owner.name)}</span>` : ''}</td>
+        <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" onclick="event.stopPropagation();retryPaperJob('${p.id}')">↻</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="muted" style="font-size:11px">${tk ? (tk.p + tk.c).toLocaleString() + ' tok' : ''}</td>
-        <td class="row-actions">
+        <td class="row-actions" onclick="event.stopPropagation()">
           <button class="btn small" onclick="viewPaper('${p.id}')">阅读</button>
           <select style="width:auto;font-size:11px;padding:2px 4px" onchange="movePaper('${p.id}', this.value, this)">
-            <option value="">移入…</option>${moveOpts(c.id)}</select>
+            <option value="">移入…</option>${moveOpts(p.collection_id)}</select>
           <button class="btn small danger" onclick="delPaperFromLib('${p.id}')">删</button>
         </td></tr>`;}).join('');
-    return `<div class="card lib-card lib-tree" data-cid="${c.id}" style="margin-left:${depth * 18}px">
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-        ${kids.length ? `<button class="col-arrow ${open ? '' : 'closed'}" onclick="toggleColOpen('${c.id}');renderCollectionsPage()">${open ? '▾' : '▸'}</button>` : '<span class="col-arrow-none"></span>'}
-        <h2 style="margin:0;flex:1">📁 ${esc(c.name)}
-          <span class="muted" style="font-size:12px">${papers.length} 篇${kids.length ? ' · 子库' + kids.length : ''} · 译${doneTr}/${papers.length} · ${totTok.toLocaleString()}tok</span></h2>
-        <button class="btn small primary" onclick="libUpload('${c.id}')">⬆ 上传</button>
-        <button class="btn small" onclick="addSubLib('${c.id}')" ${depth >= 2 ? 'disabled title="最多三级"' : ''}>＋子库</button>
-        <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">✏️</button>
-        <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">🗑</button>
-      </div>
-      <div class="lib-batch" id="lb-${c.id}" hidden>
-        <span id="lb-count-${c.id}">0</span> 篇选中
-        <button class="btn small primary" onclick="libBatchTranslate('${c.id}')">🌐 批量翻译</button>
-        <select style="width:auto;font-size:12px" onchange="libBatchMove('${c.id}', this.value, this)"><option value="">移入…</option>${moveOpts(c.id)}</select>
-        <button class="btn small danger" onclick="libBatchDelete('${c.id}')">删除</button>
-      </div>
-      <table class="list"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${c.id}" title="全选本库" onchange="libCkAll('${c.id}', this.checked)"></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
-        ${paperRows || '<tr><td colspan="6" class="muted">空库</td></tr>'}</table>
-    </div>`;
-  };
 
-  const buildTree = async nodes => {
-    const out = [];
-    for (const c of nodes) {
-      out.push(await buildCard(c));
-      if (openState(c.id)) out.push(...await buildTree(children[c.id] || []));
-    }
-    return out;
-  };
-  const cards = await buildTree(children['root'] || []);
+  // ---- 详情面板（选中论文的完整元数据）----
+  const pd = state.libPaper ? papers.find(p => p.id === state.libPaper) : null;
+  const detail = pd ? (() => {
+    const s = st[pd.id] || {};
+    const tj = s.translate_job;
+    const kv = [
+      ['作者', pd.authors], ['年份', pd.year], ['期刊', pd.journal], ['DOI', pd.doi],
+      ['关键词', pd.keywords], ['页数', pd.page_count], ['大小', pd.file_size ? (pd.file_size / 1048576).toFixed(1) + ' MB' : ''],
+      ['可见性', pd.visibility === 'private' ? '🔒 仅自己可见' : '🌐 共享'],
+      ['解析', pd.parse_status], ['翻译', tj?.status === 'done' ? `已完成（${tj.model || ''}）` : (tj?.status || '未翻译')],
+      ['所属库', d.collections.find(c => c.id === pd.collection_id)?.name || '—'],
+      ['加入时间', (pd.created_at || '').slice(0, 16)], ['ID', pd.id],
+    ].filter(x => x[1]);
+    return `<div class="lib-detail">
+      <div class="ld-title">${esc(pd.title || pd.id)}</div>
+      <div class="ld-kv">${kv.map(([k, v]) =>
+        `<div><span class="ld-k">${k}</span><span class="ld-v">${esc(String(v))}</span></div>`).join('')}</div>
+      ${pd.abstract ? `<div class="ld-sec">摘要</div><div class="ld-abs">${esc(pd.abstract)}</div>` : ''}
+      <div class="ld-actions">
+        <button class="btn small primary" onclick="viewPaper('${pd.id}')">📖 阅读</button>
+        <button class="btn small" onclick="copyCite('${pd.id}')">复制引用</button>
+      </div></div>`;
+  })() : '';
 
+  // ---- 组装 ----
+  const selName = sel ? (d.collections.find(c => c.id === sel)?.name || '') : '';
+  const selNameArg = selName.replace(/'/g, "\\'");   // 塞进内联 onclick 的单引号参数
   el.innerHTML = `
     <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <h2 style="margin:0;flex:1">文献库管理 <span class="muted" style="font-size:12px">拖 PDF 到库卡上传 · ▾/▸ 收起子树</span></h2>
-      <input id="newlib-name" placeholder="新库名称" style="max-width:200px">
+      <h2 style="margin:0;flex:1">文献库管理 <span class="muted" style="font-size:12px">左栏选库 · 右栏看论文与详情</span></h2>
+      <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:220px" value="${esc(state.libQuery)}">
+      <input id="newlib-name" placeholder="新库名称" style="max-width:160px">
       <button class="btn primary" onclick="createLibFromPage()">＋ 顶层库</button>
-    </div>` + (cards.join('') || '<div class="card"><p class="muted">暂无文献库</p></div>');
-  $$('.lib-card').forEach(card => {
-    const cid = card.dataset.cid;
-    ['dragover', 'dragenter'].forEach(ev => card.addEventListener(ev, e => { e.preventDefault(); card.classList.add('drag'); }));
-    ['dragleave', 'drop'].forEach(ev => card.addEventListener(ev, e => { e.preventDefault(); card.classList.remove('drag'); }));
-    card.addEventListener('drop', e => uploadFiles(e.dataTransfer.files, cid));
-  });
+    </div>
+    <div class="lib-mgr">
+      ${sideTree}
+      <div class="lib-main" id="lib-main-drop">
+        <div class="lib-head">
+          <h2 style="margin:0;flex:1">${sel ? '📁' : '📚'} ${esc(scopeName)}
+            <span class="muted" style="font-size:12px">${papers.length} 篇${scopeIds.length > 1 ? '（含子库）' : ''} · 译${doneTr}/${papers.length} · ${totTok.toLocaleString()}tok</span></h2>
+          ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">⬆ 上传</button>
+          <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>＋子库</button>
+          <button class="btn small" onclick="renameLib('${sel}', '${selNameArg}')">✏️</button>
+          <button class="btn small danger" onclick="delLib('${sel}', '${selNameArg}')">🗑</button>` : ''}
+        </div>
+        <div class="lib-batch" id="lb-${scopeKey}" hidden>
+          <span id="lb-count-${scopeKey}">0</span> 篇选中
+          <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">🌐 批量翻译</button>
+          <select style="width:auto;font-size:12px" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
+          <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">删除</button>
+        </div>
+        <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
+          ${paperRows || `<tr><td colspan="6" class="muted">${q ? '没有匹配的论文' : '空库'}</td></tr>`}</table>
+        ${detail}
+      </div>
+    </div>`;
+
+  // 搜索框：输入去抖后重渲染，并恢复焦点与光标（否则每敲一个字就失焦）
+  const qIn = $('#lib-mgr-q');
+  if (qIn) {
+    qIn.oninput = e => {
+      state.libQuery = e.target.value;
+      clearTimeout(state._libQTimer);
+      state._libQTimer = setTimeout(async () => {
+        await renderCollectionsPage();          // 等重渲染完成再恢复焦点，否则焦点落在被替换的旧节点上
+        const n = $('#lib-mgr-q');
+        if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
+      }, 300);
+    };
+  }
+  // 拖 PDF 到右栏 → 上传到当前库
+  const main = $('#lib-main-drop');
+  if (main) {
+    ['dragover', 'dragenter'].forEach(ev => main.addEventListener(ev, e => { e.preventDefault(); main.classList.add('drag'); }));
+    ['dragleave', 'drop'].forEach(ev => main.addEventListener(ev, e => { e.preventDefault(); main.classList.remove('drag'); }));
+    main.addEventListener('drop', e => uploadFiles(e.dataTransfer.files, sel || undefined));
+  }
 }
 window.renderCollectionsPage = renderCollectionsPage;   // 内联 onclick 在全局作用域求值
 window.toggleColOpen = cid => {
   const s = JSON.parse(localStorage.getItem('ps-col-open') || '{}');
   s[cid] = s[cid] === false ? true : false;
   localStorage.setItem('ps-col-open', JSON.stringify(s));
-  renderCollections();
+  renderCollections();          // 侧栏树
+  if ($('#page-collections') && $('#page-collections').style.display !== 'none') renderCollectionsPage().catch(() => {});
 };
 
 function libSelected(cid) {

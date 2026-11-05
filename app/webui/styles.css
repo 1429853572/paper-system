@@ -613,6 +613,33 @@ table.list input[type=checkbox] { width: auto; }
 
 .inline-fig img, .fig-grid img { cursor: text; }   /* 单击=正常选中，双击才放大 */
 
+/* 文献库管理页：左库树 + 右条目 + 详情（Zotero/EndNote 式） */
+.lib-mgr { display: grid; grid-template-columns: 250px 1fr; gap: 12px; align-items: start; }
+.lib-side { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.lib-sel { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer; font-size: 13px;
+           border-bottom: 1px solid #f2f3f7; }
+.lib-sel:hover { background: #f6f8fd; }
+.lib-sel.on { background: #eef1ff; color: var(--primary); font-weight: 600; }
+.lib-sel-name { flex: 1; display: flex; align-items: center; gap: 4px; min-width: 0;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-sel-n { font-size: 11px; color: var(--muted); background: #f0f2f8; border-radius: 10px; padding: 1px 7px; }
+.lib-sel.on .lib-sel-n { background: #dbe3ff; color: var(--primary); }
+.lib-main { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.lib-main.drag { background: #f6f8ff; box-shadow: inset 0 0 0 2px var(--primary); }
+.lib-head { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.lib-table tbody tr, .lib-table tr.lib-paper-row { cursor: pointer; }
+.lib-paper-row.on { background: #eef1ff; }
+.lib-detail { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: #fbfcfe; }
+.ld-title { font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+.ld-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 16px; font-size: 12px; }
+.ld-kv > div { display: flex; gap: 6px; min-width: 0; }
+.ld-k { color: var(--muted); flex: none; width: 52px; }
+.ld-v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ld-sec { margin: 10px 0 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.ld-abs { font-size: 12px; line-height: 1.7; color: #444; max-height: 190px; overflow-y: auto; }
+.ld-actions { margin-top: 10px; display: flex; gap: 6px; }
+@media (max-width: 900px) { .lib-mgr { grid-template-columns: 1fr; } }
+
 /* 文献库树 */
 .col-arrow { width: 18px; height: 18px; flex: none; display: inline-flex; align-items: center;
              justify-content: center; border-radius: 4px; cursor: pointer; color: var(--muted);

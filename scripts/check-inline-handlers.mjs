@@ -37,7 +37,9 @@ const handlers = [
 ];
 const called = new Set();
 for (const m of handlers) {
-  for (const id of m[1].matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) called.add(id[1]);
+  // 排除对象方法调用（event.stopPropagation()、e.preventDefault() 等）：整段替换掉
+  const expr = m[1].replace(/\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\s*\(/g, '(');
+  for (const id of expr.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) called.add(id[1]);
 }
 
 const onWindow = new Set([...js.matchAll(/window\.([A-Za-z_$][\w$]*)\s*=/g)].map(m => m[1]));
