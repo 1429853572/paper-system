@@ -78,6 +78,10 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - **翻译幂等**：`translations` 有唯一索引 `(paper_id, cache_key, block_id)`，重跑用 `INSERT ... ON CONFLICT REPLACE`；cache_key = sha256(source_hash + model + prompt_version + glossary_version + lang)。改翻译提示词要改 `translator.PROMPT_VERSION`，否则命中旧缓存。
 - **Anthropic 协议请求体必须带 `thinking: {type: "disabled"}`**：GLM 等兼容端点默认开思维链，会吞掉 text 块。
 - **登录限速**：每 IP 10 分钟最多 8 次失败（`auth.check_login_rate`）。
+- **备份**：每日 janitor 同时备份 DB 快照与 papers/ 目录 tar（backups/ 各保留 backup_keep 份，含审计快照）——DB 与文件必须配套才有完整备份。
+- **会话吊销**：users.token_ver（v12）——改密/登出所有设备时 +1，current_user 逐请求比对（auth.check_token_ver）。**给 current_user 增加鉴权语义时记得 ver 校验在 auth 层**。
+- **错误处理**：全局 exception_handler 统一 JSON 500（勿在前端假设 500 是纯文本）；SSE 收尾已包 try（error 事件而非断流）。
+- **安全头**：中间件统一 nosniff/DENY/CSP（CSP 允许 inline style 与 blob——KaTeX/pdf.js 依赖；改前端加载方式时同步 CSP）。
 - **回收站**：软删除 30 天，janitor 每小时清理；"清空回收站"按用户隔离（admin 才全量）。
 - **上传存储/限额**：member 限额来自 `config.yaml limits.*` + `user_quotas.overrides`（管理页可按人覆盖），admin 全豁免。
 
