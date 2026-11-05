@@ -183,11 +183,11 @@ $('#file-input').onchange = e => uploadFiles(e.target.files);
 ['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
 ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
 dz.addEventListener('drop', e => uploadFiles(e.dataTransfer.files));
-async function uploadFiles(files) {
+async function uploadFiles(files, targetCid) {
   const pdfs = [...files].filter(f => f.name.toLowerCase().endsWith('.pdf'));
   if (!pdfs.length) { toast('仅支持 PDF'); return; }
-  const vis = $('#vis-private').checked ? 'private' : 'shared';
-  const col = state.currentCollection ? `&collection_id=${state.currentCollection}` : '';
+  const vis = $('#vis-private')?.checked ? 'private' : 'shared';
+  const col = (targetCid || state.currentCollection) ? `&collection_id=${targetCid || state.currentCollection}` : '';
   const fd = new FormData();
   pdfs.forEach(f => fd.append('files', f));
   const r = await fetch(`/api/papers/upload?visibility=${vis}${col}`, {method: 'POST', body: fd});
@@ -1287,6 +1287,7 @@ async function renderCollectionsPage() {
       const tk = st.tokens;
       const tkBadge = tk ? `<span class="muted" title="prompt/completion tokens">${(tk.p + tk.c).toLocaleString()} tok</span>` : '';
       return `<tr>
+        <td style="width:28px"><input type="checkbox" class="lib-ck" data-cid="${c.id}" data-pid="${p.id}" onchange="libCk('${c.id}')"></td>
         <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">${esc(p.title || p.id)}</td>
         <td>${parseBadge}</td><td>${trBadge}</td><td>${tkBadge}</td>
         <td class="row-actions">
@@ -1298,23 +1299,79 @@ async function renderCollectionsPage() {
           </select>
           <button class="btn small danger" onclick="delPaperFromLib('${p.id}')">删除</button>
         </td></tr>`;}).join('');
-    return `<div class="card">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-        <h2 style="margin:0;flex:1">📁 ${esc(c.name)} <span class="muted" style="font-size:13px">(${papers.length} 篇)</span></h2>
+    const st = state._statuses || {};
+    const doneTr = papers.filter(p => st[p.id]?.translate_job?.status === 'done').length;
+    const totTok = papers.reduce((s, p) => s + ((st[p.id]?.tokens?.p || 0) + (st[p.id]?.tokens?.c || 0)), 0);
+    return `<div class="card lib-card" data-cid="${c.id}">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+        <h2 style="margin:0;flex:1">📁 ${esc(c.name)}
+          <span class="muted" style="font-size:13px">${papers.length} 篇</span>
+          <span class="muted" style="font-size:12px">· 已译 ${doneTr}/${papers.length} · ${totTok.toLocaleString()} tok</span></h2>
+        <button class="btn small primary" onclick="libUpload('${c.id}')">⬆ 上传到此库</button>
         <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">✏️ 重命名</button>
         <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">删除库</button>
       </div>
-      <table class="list"><tr><th>论文</th><th>解析</th><th>翻译</th><th>用量</th><th></th></tr>
-      ${paperRows || '<tr><td colspan="5" class="muted">空库——阅读页上传时选择此库，或在侧栏多选移入</td></tr>'}</table>
+      <div class="lib-batch" id="lb-${c.id}" hidden>
+        <span id="lb-count-${c.id}">0</span> 篇选中
+        <button class="btn small primary" onclick="libBatchTranslate('${c.id}')">🌐 批量翻译</button>
+        <select style="width:auto;font-size:12px" onchange="libBatchMove('${c.id}', this.value, this)"><option value="">移入…</option>
+          ${d.collections.filter(x => x.id !== c.id).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
+        <button class="btn small danger" onclick="libBatchDelete('${c.id}')">删除</button>
+      </div>
+      <table class="list"><tr><th><input type="checkbox" onchange="libCkAll('${c.id}', this.checked)" title="全选"></th><th>论文</th><th>解析</th><th>翻译</th><th>用量</th><th></th></tr>
+      ${paperRows || `<tr><td colspan="6" class="muted">空库——点「⬆ 上传到此库」或拖拽 PDF 进来</td></tr>`}</table>
     </div>`;
   }));
   el.innerHTML = `
     <div class="card" style="display:flex;gap:10px;align-items:center">
       <h2 style="margin:0;flex:1">文献库管理</h2>
+      <span class="muted" style="font-size:12px">拖 PDF 到任意库卡片可直接上传入库</span>
       <input id="newlib-name" placeholder="新库名称" style="max-width:240px">
       <button class="btn primary" onclick="createLibFromPage()">＋ 新建文献库</button>
     </div>` + (cards.join('') || '<div class="card"><p class="muted">暂无文献库——上传论文时会自动创建「默认文献库」</p></div>');
+  // 拖拽上传绑定
+  $$('.lib-card').forEach(card => {
+    const cid = card.dataset.cid;
+    ['dragover', 'dragenter'].forEach(ev => card.addEventListener(ev, e => { e.preventDefault(); card.classList.add('drag'); }));
+    ['dragleave', 'drop'].forEach(ev => card.addEventListener(ev, e => { e.preventDefault(); card.classList.remove('drag'); }));
+    card.addEventListener('drop', e => uploadFiles(e.dataTransfer.files, cid));
+  });
 }
+function libSelected(cid) {
+  return $$('.lib-ck').filter(x => x.dataset.cid === cid && x.checked).map(x => x.dataset.pid);
+}
+window.libCk = cid => {
+  const n = libSelected(cid).length;
+  $('#lb-' + cid).hidden = !n;
+  $('#lb-count-' + cid).textContent = n;
+};
+window.libCkAll = (cid, on) => {
+  $$(`.lib-ck[data-cid="${cid}"]`).forEach(x => x.checked = on);
+  libCk(cid);
+};
+window.libBatchTranslate = async cid => {
+  const ids = libSelected(cid);
+  await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
+  toast(`已加入翻译队列 ${ids.length} 篇`); renderCollectionsPage();
+};
+window.libBatchMove = async (cid, v, sel) => {
+  if (!v) return;
+  const target = v === '__none__' ? null : v;
+  for (const pid of libSelected(cid)) await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: target})});
+  toast('已移动'); sel.value = ''; renderCollectionsPage();
+};
+window.libBatchDelete = async cid => {
+  const ids = libSelected(cid);
+  if (!confirm(`删除选中的 ${ids.length} 篇？（进回收站）`)) return;
+  for (const pid of ids) await api('/api/papers/' + pid, {method: 'DELETE'});
+  toast('已移入回收站'); renderCollectionsPage();
+};
+window.libUpload = cid => {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.multiple = true; inp.accept = '.pdf';
+  inp.onchange = () => uploadFiles(inp.files, cid);
+  inp.click();
+};
 window.renameLib = async (cid, oldName) => {
   const name = prompt('重命名文献库：', oldName);
   if (!name?.trim() || name === oldName) return;
