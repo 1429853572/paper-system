@@ -507,3 +507,9 @@ table.list input[type=checkbox] { width: auto; }
 .fig-group .fig-holder img { max-width: 49%; flex: 1 1 44%; min-width: 40%; }
 .pane-right.narrow .fig-group .fig-holder img { max-width: 100%; flex-basis: 100%; }
 .inline-fig { margin: 12px 0; }
+
+/* 版面布局框（MinerU 检测边界可视化） */
+.layout-rect { position: absolute; border: 1.5px solid #9aa3bd; border-radius: 2px;
+               pointer-events: auto; cursor: help; z-index: 4; mix-blend-mode: multiply; }
+.layout-rect:hover { background: rgba(120, 140, 255, .12); }
+#layout-btn.on { color: #ffd76a; }
