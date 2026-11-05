@@ -634,8 +634,7 @@ function renderContentView() {
         : (SKIP.has(p.type) ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
       const zhBody = p.type === 'table' ? renderBlockBody(p)
         : p.zh ? katexify(esc(p.zh))
-        : (p.type === 'image' || p.type === 'equation' ? '' :
-           `<span class="fill-hint" data-bid="${p.block_id}">补译</span>`);
+        : (p.type === 'image' || p.type === 'equation' ? '' : '');
       const isTitle = p.type === 'title';
       return `<div class="pair en blk ${isTitle ? 'blk-title' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
               <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${p.block_id}')">${zhBody}</div>`;
@@ -1043,12 +1042,32 @@ window.genSumBubble = async pid => {
   }
 }
 
-/* ---- 上下分栏（常驻）：拖动分隔条调阅读/问答占比 ---- */
+/* ---- 上下分栏：拖动调占比；问答可整体关闭/重开回默认位 ---- */
 state.rpane = { top: parseFloat(localStorage.getItem('ps-rpane-top') || '55'), readingView: 'orig', split: true };
+state.qaOpen = localStorage.getItem('ps-qa-open') !== '0';
+window.applyQaLayout = () => {
+  const top = $('#rpane-top'), dock = $('#qa-dock'), handle = $('#rpane-handle'), pill = $('#qa-reopen');
+  if (state.qaOpen) {
+    dock.hidden = false; handle.hidden = false; pill.hidden = true;
+    top.style.flex = 'none'; top.style.height = state.rpane.top + '%';
+  } else {
+    dock.hidden = true; handle.hidden = true; pill.hidden = false;
+    top.style.flex = '1 1 auto'; top.style.height = '';
+  }
+};
+window.closeQa = () => { state.qaOpen = false; localStorage.setItem('ps-qa-open', '0'); applyQaLayout(); };
+window.openQaDock = () => {
+  state.qaOpen = true; localStorage.setItem('ps-qa-open', '1');
+  if (!localStorage.getItem('ps-rpane-top')) state.rpane.top = 55;   // 无记忆则回默认
+  applyQaLayout(); renderQaTab(); $('#qa-text')?.focus();
+};
 (() => {
   const top = $('#rpane-top');
-  const apply = () => { top.style.flex = 'none'; top.style.height = state.rpane.top + '%'; };
-  apply();
+  const apply = applyRef;
+  applyQaLayout();
+  $('#qa-dock-close').onclick = closeQa;
+  $('#qa-reopen').onclick = openQaDock;
+  const applyRef = apply;
   const handle = $('#rpane-handle');
   let dragging = false;
   handle.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
@@ -1265,7 +1284,8 @@ async function boot() {
   }
   await initPdfJs();
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
-  renderQaTab();          // 问答 dock 常驻
+  applyQaLayout();
+  if (state.qaOpen) renderQaTab();   // 问答 dock（按记忆的开合状态）
   $('#link-toggle').classList.toggle('on', state.syncLink);
   await loadCollections();
   await loadPapers();
@@ -2027,27 +2047,6 @@ window.clearQuote = () => {
   if (t) t.placeholder = '对着左侧文章提问…（Ctrl+Enter 发送）';
 };
 
-/* 单段补译（模块翻译） */
-window.fillBlock = async (bid, hint) => {
-  if (hint.dataset.busy) return;
-  hint.dataset.busy = '1';
-  hint.textContent = '译中…';
-  try {
-    const r = await api(`/api/papers/${state.current.id}/translate-block`, {method: 'POST',
-      body: JSON.stringify({block_id: bid})});
-    const pair = state.pairs.find(x => x.block_id === bid);
-    if (pair) pair.zh = r.zh;
-    renderContentView();
-  } catch (e) {
-    delete hint.dataset.busy;
-    hint.textContent = '补译（重试）';
-    toast('补译失败: ' + e.message);
-  }
-};
-document.addEventListener('click', e => {
-  const hint = e.target.closest && e.target.closest('.fill-hint');
-  if (hint) fillBlock(hint.dataset.bid, hint);
-});
 
 /* 公式渲染：KaTeX（$$块级优先，$行内；esc 后文本） */
 function katexify(html) {

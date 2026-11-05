@@ -85,6 +85,7 @@
         </div>
         <button class="side-restore" id="side-restore" hidden></button>
         <div class="pane-right">
+          <button class="qa-reopen" id="qa-reopen" hidden title="重新打开论文问答（恢复默认位置）">💬 问答</button>
           <div class="view-tabs">
             <button data-v="read" class="on">📖 阅读</button>
             <button data-v="meta">文献信息</button>
@@ -110,7 +111,8 @@
             </div>
             <div class="rpane-handle" id="rpane-handle"></div>
             <div class="qa-dock" id="qa-dock">
-              <div class="qa-dock-head">💬 论文问答 <span class="muted" style="font-size:11px" id="qa-dock-mode"></span></div>
+              <div class="qa-dock-head"><span style="flex:1">💬 论文问答</span>
+            <button class="btn small" id="qa-dock-close" title="关闭问答（底部按钮可重开）">✕</button></div>
               <div class="qa-dock-body" id="qa-dock-body"></div>
             </div>
           </div>
