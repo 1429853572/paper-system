@@ -280,7 +280,10 @@ async function openPaper(id) {
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
   state.pairs = []; state.versions = []; state.assets = null;
   api(`/api/papers/${id}/block-notes`).then(d => { state._bnotes = d.notes; }).catch(() => { state._bnotes = {}; });
-  api(`/api/papers/${id}/assets`).then(d => { state.assets = d; }).catch(() => {});
+  api(`/api/papers/${id}/assets`).then(d => {
+    state.assets = d;
+    if (['orig', 'bilingual', 'zh'].includes(state.view)) renderContentView();   // 聚合就绪→升级原图裁剪
+  }).catch(() => {});
   state._refs = null;   // 引用缓存随论文重置
   loadBilingual(id).then(() => {   // 有译文默认双语，否则原文
     if (state.versions.length && state.view === 'orig') switchView('read', 'bilingual');
@@ -1775,8 +1778,8 @@ const renderBlockBody = b => {
     const fig = figs.find(f => f.image_path === b.asset_path);
     const subCaps = fig?.sub_captions || [];
     const fb = [b.asset_path, ...(fig?.extra_images || [])].map(p => p.split('/').pop());
-    const ub = fig?.union_bbox || (b.bbox ? JSON.parse(b.bbox) : null);
-    return `<figure class="inline-fig fig-crop" ${ub ? `data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'` : ''}>
+    const ub = fig?.union_bbox || null;   // 仅组图并集才裁（子块 bbox 是局部，会截错）
+    return `<figure class="inline-fig ${ub ? 'fig-crop' : ''}" ${ub ? `data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'` : ''}>
       <div class="fig-holder">${fb.map(n => `<img loading="lazy" src="/api/papers/${pid}/images/${n}">`).join('')}</div>
       ${subCaps.length ? `<figcaption class="muted" style="font-size:11px">${esc(subCaps.join(' | ').slice(0, 200))}</figcaption>` : ''}
     </figure>`;
