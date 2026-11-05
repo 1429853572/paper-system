@@ -59,10 +59,14 @@ def new_paper_id() -> str:
 
 
 def store_pdf(paper_id: str, data: bytes, name: str = "original.pdf") -> Path:
+    """统一存为 original.<扩展名>（解析/预览端按该前缀定位；多格式保留真实扩展）."""
     d = PAPERS_DIR / paper_id
     d.mkdir(parents=True, exist_ok=True)
-    safe = "".join(ch for ch in Path(name or "original.pdf").name if ch not in '/\\:')
-    p = d / (safe if safe.endswith((".pdf", ".png", ".jpg", ".jpeg", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".html", ".txt")) else "original." + (safe.rsplit(".", 1)[-1] if "." in safe else "bin"))
+    ext = Path(name or "x.pdf").suffix.lower() or ".pdf"
+    if ext not in (".pdf", ".png", ".jpg", ".jpeg", ".doc", ".docx",
+                   ".ppt", ".pptx", ".xls", ".xlsx", ".html", ".txt"):
+        ext = ".pdf"
+    p = d / f"original{ext}"
     p.write_bytes(data)
     return p
 
