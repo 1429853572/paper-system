@@ -36,10 +36,16 @@ def preflight_doc(data: bytes, name: str, *, is_admin: bool, overrides: dict[str
         raise PreflightError(f"文件超过 {max_mb}MB 限制")
     ext = "." + (name or "").rsplit(".", 1)[-1].lower() if "." in (name or "") else ""
     if data.startswith(_PDF_MAGIC):
-        reader = PdfReader(__import__("io").BytesIO(data))
-        if reader.is_encrypted:
-            raise PreflightError("PDF 已加密，无法解析")
-        pages = len(reader.pages)
+        # 损坏/非规范 PDF：pypdf 会抛异常，必须转成友好提示而不是 500
+        try:
+            reader = PdfReader(__import__("io").BytesIO(data))
+            if reader.is_encrypted:
+                raise PreflightError("PDF 已加密，无法解析")
+            pages = len(reader.pages)
+        except PreflightError:
+            raise
+        except Exception:
+            raise PreflightError("PDF 已损坏或无法解析，请换一份文件")
         if not is_admin and pages > max_pages:
             raise PreflightError(f"页数 {pages} 超过 {max_pages} 页限制")
         return pages, "pdf"

@@ -279,13 +279,22 @@ async function uploadFiles(files, targetCid) {
   const fd = new FormData();
   pdfs.forEach(f => fd.append('files', f));
   const r = await fetch(`/api/papers/upload?visibility=${vis}${col}`, {method: 'POST', body: fd});
-  if (!r.ok) { toast((await r.json()).detail || '上传失败'); return; }
+  if (!r.ok) {
+    // 服务端可能返回纯文本 5xx（不是 JSON）——别让 .json() 抛异常把提示吞掉
+    let msg = '上传失败';
+    try { const j = await r.json(); msg = j.detail || msg; } catch {}
+    toast(msg);
+    return;
+  }
   const d = await r.json();
   const ok = d.results.filter(x => x.status === 'queued').length;
   const dup = d.results.filter(x => x.status === 'duplicate').length;
   const rej = d.results.filter(x => x.status === 'rejected');
   toast(`已排队 ${ok} 篇${dup ? `，去重跳过 ${dup} 篇` : ''}${rej.length ? `，拒收 ${rej.length} 篇：${rej[0].reason}` : ''}`);
   loadPapers(); loadCollections();
+  // 当前停在「文库管理」页时，库卡下方的论文表也要刷新，否则上传完看不到新文件
+  const libPage = $('#page-collections');
+  if (libPage && libPage.style.display !== 'none') renderCollectionsPage();
 }
 
 /* 多选模式与批量操作 */
