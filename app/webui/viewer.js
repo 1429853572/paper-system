@@ -1046,7 +1046,7 @@ state.rpane = { top: parseFloat(localStorage.getItem('ps-rpane-top') || '55'), r
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
     const body = $('.rpane-body').getBoundingClientRect();
-    const pct = Math.min(80, Math.max(25, Math.round(100 * (e.clientY - body.top) / body.height)));
+    const pct = Math.min(99, Math.max(1, Math.round(100 * (e.clientY - body.top) / body.height)));
     state.rpane.top = pct; apply();
   });
   document.addEventListener('mouseup', () => {
