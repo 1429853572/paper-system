@@ -3,7 +3,9 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
 const state = {
-  me: null, papers: [], filter: '', q: '',
+  me: null, papers: [], q: '',
+  filter: localStorage.getItem('ps-filter') || '',   // ''|parsed|parsing|failed|private
+  sortBy: localStorage.getItem('ps-sort') || 'recent', // recent|title|pages|size
   current: null,          // 当前论文 dict
   pdfDoc: null, pageNum: 1, scale: 1.0,
   view: 'orig', blocks: [], pairs: [], versions: [],
@@ -175,8 +177,7 @@ async function loadPapers() {
   state.papers = state.filter === 'private' ? d.papers.filter(p => p.visibility === 'private') : d.papers;
   renderPapers();
 }
-function statusBadge(p) {
-  if (p.deleted_at) return '<span class="badge err">回收站</span>';
+function statusBadge(p) {  if (p.deleted_at) return '<span class="badge err">回收站</span>';
   const m = {parsed: '<span class="badge ok">已解析</span>',
              parsing: '<span class="badge run">解析中</span>',
              pending: '<span class="badge run">排队中</span>',
@@ -187,7 +188,7 @@ function renderPapers() {
   const el = $('#paper-list');
   if (state.q && state.q.trim().length >= 2) { renderContentSearch(); return; }
   if (!state.papers.length) { el.innerHTML = '<p class="muted" style="padding:20px">暂无论文，上传 PDF 开始</p>'; return; }
-  el.innerHTML = state.papers.map(p => `
+  el.innerHTML = sortPapers(state.papers).map(p => `
     <div class="paper-item ${state.current?.id === p.id ? 'sel' : ''}" data-id="${p.id}">
       ${state.selectMode ? `<input type="checkbox" ${state.selected.has(p.id) ? 'checked' : ''}>` : ''}
       <div class="info">
@@ -289,6 +290,78 @@ async function uploadFiles(files, targetCid) {
 
 /* 多选模式与批量操作 */
 state.selectMode = false;
+/* ---- 筛选与排序菜单（▾）---- */
+const FILTERS = [['', '全部'], ['parsed', '已解析'], ['parsing', '解析中'], ['failed', '失败'], ['private', '仅私人']];
+const SORTS = [['recent', '最近更新'], ['title', '标题'], ['pages', '页数'], ['size', '文件大小']];
+function sortPapers(list) {
+  const arr = [...list];
+  const by = state.sortBy;
+  if (by === 'title') arr.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'zh'));
+  else if (by === 'pages') arr.sort((a, b) => (b.page_count || 0) - (a.page_count || 0));
+  else if (by === 'size') arr.sort((a, b) => (b.file_size || 0) - (a.file_size || 0));
+  else arr.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  return arr;
+}
+function markFilterMenu() {
+  const pop = $('#filter-pop');
+  if (pop) {
+    $$('.tp-item', pop).forEach(it => {
+      const on = it.dataset.f !== undefined ? it.dataset.f === state.filter : it.dataset.s === state.sortBy;
+      it.classList.toggle('on', on);
+    });
+  }
+  const arrow = $('#filter-arrow');
+  if (!arrow) return;
+  const fn = FILTERS.find(f => f[0] === state.filter)?.[1] || '全部';
+  const sn = SORTS.find(s => s[0] === state.sortBy)?.[1] || '最近更新';
+  arrow.classList.toggle('has-val', !!state.filter || state.sortBy !== 'recent');
+  arrow.title = `筛选：${fn} · 排序：${sn}`;
+}
+$('#filter-arrow').onclick = e => {
+  e.stopPropagation();
+  const pop = $('#filter-pop');
+  pop.hidden = !pop.hidden;
+  markFilterMenu();
+};
+$('#filter-pop').onclick = e => {
+  const item = e.target.closest('.tp-item');
+  if (!item) return;
+  if (item.dataset.f !== undefined) {
+    state.filter = item.dataset.f;
+    localStorage.setItem('ps-filter', state.filter);
+  } else if (item.dataset.s) {
+    state.sortBy = item.dataset.s;
+    localStorage.setItem('ps-sort', state.sortBy);
+  }
+  $('#filter-pop').hidden = true;
+  markFilterMenu();
+  loadPapers();
+};
+document.addEventListener('click', e => {
+  const pop = $('#filter-pop');
+  if (pop && !pop.hidden && !e.target.closest('#filter-pop') && !e.target.closest('#filter-arrow')) pop.hidden = true;
+});
+markFilterMenu();
+
+/* ---- 侧栏折叠 / 展开（MinerU 风格浮动箭头）---- */
+state.sidebarCollapsed = localStorage.getItem('ps-sidebar-collapsed') === '1';
+window.applySidebarCollapse = () => {
+  const sb = $('.sidebar');
+  sb.classList.toggle('collapsed', state.sidebarCollapsed);
+  $('#side-rail').hidden = !state.sidebarCollapsed;
+};
+$('#side-collapse').onclick = () => {
+  state.sidebarCollapsed = true;
+  localStorage.setItem('ps-sidebar-collapsed', '1');
+  applySidebarCollapse();
+};
+$('#side-expand').onclick = () => {
+  state.sidebarCollapsed = false;
+  localStorage.setItem('ps-sidebar-collapsed', '0');
+  applySidebarCollapse();
+};
+applySidebarCollapse();
+
 $('#sel-toggle').onclick = () => {
   state.selectMode = !state.selectMode;
   $('#sel-toggle').classList.toggle('primary', state.selectMode);

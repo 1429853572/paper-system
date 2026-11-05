@@ -51,6 +51,8 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - 注释、日志、报错文案一律**中文**。
 - 前端：无框架、无打包，原生 JS + emoji 图标；DOM id 一律 `#kebab-case`，class 用 `.blk` `.pair` 等短名；改 UI 要同步 `app/webui/styles.css`，不要内联一堆 style 属性。
 - **上传入口**：没有独立大拖放框——直接把文件拖到**论文列表区**（`.paper-list`）即上传；工具条右侧的 📄 弹层里是「选择文件 / URL 导入」，🔓 图标切换上传可见性（仅自己可见）。
+- **侧栏可折叠**：顶栏 « 收起侧栏，收起后左侧留 `#side-rail` 窄边（占位式，顶栏标题自动让位），» 展开。
+- **筛选与排序**：工具条 ▾ 一个菜单里分两组（筛选 / 排序），状态存 `ps-filter`、`ps-sort`。改这块时注意：**只做 UI 不写状态回写是历史教训**（`state.filter` 曾长期只读不写，按钮点了没反应）。
 - **PDF 渲染**：canvas 位图按 `CSS 尺寸 × devicePixelRatio` 渲染（`viewer.js:dprFor()`），显示尺寸用 `style.width/height` 钉回 CSS 尺寸。退回 1× 位图 = HiDPI 屏整体发虚，别改回去。
 - **PDF 面板结构**：左侧工具条是**冻结顶栏**（in-flow，`styles.css:.pdf-toolbar`），PDF 内容滚在 `#pdf-host` 里；不要改回绝对定位浮层（会遮挡正文）。
 - **倍率变化走 `_pdfRescale()`**：只改占位高度 + 重绘视口内页面，DOM 骨架不动、滚动位置保持。别再 `host.innerHTML=''` 全量重建（拖拽分栏时会闪）。

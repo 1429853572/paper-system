@@ -633,7 +633,7 @@ table.list input[type=checkbox] { width: auto; }
 .set-actions { display: flex; gap: 8px; margin-top: 4px; }
 
 /* 侧栏工具箭头 */
-.lib-tools { display: flex; gap: 4px; align-items: center; padding: 4px 10px 6px; }
+.lib-tools { display: flex; gap: 4px; align-items: center; padding: 4px 10px 6px; position: relative; }
 .tool-arrow { border: none; background: #eef0f6; border-radius: 6px; width: 26px; height: 24px;
               color: var(--muted); cursor: pointer; font-size: 13px; position: relative; }
 .tool-arrow:hover { background: #dfe3ee; color: var(--primary); }
@@ -641,6 +641,21 @@ table.list input[type=checkbox] { width: auto; }
 .tool-pop { position: absolute; z-index: 40; left: 8px; top: 30px; background: var(--panel);
             border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.14);
             padding: 4px; min-width: 110px; }
-.tp-item { padding: 6px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.tp-item { padding: 6px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; display: flex; gap: 6px; align-items: center; }
 .tp-item:hover { background: #f0f3fc; }
+.tp-item.on { background: #eef1ff; color: var(--primary); font-weight: 600; }
+.tp-label { padding: 6px 12px 2px; font-size: 11px; color: var(--muted); }
+.tp-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+/* 侧栏折叠（MinerU 风格：右上角浮动箭头；收起后左侧留把手） */
+.side-collapse { border: none; background: none; color: var(--muted); font-size: 15px; line-height: 1;
+                 padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.side-collapse:hover { background: #eef1ff; color: var(--primary); }
+.sidebar.collapsed { display: none; }
+/* 收起后左侧留一条窄边（占位式，顶栏内容自动让位，不与标题重叠） */
+.side-rail { flex: none; width: 18px; display: flex; align-items: flex-start; justify-content: center;
+             background: var(--panel); border-right: 1px solid var(--border); }
+.side-rail button { margin-top: 15px; border: none; background: none; color: var(--muted);
+                    cursor: pointer; font-size: 13px; padding: 2px 3px; border-radius: 5px; }
+.side-rail button:hover { color: var(--primary); background: #eef1ff; }
 .tp-item.on { background: #eef1ff; color: var(--primary); font-weight: 600; }
