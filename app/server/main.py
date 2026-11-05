@@ -821,12 +821,20 @@ def paper_assets(paper_id: str, request: Request):
                 numbered.append(f)
             else:
                 others.append(f)
+        def _union(members):
+            bs = [m.get("bbox") for m in members if m.get("bbox")]
+            if not bs:
+                return None
+            return [min(b[0] for b in bs), min(b[1] for b in bs),
+                    max(b[2] for b in bs), max(b[3] for b in bs)]
+
         if not numbered:
             if imgs:
                 first = imgs[0]
                 first["label"] = f"第{pg + 1}页·组图"
                 first["extra_images"] = [o["image_path"] for o in imgs[1:]]
                 first["sub_captions"] = [o["caption"] for o in imgs if o["caption"]]
+                first["union_bbox"] = _union(imgs)
                 figures.append(first)
             continue
         # 有编号：未编号子图挂到「bbox 纵向在其上方的最近编号图」
@@ -844,6 +852,7 @@ def paper_assets(paper_id: str, request: Request):
             n["label"] = _label(n["caption"], "figure")
             n["extra_images"] = [s["image_path"] for s in subs]
             n["sub_captions"] = [s["caption"] for s in subs if s["caption"]]
+            n["union_bbox"] = _union([n] + subs)
             figures.append(n)
     return {"figures": figures, "tables": tables}
 

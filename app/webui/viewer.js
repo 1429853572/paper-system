@@ -270,6 +270,7 @@ async function openPaper(id) {
     $('#pdf-toolbar').hidden = false;
     renderPage();
     applyVsplit();   // 按当前分栏宽度自适应首帧
+    figCropPass();   // PDF 就绪，补跑原图裁剪
   } catch (e) {
     // URL/Office 导入无本地 PDF——展示占位（右侧解析内容照常）
     const isImg = /\.(png|jpe?g)(\?|$)/i.test(state.current?.id ? '' : '');
@@ -570,6 +571,7 @@ function renderContentView() {
     $$('.blk', el).forEach(b => state._blkObs.observe(b));
   }
 
+  figCropPass();   // PDF 原图裁剪（异步，pdfDoc 未就绪则跳过）
   // 段落点击 → 跳页 + 高亮
   $$('.blk', el).forEach(x => x.onclick = () => {
     $$('.blk').forEach(y => y.classList.remove('active'));
@@ -1766,14 +1768,13 @@ const renderBlockBody = b => {
   const pid = state.current?.id;
   if (b.type === 'image' && b.asset_path) {
     const figs = state.assets?.figures || [];
-    // 子图块（已被聚合进某组）跳过，避免重复渲染
-    if (figs.some(g => (g.extra_images || []).includes(b.asset_path))) return '';
+    if (figs.some(g => (g.extra_images || []).includes(b.asset_path))) return '';   // 子图已聚合
     const fig = figs.find(f => f.image_path === b.asset_path);
-    const subs = fig?.extra_images || [];
     const subCaps = fig?.sub_captions || [];
-    const imgs = [name, ...subs.map(p => p.split('/').pop())];
-    return `<figure class="inline-fig ${imgs.length > 1 ? 'fig-group' : ''}">
-      ${imgs.map(n => `<img loading="lazy" src="/api/papers/${pid}/images/${n}" onclick="lightbox(this.src, '')">`).join('')}
+    const fb = [b.asset_path, ...(fig?.extra_images || [])].map(p => p.split('/').pop());
+    const ub = fig?.union_bbox || (b.bbox ? JSON.parse(b.bbox) : null);
+    return `<figure class="inline-fig fig-crop" ${ub ? `data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'` : ''}>
+      <div class="fig-holder">${fb.map(n => `<img loading="lazy" src="/api/papers/${pid}/images/${n}">`).join('')}</div>
       ${subCaps.length ? `<figcaption class="muted" style="font-size:11px">${esc(subCaps.join(' | ').slice(0, 200))}</figcaption>` : ''}
     </figure>`;
   }
@@ -1924,3 +1925,36 @@ function katexify(html) {
     .replace(/\\\((.+?)\\\)/g, (m, tex) => render(tex, false) || m)
     .replace(/\$([^$\n][^$\n]*?)\$/g, (m, tex) => render(tex, false) || m);
 }
+
+/* PDF 原图裁剪：按组图 union bbox 从原 PDF 高清渲染（保真原图），失败保留 MinerU 兜底 */
+window.figCropPass = async () => {
+  if (!state.pdfDoc) return;
+  const holders = $$('.fig-crop[data-page]');
+  for (const fig of holders) {
+    if (fig.dataset.done) continue;
+    fig.dataset.done = '1';
+    try {
+      const pageIdx = +fig.dataset.page;
+      const ub = JSON.parse(fig.dataset.ub);
+      const page = await state.pdfDoc.getPage(pageIdx + 1);
+      const base = page.getViewport({scale: 1});
+      const rx = ub[0] * base.width, ry = (1 - ub[3]) * base.height;
+      const rw = (ub[2] - ub[0]) * base.width, rh = (ub[3] - ub[1]) * base.height;
+      const holder = fig.querySelector('.fig-holder');
+      const targetW = Math.min(holder.clientWidth || 640, 1200);
+      const scale = Math.max(1.5, targetW / rw);
+      const vp = page.getViewport({scale});
+      const full = document.createElement('canvas');
+      full.width = vp.width; full.height = vp.height;
+      await page.render({canvasContext: full.getContext('2d'), viewport: vp}).promise;
+      const out = document.createElement('canvas');
+      out.width = Math.round(rw * scale); out.height = Math.round(rh * scale);
+      out.getContext('2d').drawImage(full,
+        rx * scale, ry * scale, rw * scale, rh * scale,
+        0, 0, out.width, out.height);
+      const url = out.toDataURL('image/png');
+      holder.innerHTML = `<img src="${url}" onclick="lightbox(this.src, '')">`;
+      fig.classList.add('from-pdf');
+    } catch (e) { /* 保留 MinerU 兜底图 */ }
+  }
+};

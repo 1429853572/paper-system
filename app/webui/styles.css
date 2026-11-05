@@ -494,3 +494,6 @@ table.list input[type=checkbox] { width: auto; }
 .inline-fig figcaption { text-align: center; margin-top: 4px; }
 .fig-grid { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .fig-grid img { max-width: 46%; cursor: zoom-in; }
+
+.fig-crop .fig-holder img { max-width: 100%; display: block; margin: 0 auto; cursor: zoom-in; }
+.fig-crop.from-pdf .fig-holder { background: #fff; }
