@@ -2077,3 +2077,43 @@ window.figCropPass = async () => {
     } catch (e) { /* 保留 MinerU 兜底图 */ }
   }
 };
+
+/* ===== PDF→右侧 点击联动：点 PDF 任意位置，右侧定位对应块 ===== */
+(() => {
+  $('#pdf-host').addEventListener('click', async e => {
+    if (!state.current || !state.syncLink) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return;   // 划词选择不触发
+    const wrap = e.target.closest('.pdf-page');
+    if (!wrap || wrap.dataset.rendered !== '1' || !wrap._vp) return;
+    const vp = wrap._vp;
+    const rect = wrap.getBoundingClientRect();
+    const nx = (e.clientX - rect.left) / vp.width;
+    const ny = (e.clientY - rect.top) / vp.height;   // bbox 左上原点 ✓
+    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+    const pg = +wrap.dataset.page;
+    // 命中：该页所有 bbox 中包含点、面积最小者（最内层块）
+    let hit = null, hitArea = 1e9;
+    for (const b of state.blocks) {
+      if (b.page_index !== pg || !b.bbox) continue;
+      let bb; try { bb = JSON.parse(b.bbox); } catch { continue; }
+      const [[x0, y0, x1, y1]] = [bb];
+      if (!x1 || x0 === undefined) continue;
+      if (nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1) {
+        const area = (x1 - x0) * (y1 - y0);
+        if (area < hitArea) { hit = b; hitArea = area; }
+      }
+    }
+    if (!hit) {   // 空白处：跳该页第一块
+      hit = state.blocks.find(b => b.page_index === pg);
+    }
+    if (!hit) return;
+    const blkEl = $(`#content-view .blk[data-bid="${hit.block_id}"]`);
+    if (!blkEl) return;
+    $$('.blk.active', $('#content-view')).forEach(x => x.classList.remove('active'));
+    blkEl.classList.add('active');
+    blkEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    redrawHl();
+    savePos();
+  });
+})();
