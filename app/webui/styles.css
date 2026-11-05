@@ -582,3 +582,6 @@ table.list input[type=checkbox] { width: auto; }
              box-shadow: 0 6px 18px rgba(74,108,247,.4); }
 .qa-reopen:hover { background: var(--primary-dark); }
 .qa-dock-head { display: flex; align-items: center; gap: 8px; }
+
+.hl-flash { animation: hlflash 2.6s ease; pointer-events: none; z-index: 6; }
+@keyframes hlflash { 0%,100% { opacity: 0; } 12%, 70% { opacity: 1; } }

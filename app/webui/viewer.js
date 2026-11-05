@@ -820,7 +820,8 @@ async function renderMeta() {
         <button class="btn small" onclick="retranslatePaper('${pid}')" title="换模型/术语表后生成新译文版本">🔁 强制重译</button>
       </div>
     </div>
-    <div class="card"><h3>摘要 ${kw.length ? '<span class="muted" style="font-weight:400;font-size:12px">关键词: ' + esc(kw.join(' · ')) + '</span>' : ''}</h3>
+    <div class="card" style="cursor:pointer" onclick="flashAbstract('${pid}')" title="点击在 PDF 中定位摘要">
+      <h3>摘要 <span class="muted" style="font-weight:400;font-size:12px">📍点击定位</span> ${kw.length ? '<span class="muted" style="font-weight:400;font-size:12px">· 关键词: ' + esc(kw.join(' · ')) + '</span>' : ''}</h3>
       <p style="font-size:13px; line-height:1.7">${esc(paper.abstract || '（无——可点 AI 提取）')}</p></div>
     <div class="card"><h3>📝 备注</h3>
       <textarea id="m-notes" placeholder="记录阅读笔记…（自动保存）" style="min-height:70px">${esc(notes.notes || '')}</textarea></div>
@@ -857,8 +858,9 @@ async function renderMeta() {
   // 参考文献渲染+搜索
   const renderRefs = q => {
     const list = refs.references.filter(r => !q || r.text.toLowerCase().includes(q));
+    state._refs = refs.references;
     $('#ref-list').innerHTML = list.map(r =>
-      `<div class="ref-item" onclick="jumpEvidence(${r.page_index})">📄 ${esc(r.text.slice(0, 150))}</div>`).join('') ||
+      `<div class="ref-item" onclick="flashRefBlock('${r.block_id}')">📄 ${esc(r.text.slice(0, 150))}</div>`).join('') ||
       '<p class="muted">无匹配</p>';
   };
   renderRefs('');
@@ -2155,4 +2157,40 @@ window.applyActiveStyle = blkEl => {
   const c = typeColor(b ? b.type : 'text');
   blkEl.style.setProperty('--hlc', c);
   blkEl.classList.add('active');
+};
+
+/* ===== 文献信息联动：摘要/参考文献 → PDF 定位并闪烁高亮 ===== */
+window.pdfFlashBlock = async b => {
+  if (!b || !state.pdfDoc) return;
+  await pdfEnsureAll();
+  const wrap = _pdfBuilt && _pdfBuilt.wraps.get(b.page_index);
+  if (!wrap) return;
+  if (wrap.dataset.rendered !== '1') await renderOneWrap(wrap);
+  const vp = wrap._vp;
+  state._suppressFollow = true;
+  wrap.scrollIntoView({ block: 'center' });
+  setTimeout(() => { state._suppressFollow = false; }, 350);
+  let bb; try { bb = JSON.parse(b.bbox || 'null'); } catch { bb = null; }
+  if (bb && bb.length >= 4) {
+    const c = typeColor(b.type);
+    const r = document.createElement('div');
+    r.className = 'hl-rect hl-flash';
+    r.style.borderColor = c; r.style.background = c + '30';
+    r.style.left = (bb[0]*vp.width)+'px'; r.style.top = (bb[1]*vp.height)+'px';
+    r.style.width = ((bb[2]-bb[0])*vp.width)+'px'; r.style.height = ((bb[3]-bb[1])*vp.height)+'px';
+    wrap.appendChild(r);
+    setTimeout(() => r.remove(), 2600);
+  }
+  state.pageNum = b.page_index + 1;
+  $('#pg-label').textContent = `${state.pageNum} / ${state.pdfDoc.numPages}`;
+};
+window.flashAbstract = async pid => {
+  const b = state.blocks.find(x => /abstract/i.test(x.section_path || '')) ||
+            state.blocks.find(x => x.type === 'text' && x.page_index <= 1 && (x.text || '').length > 100);
+  if (!b) { toast('未定位到摘要区域'); return; }
+  pdfFlashBlock(b);
+};
+window.flashRefBlock = async blockId => {
+  const b = state.blocks.find(x => x.block_id === blockId);
+  if (b) pdfFlashBlock(b);
 };
