@@ -428,7 +428,7 @@ class Scheduler:
             )
             self._wake.set()
 
-    # ================= 管家：回收站清理 =================
+    # ================= 管家：回收站清理 + 每日备份 =================
     def _janitor_loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -440,9 +440,30 @@ class Scheduler:
                 )
                 for r in rows:
                     self.hard_delete_paper(r["id"])
+                self._daily_backup()
             except Exception:  # noqa: BLE001
                 log.exception("janitor 异常")
             time.sleep(3600)
+
+    def _daily_backup(self) -> None:
+        """每日自动备份：当天已有则跳过；VACUUM INTO 在线快照 + 按 retention.backup_keep 轮转."""
+        from .config import DATA_DIR
+
+        today = time.strftime("%Y-%m-%d")
+        bdir = DATA_DIR / "backups"
+        target = bdir / f"db-{today}.db"
+        if target.exists():
+            return
+        db.backup_to(target)
+        keep = int(config.get("retention", "backup_keep"))
+        backups = sorted(bdir.glob("db-*.db"))
+        for old in backups[:-keep]:
+            try:
+                old.unlink()
+                log.info("轮转删除过期备份 %s", old.name)
+            except OSError:
+                pass
+        log.info("每日备份完成: %s（保留 %d 份）", target.name, keep)
 
     def hard_delete_paper(self, paper_id: str) -> None:
         """彻底删除：文件 + 级联行（FK ON DELETE CASCADE 处理表内引用）。"""

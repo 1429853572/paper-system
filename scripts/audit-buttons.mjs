@@ -32,7 +32,7 @@ const PW = process.env.PAPERSYS_ADMIN_PW || (() => {
 if (!PW) { console.error('找不到管理员密码：设置环境变量 PAPERSYS_ADMIN_PW 或 .env 里的 ADMIN_INITIAL_PASSWORD'); process.exit(2); }
 
 // 会改数据 / 花钱 / 登出的按钮一律跳过
-const SKIP = "/彻底删除|清空回收站|清空|删除|移除|✕|上传|导入|翻译|重译|生成导读|生成邀请码|保存配额|退出|重置|重命名|新建|创建|添加子库|批量翻译|批量删除|移入|术语|生成邀请码/";
+const SKIP = "/彻底删除|清空回收站|清空|删除|移除|✕|上传|导入|翻译|重译|生成导读|生成邀请码|保存配额|退出|重置|重命名|新建|创建|添加子库|批量翻译|批量删除|移入|术语|delGlossary|delLib|delPaperFromLib|col-del|pi-del|togglePool|createInvite|gl-add|renameLib|vis-toggle|sel-toggle|side-collapse|side-expand|upload-arrow|file/";
 
 const PAGES = [
   { name: '阅读页', page: 'reader', wait: 900 },
