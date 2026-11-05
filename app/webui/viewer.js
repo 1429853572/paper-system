@@ -255,6 +255,8 @@ let pdfjsLib = null;
 async function initPdfJs() {
   pdfjsLib = await import('/static/vendor/pdfjs/pdf.min.mjs');
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdfjs/pdf.worker.min.mjs';
+  try { state.katex = (await import('/static/vendor/katex/katex.mjs')).default; }
+  catch (e) { console.warn('katex 加载失败:', e); }
 }
 async function openPaper(id) {
   const d = await api('/api/papers/' + id);
@@ -524,7 +526,7 @@ function renderContentView() {
       const zh = p.zh ? esc(p.zh)
         : (SKIP.has(p.type) ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
       const zhBody = p.type === 'table' ? renderBlockBody(p)
-        : p.zh ? esc(p.zh)
+        : p.zh ? katexify(esc(p.zh))
         : (p.type === 'image' ? '' :
            `<button class="btn small" onclick="fillBlock('${p.block_id}', this)">⬇ 补译此段</button>`);
       return `<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
@@ -1172,7 +1174,7 @@ function mdLite(text) {
   h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   h = h.replace(/^#{2,4} (.+)$/gm, '<h4>$1</h4>');
   h = h.replace(/^- (.+)$/gm, '&bull; $1');
-  return h;
+  return katexify(h);
 }
 function renderCites(text, evidence) {
   return mdLite(text).replace(/\[(\d{1,3})\]/g, (m, n) => {
@@ -1765,11 +1767,19 @@ const renderBlockBody = b => {
       <img loading="lazy" src="/api/papers/${pid}/images/${name}" onclick="lightbox(this.src, '')">
     </figure>`;
   }
+  if (b.type === 'equation' && (b.text || b.en)) {
+    const tex = (b.en !== undefined ? b.en : b.text).trim();
+    let r = null;
+    if (state.katex) { try {
+      r = state.katex.renderToString(tex, {throwOnError: false, displayMode: true, strict: false, trust: true});
+    } catch {} }
+    return r ? `<div class="eq-block">${r}</div>` : `<div class="eq-block"><code>${esc(tex)}</code></div>`;
+  }
   if (b.type === 'table') {
     const html = b.en !== undefined ? b.en : b.text;   // pairs 用 en，blocks 用 text
     return html && html.includes('<') ? `<div class="tbl">${sanitizeTbl(html)}</div>` : '';
   }
-  return linkifyRefs(esc(b.en !== undefined ? b.en : b.text));
+  return katexify(linkifyRefs(esc(b.en !== undefined ? b.en : b.text)));
 };
 
 /* 悬停 .blk → PDF 临时对应框 */
@@ -1878,3 +1888,19 @@ window.fillBlock = async (bid, btn) => {
     toast('补译失败: ' + e.message);
   }
 };
+
+/* 公式渲染：KaTeX（$$块级优先，$行内；esc 后文本） */
+function katexify(html) {
+  if (!state.katex) return html;
+  const render = (tex, display) => {
+    try {
+      return state.katex.renderToString(tex, {throwOnError: false, displayMode: display,
+        strict: false, trust: true});
+    } catch (e) { return null; }
+  };
+  return html
+    .replace(/\$\$([\s\S]+?)\$\$/g, (m, tex) => render(tex, true) || m)
+    .replace(/\\\[([\s\S]+?)\\\]/g, (m, tex) => render(tex, true) || m)
+    .replace(/\\\((.+?)\\\)/g, (m, tex) => render(tex, false) || m)
+    .replace(/\$([^$\n][^$\n]*?)\$/g, (m, tex) => render(tex, false) || m);
+}
