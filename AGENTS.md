@@ -49,8 +49,11 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 
 - Python：`from __future__ import annotations`；类型注解齐全；模块 docstring 说明设计决策（现有模块都这么写）；日志用 `log = logging.getLogger("xxx")` + `%s` 占位，不用 f-string 进日志。
 - 注释、日志、报错文案一律**中文**。
-- 前端：无框架、无打包，原生 JS + emoji 图标；DOM id 一律 `#kebab-case`，class 用 `.blk` `.pair` 等短名；改 UI 要同步 `app/webui/styles.css`，不要内联一堆 style 属性。
+- 前端：无框架、无打包，原生 JS；DOM id 一律 `#kebab-case`，class 用 `.blk` `.pair` 等短名；改 UI 要同步 `app/webui/styles.css`，不要内联一堆 style 属性。
+- **视觉 token**：字号用 `--fs-*`（xs11/sm12/base13/md14/lg15/xl17/h1 22）、圆角 `--r-*`（xs4/sm6/md8/lg10/pill）、颜色用 `:root` 语义变量（含 `--tint-*` 系列）——新样式禁止硬编码 px 字号/颜色（v1.2 已归一 146 处字号、161 处颜色）。
+- **图标一律走 `icon('name')` / `ICONS`**（viewer.js，线条 SVG、currentColor）：新 UI 不再引入 emoji 图标；toast 消息文本里可保留 emoji。给 `textContent` 赋含 icon 的 HTML 会转义显示——用 `innerHTML`。
 - **内联 onclick 的函数必须挂到 window**：`viewer.js` 是 `type="module"`，模块顶层函数不在全局作用域，而内联 `onclick="fn()"` 在全局求值 → 引用模块函数会抛 ReferenceError，按钮表现为"点了没反应"。写法：`window.fn = fn;`。改完跑 `node scripts/check-inline-handlers.mjs` 复查（这坑已出现 4 次）。
+- **冒烟测试**：部署后跑 `bash scripts/smoke-test.sh`（只读，15 项：health/静态/登录/关键端点/401 保护）。
 - **按钮巡检**：`node scripts/audit-buttons.mjs` —— 浏览器逐页点击（跳过改数据/花钱的按钮），抓「onclick 函数缺失」「点击抛异常」「接口 4xx/5xx」。静态审计（check-inline-handlers）查不到 `addEventListener` 绑的按钮，巡检能查到。跑之前会自动备份数据库。
 - **上传入口**：没有独立大拖放框——直接把文件拖到**论文列表区**（`.paper-list`）即上传；工具条右侧的 📄 弹层里是「选择文件 / URL 导入」，🔓 图标切换上传可见性（仅自己可见）。
 - **侧栏可折叠**：顶栏 « 收起侧栏，收起后左侧留 `#side-rail` 窄边（占位式，顶栏标题自动让位），» 展开。
