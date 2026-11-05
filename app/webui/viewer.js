@@ -279,6 +279,7 @@ async function openPaper(id) {
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
   state.pairs = []; state.versions = []; state.assets = null;
   api(`/api/papers/${id}/block-notes`).then(d => { state._bnotes = d.notes; }).catch(() => { state._bnotes = {}; });
+  api(`/api/papers/${id}/assets`).then(d => { state.assets = d; }).catch(() => {});
   state._refs = null;   // 引用缓存随论文重置
   loadBilingual(id).then(() => {   // 有译文默认双语，否则原文
     if (state.versions.length && state.view === 'orig') switchView('read', 'bilingual');
@@ -1341,9 +1342,12 @@ async function renderAssets() {
     (figures.length ? `<div class="card"><h2>🖼 图 (${figures.length})</h2>` +
       figures.map(f => `<div class="asset">
         ${f.label ? `<span class="asset-badge" onclick="jumpEvidence(${f.page_index})" title="跳到 PDF 该页">${esc(f.label)}</span>` : ''}
+        <div class="fig-grid">
         <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}"
-             onclick="lightbox(this.src, '${esc(f.caption || '').replace(/'/g, "\\'")}')">
-        ${f.extra_images?.length ? `<p class="muted" style="font-size:11px">（含 ${f.extra_images.length} 张子图，<a href="#" onclick="jumpEvidence(${f.page_index});return false">查看本页</a>）</p>` : ''}
+             onclick="lightbox(this.src, '')">
+        ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" onclick="lightbox(this.src, '')">`).join('')}
+        </div>
+        ${f.sub_captions?.length ? `<p class="muted" style="font-size:11px">${esc(f.sub_captions.join(' | ').slice(0, 160))}</p>` : ''}
         <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${f.page_index});return false">📄 第${f.page_index + 1}页</a> · ${esc(f.caption || '（无题注）')}</p>
       </div>`).join('') + '</div>' : '') +
     (tables.length ? `<div class="card"><h2>📋 表 (${tables.length})</h2>` +
@@ -1760,11 +1764,16 @@ const sanitizeTbl = html => (html || '')
 /* 块 → HTML（图/表内嵌正文；文本 linkify 引用） */
 const renderBlockBody = b => {
   const pid = state.current?.id;
-  if (b.type === 'image' && (b.asset_path || (b.bbox && false))) {
-    const name = (b.asset_path || '').split('/').pop();
+  if (b.type === 'image' && b.asset_path) {
+    const name = b.asset_path.split('/').pop();
     if (!name) return '';
-    return `<figure class="inline-fig">
-      <img loading="lazy" src="/api/papers/${pid}/images/${name}" onclick="lightbox(this.src, '')">
+    const fig = (state.assets?.figures || []).find(f => f.image_path === b.asset_path);
+    const subs = fig?.extra_images || [];
+    const subCaps = fig?.sub_captions || [];
+    const imgs = [name, ...subs.map(p => p.split('/').pop())];
+    return `<figure class="inline-fig ${imgs.length > 1 ? 'fig-group' : ''}">
+      ${imgs.map(n => `<img loading="lazy" src="/api/papers/${pid}/images/${n}" onclick="lightbox(this.src, '')">`).join('')}
+      ${subCaps.length ? `<figcaption class="muted" style="font-size:11px">${esc(subCaps.join(' | ').slice(0, 200))}</figcaption>` : ''}
     </figure>`;
   }
   if (b.type === 'equation' && (b.text || b.en)) {

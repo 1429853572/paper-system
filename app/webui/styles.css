@@ -487,3 +487,10 @@ table.list input[type=checkbox] { width: auto; }
 .fill-hint { color: #b6bdd6; font-size: 12px; cursor: pointer; user-select: none;
              border-bottom: 1px dashed #ccd3ea; padding: 0 2px; }
 .fill-hint:hover { color: var(--primary); border-color: var(--primary); }
+
+/* 组图 */
+.fig-group { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: flex-start; }
+.fig-group img { max-width: 46%; }
+.inline-fig figcaption { text-align: center; margin-top: 4px; }
+.fig-grid { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.fig-grid img { max-width: 46%; cursor: zoom-in; }

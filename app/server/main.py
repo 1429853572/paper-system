@@ -822,10 +822,14 @@ def paper_assets(paper_id: str, request: Request):
         if others:
             if numbered:  # 子图归并到本页第一个编号主图
                 figures[-1]["extra_images"] = [o["image_path"] for o in others]
+                figures[-1]["sub_captions"] = [o["caption"] for o in others if o["caption"]]
             else:
-                for o in others:
-                    o["label"] = f"第{pg + 1}页·插图"
-                    figures.append(o)
+                # 无编号组图（teaser 等）：合并为一张组图卡
+                first = others[0]
+                first["label"] = f"第{pg + 1}页·组图"
+                first["extra_images"] = [o["image_path"] for o in others[1:]]
+                first["sub_captions"] = [o["caption"] for o in others if o["caption"]]
+                figures.append(first)
     return {"figures": figures, "tables": tables}
 
 
