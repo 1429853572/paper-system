@@ -23,11 +23,14 @@ app = FastAPI(title="paper-system", docs_url=None, redoc_url=None)
 
 
 @app.middleware("http")
-async def _no_cache_ui(request: Request, call_next):
-    """页面与静态资源总是再验证（ETag 304），避免改版后浏览器跑旧 JS."""
+async def _cache_policy(request: Request, call_next):
+    """缓存策略：vendor 库（版本锁定、不变）长缓存 immutable；
+    业务页面与 JS/CSS 保持 no-cache（ETag 304），改版后浏览器不跑旧代码."""
     resp = await call_next(request)
     p = request.url.path
-    if p.startswith("/static") or p in ("/", "/login"):
+    if p.startswith("/static/vendor/"):
+        resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
+    elif p.startswith("/static") or p in ("/", "/login"):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
 

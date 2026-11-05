@@ -64,6 +64,10 @@ def _log_usage(user_id: int | None, cfg: LLMConfig, usage: dict, paper_id: str |
         )
 
 
+# 模块级共享 httpx 客户端：复用连接池，避免每次问答/翻译都建新连接
+_SHARED_HTTP = httpx.Client(timeout=300)
+
+
 class LLMClient:
     """非流式 + 流式；带 429 指数退避。"""
 
@@ -71,7 +75,6 @@ class LLMClient:
         self.cfg = cfg
         self.user_id = user_id
         self.paper_id = paper_id
-        self._http = httpx.Client(timeout=300)
 
     # ---- OpenAI 协议 ----
     def _openai_body(self, messages: list[dict], max_tokens: int, stream: bool) -> dict:
@@ -118,7 +121,7 @@ class LLMClient:
         else:
             body = self._openai_body(messages, max_tokens, stream)
             headers = self._openai_headers()
-        return self._http.build_request(
+        return _SHARED_HTTP.build_request(
             "POST", self._endpoint(), json=body, headers={**headers, "Content-Type": "application/json"}
         )
 
@@ -131,7 +134,7 @@ class LLMClient:
         for attempt in range(4):
             req = self._request(messages, max_tokens, stream=False)
             try:
-                r = self._http.send(req)
+                r = _SHARED_HTTP.send(req)
             except httpx.HTTPError as e:
                 last_err = str(e)
                 time_sleep = self._retry(attempt)
@@ -163,7 +166,7 @@ class LLMClient:
         """流式（SSE）； yielded 为文本增量。"""
         req = self._request(messages, max_tokens, stream=True)
         usage: dict = {}
-        r = self._http.send(req, stream=True)
+        r = _SHARED_HTTP.send(req, stream=True)
         try:
             if r.status_code == 429 or r.status_code >= 500:
                 raise RuntimeError(f"LLM API {r.status_code}")
