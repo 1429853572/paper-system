@@ -341,3 +341,8 @@ table.list th { color: var(--muted); font-weight: 500; }
                       color: #fff; font-size: 22px; cursor: pointer; }
 .asset img { cursor: zoom-in; }
 .asset-badge, .asset a { cursor: pointer; }
+
+/* 阅读页冻结页签：页面容器不滚动（各栏内部自管），页签 sticky 兜底 */
+#page-reader { overflow: hidden; }
+.view-tabs, .r-subtabs { position: sticky; top: 0; z-index: 6; }
+.r-subtabs { top: 0; }
