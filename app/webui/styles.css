@@ -367,3 +367,11 @@ table.list th { color: var(--muted); font-weight: 500; }
              background: #eef1ff; border-radius: 8px; font-size: 13px; }
 .lib-batch select { width: auto; }
 table.list input[type=checkbox] { width: auto; }
+
+/* 条目悬浮删除 */
+.paper-item { position: relative; }
+.pi-del { display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+          border: none; background: #fdeaea; color: var(--err); border-radius: 6px;
+          padding: 3px 6px; font-size: 12px; }
+.paper-item:hover .pi-del { display: inline-block; }
+.pi-del:hover { background: var(--err); color: #fff; }

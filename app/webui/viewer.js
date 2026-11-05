@@ -161,11 +161,13 @@ function renderPapers() {
           <span>${(p.page_count || '?')}页</span><span>${p.file_size ? (p.file_size/1048576).toFixed(1) + 'M' : ''}</span>
         </div>
       </div>
+      <button class="pi-del" title="移入回收站">🗑</button>
     </div>`).join('');
   $$('.paper-item', el).forEach(item => {
     const id = item.dataset.id;
     item.onclick = e => {
       if (e.target.type === 'checkbox') { toggleSelect(id, e.target.checked); return; }
+      if (e.target.classList.contains('pi-del')) { quickDelete(id); return; }
       if (state.selectMode) { toggleSelect(id, !state.selected.has(id)); return; }
       openPaper(id);   // 普通模式：单击任意位置直接打开
     };
@@ -1424,4 +1426,19 @@ window.retryPaperJob = async pid => {
   await api(`/api/papers/${pid}/parse`, {method: 'POST'}).catch(() => {});
   await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [pid]})}).catch(() => {});
   toast('已重新入队'); renderCollectionsPage();
+};
+
+window.quickDelete = async pid => {
+  const p = state.papers.find(x => x.id === pid);
+  if (p?.visibility === 'shared' && state.me?.role !== 'admin') {
+    toast('共享论文仅管理员可删除'); return;
+  }
+  if (!confirm(`《${(p?.title || pid).slice(0, 40)}》移入回收站？（30 天内可恢复）`)) return;
+  try {
+    await api('/api/papers/' + pid, {method: 'DELETE'});
+    toast('已移入回收站');
+    if (state.current?.id === pid) { state.current = null; state.blocks = []; renderContentView(); }
+    state.qaPapers.delete(pid);
+    loadPapers();
+  } catch (e) { toast(e.message); }
 };
