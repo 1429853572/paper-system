@@ -446,24 +446,36 @@ class Scheduler:
             time.sleep(3600)
 
     def _daily_backup(self) -> None:
-        """每日自动备份：当天已有则跳过；VACUUM INTO 在线快照 + 按 retention.backup_keep 轮转."""
+        """每日自动备份：DB 快照（VACUUM INTO）+ papers/ 文件目录打包；按 backup_keep 轮转."""
+        import shutil
+
         from .config import DATA_DIR
 
         today = time.strftime("%Y-%m-%d")
         bdir = DATA_DIR / "backups"
-        target = bdir / f"db-{today}.db"
-        if target.exists():
+        bdir.mkdir(parents=True, exist_ok=True)
+        done = (bdir / f"db-{today}.db").exists() and (bdir / f"papers-{today}.tar.gz").exists()
+        if done:
             return
-        db.backup_to(target)
+        if not (bdir / f"db-{today}.db").exists():
+            db.backup_to(bdir / f"db-{today}.db")
+        papers_dir = DATA_DIR / "papers"
+        papers_tar = bdir / f"papers-{today}.tar.gz"
+        if papers_dir.is_dir() and not papers_tar.exists():
+            # papers/ 文件目录与 DB 必须配套备份——只有 DB 快照无法复原
+            shutil.make_archive(str(papers_tar)[:-7], "gztar", root_dir=DATA_DIR,
+                                base_dir="papers")
         keep = int(config.get("retention", "backup_keep"))
-        backups = sorted(bdir.glob("db-*.db"))
-        for old in backups[:-keep]:
-            try:
-                old.unlink()
-                log.info("轮转删除过期备份 %s", old.name)
-            except OSError:
-                pass
-        log.info("每日备份完成: %s（保留 %d 份）", target.name, keep)
+        # 轮转覆盖全部备份形态（db/papers/审计快照），按日期名排序
+        for pattern in ("db-*.db", "papers-*.tar.gz", "pre-audit-*.db"):
+            backups = sorted(bdir.glob(pattern))
+            for old in backups[:-keep]:
+                try:
+                    old.unlink()
+                    log.info("轮转删除过期备份 %s", old.name)
+                except OSError:
+                    pass
+        log.info("每日备份完成: db/papers 各保留 %d 份", keep)
 
     def hard_delete_paper(self, paper_id: str) -> None:
         """彻底删除：文件 + 级联行（FK ON DELETE CASCADE 处理表内引用）。"""

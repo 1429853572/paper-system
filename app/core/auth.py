@@ -40,18 +40,32 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 # ---- session cookie 值 ----
-def make_session(user_id: int, role: str) -> str:
-    return _signer.dumps({"uid": user_id, "role": role})
+def make_session(user_id: int, role: str, token_ver: int) -> str:
+    """签发会话 token；payload 带 token_ver，改密/登出所有设备后旧 token 失效."""
+    return _signer.dumps({"uid": user_id, "role": role, "ver": token_ver})
 
 
 def parse_session(token: str) -> dict[str, Any] | None:
     try:
         data = _signer.loads(token, max_age=SESSION_MAX_AGE)
         if isinstance(data, dict) and "uid" in data:
-            return {"id": data["uid"], "role": data.get("role", "member")}
+            return {"id": data["uid"], "role": data.get("role", "member"),
+                    "ver": data.get("ver", 0)}
         return None
     except BadSignature:
         return None
+
+
+def bump_token_ver(user_id: int) -> None:
+    """会话吊销：版本号 +1 → 该用户所有已签发 token 立即失效."""
+    with db.write() as c:
+        c.execute("UPDATE users SET token_ver=token_ver+1 WHERE id=?", (user_id,))
+
+
+def check_token_ver(session_user: dict[str, Any]) -> bool:
+    """校验 token 内版本号与数据库一致（不一致 = 已被吊销）."""
+    row = db.one("SELECT token_ver FROM users WHERE id=?", (session_user["id"],))
+    return row is not None and session_user.get("ver", 0) == (row["token_ver"] or 0)
 
 
 # ---- 登录限速 ----
@@ -81,9 +95,10 @@ def ensure_admin() -> None:
 
 
 def authenticate(username: str, password: str) -> dict[str, Any] | None:
-    row = db.one("SELECT id,username,password_hash,role FROM users WHERE username=?", (username,))
-    if row and verify_password(password, row["password_hash"]):
-        return {"id": row["id"], "username": row["username"], "role": row["role"]}
+    row = db.one("SELECT id,username,password_hash,role,disabled,token_ver FROM users WHERE username=?", (username,))
+    if row and not (row["disabled"] or 0) and verify_password(password, row["password_hash"]):
+        return {"id": row["id"], "username": row["username"], "role": row["role"],
+                "token_ver": row["token_ver"] or 0}
     return None
 
 

@@ -1679,6 +1679,18 @@ async function renderSettings() {
   $('#page-settings').innerHTML = `
     <div class="set-grid">
       <div class="set-col">
+        <div class="set-card">
+          <div class="set-head">${icon('lock')} 账号安全</div>
+          <form id="f-password">
+            <label>当前密码 <input name="old_password" type="password" required></label>
+            <label>新密码（至少 8 位） <input name="new_password" type="password" minlength="8" required></label>
+            <label>确认新密码 <input name="confirm" type="password" minlength="8" required></label>
+            <div class="set-actions">
+              <button class="btn primary" type="submit">${icon('check')} 修改密码</button>
+              <button class="btn" type="button" onclick="logoutAll()">${icon('lock')} 登出所有设备</button>
+            </div>
+          </form>
+        </div>
         <h2 class="page-h">${icon('key')} LLM 配置（BYOK）</h2>
         <p class="muted" style="font-size:12px;margin:2px 0 12px">聊天/翻译各自独立；embedding 本机运行无需配置。密钥加密存储、永不回显。</p>
         ${tpl('chat', d.chat, d.chat)}
@@ -1708,6 +1720,17 @@ async function renderSettings() {
   };
   bind('f-chat', 'chat'); bind('f-translate', 'translate');
   loadGlossary();
+  $('#f-password').onsubmit = async e => {
+    e.preventDefault();
+    const f = e.target;
+    if (f.new_password.value !== f.confirm.value) { toast('两次输入的新密码不一致'); return; }
+    try {
+      await api('/api/password', {method: 'POST', body: JSON.stringify({
+        old_password: f.old_password.value, new_password: f.new_password.value})});
+      toast('密码已修改（其他设备已登出）');
+      f.reset();
+    } catch (err) { toast('修改失败: ' + err.message); }
+  };
   if (isAdmin) renderAdminZone();
 }
 async function renderAdminZone() {
@@ -1728,7 +1751,10 @@ async function renderAdminZone() {
         <td>${esc(u.username)} ${u.role === 'admin' ? '<span class="badge priv">admin</span>' : ''}</td>
         <td>${u.papers} 篇</td>
         <td style="width:40%"><input style="font-size:11px" id="q-${u.id}" value='${esc(u.overrides || '{}')}'></td>
-        <td><button class="btn small" onclick="saveQuota(${u.id})">${icon('save')}</button></td></tr>`).join('')}</table>
+        <td class="row-actions">
+          <button class="btn small" onclick="saveQuota(${u.id})" title="保存限额">${icon('save')}</button>
+          <button class="btn small danger" onclick="resetUserPw(${u.id}, '${esc(u.username)}')" title="重置为临时密码">${icon('key')}</button>
+        </td></tr>`).join('')}</table>
     </div>
     <div class="set-card">
       <div class="set-head">公共额度池 <span class="muted" style="font-size:11px">未配置 key 的成员将使用你的 POOL key</span></div>
@@ -1741,6 +1767,19 @@ window.createInvite = async () => {
   const el = $('#invite-out');
   if (el) el.innerHTML = `邀请码: <code style="font-size:16px">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
 };
+window.logoutAll = async () => {
+  if (!confirm('登出所有设备？其他已登录的会话将全部失效。')) return;
+  await api('/api/logout-all', {method: 'POST'});
+  toast('已登出所有设备');
+};
+window.resetUserPw = async (uid, uname) => {
+  if (!confirm(`重置 ${uname} 的密码？将生成一次性临时密码，且该用户所有会话立即失效。`)) return;
+  try {
+    const r = await api(`/api/admin/users/${uid}/reset-password`, {method: 'POST'});
+    prompt(`已重置。${uname} 的临时密码（请立即复制转交）：`, r.temp_password);
+  } catch (e) { toast('重置失败: ' + e.message); }
+};
+
 window.saveQuota = async uid => {
   try {
     const overrides = JSON.parse($('#q-' + uid).value || '{}');

@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS users (
     username      TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role          TEXT NOT NULL DEFAULT 'member',   -- admin | member
+    token_ver     INTEGER NOT NULL DEFAULT 0,       -- 会话吊销版本号（改密/登出所有设备 +1）
+    disabled      INTEGER NOT NULL DEFAULT 0,       -- 1=禁用登录
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -277,6 +279,12 @@ class Database:
             c.execute("PRAGMA journal_mode=WAL")
 
     def _migrate(self, c: sqlite3.Connection, from_v: int) -> None:
+        if from_v < 12:
+            # 会话吊销：token 版本号（改密/登出所有设备时 +1，旧 token 全失效）
+            c.execute("ALTER TABLE users ADD COLUMN token_ver INTEGER NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0")
+            # 段落笔记功能已下线（残留半成品：表在但无 API/UI）
+            c.execute("DROP TABLE IF EXISTS block_notes")
         if from_v < 11:
             # 段落合并功能已下线（端点随 238e5c8 一并移除）→ 删掉空表
             c.execute("DROP TABLE IF EXISTS block_merges")

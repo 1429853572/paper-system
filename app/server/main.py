@@ -22,6 +22,24 @@ from core.mineru_client import mineru
 app = FastAPI(title="paper-system", docs_url=None, redoc_url=None)
 
 
+import logging
+log = logging.getLogger("app")
+
+
+def audit(user_id: int | None, action: str, detail: str = "") -> None:
+    """敏感操作审计（audit_log 表；管理区可查）。"""
+    with db.write() as c:
+        c.execute("INSERT INTO audit_log(user_id,action,detail) VALUES(?,?,?)",
+                  (user_id, action, detail[:300]))
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """未捕获异常统一返回 JSON（此前 500 为纯文本，前端无法解析提示）。"""
+    log.exception("未处理异常 %s %s", request.method, request.url.path)
+    return JSONResponse({"detail": "服务器内部错误"}, status_code=500)
+
+
 @app.middleware("http")
 async def _cache_policy(request: Request, call_next):
     """缓存策略：vendor 库（版本锁定、不变）长缓存 immutable；
@@ -32,6 +50,12 @@ async def _cache_policy(request: Request, call_next):
         resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
     elif p.startswith("/static") or p in ("/", "/login"):
         resp.headers["Cache-Control"] = "no-cache"
+    # 安全响应头（同源部署；CSP 允许内联样式——KaTeX/pdf.js 需要）
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers.setdefault("Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self'; worker-src 'self' blob:; font-src 'self'; connect-src 'self'")
     return resp
 
 WEBUI_DIR = Path(__file__).parent.parent / "webui"
@@ -47,7 +71,9 @@ def current_user(request: Request) -> dict | None:
             return {"id": row["id"], "username": row["username"], "role": "admin"}
     token = request.cookies.get("ps_session")
     if token:
-        return auth.parse_session(token)
+        u = auth.parse_session(token)
+        if u and auth.check_token_ver(u):
+            return u
     return None
 
 
@@ -134,10 +160,11 @@ async def login(request: Request):
     if user is None:
         auth.record_login_fail(ip)
         raise HTTPException(401, "用户名或密码错误")
-    token = auth.make_session(user["id"], user["role"])
+    token = auth.make_session(user["id"], user["role"], user.get("token_ver", 0))
     resp = JSONResponse({"id": user["id"], "username": user["username"], "role": user["role"]})
     resp.set_cookie("ps_session", token, httponly=True, samesite="lax",
-                    max_age=30 * 24 * 3600)
+                    max_age=auth.SESSION_MAX_AGE)
+    audit(user["id"], "login", user["username"])
     return resp
 
 
@@ -145,6 +172,46 @@ async def login(request: Request):
 def logout():
     resp = JSONResponse({"ok": True})
     resp.delete_cookie("ps_session")
+    return resp
+
+
+@app.post("/api/password")
+async def change_password(request: Request):
+    """修改自己的密码：验证旧密码 → 更新 → token_ver+1 吊销全部旧会话（含当前）。"""
+    u = require(request)
+    body = await request.json()
+    old_pw = body.get("old_password") or ""
+    new_pw = body.get("new_password") or ""
+    if len(new_pw) < 8:
+        raise HTTPException(400, "新密码至少 8 位")
+    row = db.one("SELECT password_hash FROM users WHERE id=?", (u["id"],))
+    if not row or not auth.verify_password(old_pw, row["password_hash"]):
+        raise HTTPException(400, "旧密码不正确")
+    auth.bump_token_ver(u["id"])
+    with db.write() as c:
+        c.execute("UPDATE users SET password_hash=? WHERE id=?",
+                  (auth.hash_password(new_pw), u["id"]))
+    audit(u["id"], "change-password", db.one("SELECT username FROM users WHERE id=?", (u["id"],))["username"])
+    resp = JSONResponse({"ok": True})
+    # 当前会话也被吊销 → 重新签发，避免自己被踢出
+    row2 = db.one("SELECT role, token_ver FROM users WHERE id=?", (u["id"],))
+    token = auth.make_session(u["id"], row2["role"], row2["token_ver"])
+    resp.set_cookie("ps_session", token, httponly=True, samesite="lax",
+                    max_age=auth.SESSION_MAX_AGE)
+    return resp
+
+
+@app.post("/api/logout-all")
+def logout_all(request: Request):
+    """登出所有设备：token_ver+1，全部旧会话失效（当前设备除外——重新签发）。"""
+    u = require(request)
+    auth.bump_token_ver(u["id"])
+    audit(u["id"], "logout-all", (db.one("SELECT username FROM users WHERE id=?", (u["id"],)) or {"username": "?"})["username"])
+    row2 = db.one("SELECT role, token_ver FROM users WHERE id=?", (u["id"],))
+    resp = JSONResponse({"ok": True})
+    token = auth.make_session(u["id"], row2["role"], row2["token_ver"])
+    resp.set_cookie("ps_session", token, httponly=True, samesite="lax",
+                    max_age=auth.SESSION_MAX_AGE)
     return resp
 
 
@@ -579,6 +646,23 @@ def admin_users(request: Request):
         "(SELECT COUNT(*) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS papers "
         "FROM users u LEFT JOIN user_quotas q ON q.user_id=u.id ORDER BY u.id")
     return {"users": [dict(r) for r in rows]}
+
+
+@app.post("/api/admin/users/{user_id}/reset-password")
+def admin_reset_password(user_id: int, request: Request):
+    """admin 重置用户密码：生成一次性临时密码返回（用户登录后自行修改）。"""
+    admin = require_admin(request)
+    row = db.one("SELECT id, username FROM users WHERE id=?", (user_id,))
+    if row is None:
+        raise HTTPException(404, "用户不存在")
+    import secrets
+    temp = secrets.token_urlsafe(9)
+    auth.bump_token_ver(user_id)
+    with db.write() as c:
+        c.execute("UPDATE users SET password_hash=? WHERE id=?",
+                  (auth.hash_password(temp), user_id))
+    audit(admin["id"], "reset-password", f"{row['username']}(id={user_id})")
+    return {"ok": True, "temp_password": temp, "username": row["username"]}
 
 
 @app.put("/api/admin/users/{user_id}/quota")
@@ -1384,18 +1468,22 @@ async def chat_stream(request: Request):
         except Exception as e:  # noqa: BLE001
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200]})}\n\n"
         answer_text = "".join(full)
-        check = qa.validate_citations(answer_text, evidence)
-        payload = {"type": "done", "session_id": session_id, "mode": prepared["mode"],
-                   "truncated": prepared["truncated"],
-                   "citations": {"cited": check["cited"], "illegal": check["illegal"]},
-                   "evidence": check["evidence"]}
-        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-        with db.write() as c:
-            c.execute(
-                "INSERT INTO chat_messages(session_id,role,content,evidence) VALUES(?,?,?,?)",
-                (session_id, "assistant", answer_text,
-                 json.dumps(check["evidence"], ensure_ascii=False)),
-            )
+        try:
+            check = qa.validate_citations(answer_text, evidence)
+            payload = {"type": "done", "session_id": session_id, "mode": prepared["mode"],
+                       "truncated": prepared["truncated"],
+                       "citations": {"cited": check["cited"], "illegal": check["illegal"]},
+                       "evidence": check["evidence"]}
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            with db.write() as c:
+                c.execute(
+                    "INSERT INTO chat_messages(session_id,role,content,evidence) VALUES(?,?,?,?)",
+                    (session_id, "assistant", answer_text,
+                     json.dumps(check["evidence"], ensure_ascii=False)),
+                )
+        except Exception as e:  # noqa: BLE001
+            log.exception("chat 收尾失败 %s", session_id)
+            yield f"data: {json.dumps({'type': 'error', 'message': f'回答收尾失败: {str(e)[:120]}'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})

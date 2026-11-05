@@ -50,6 +50,27 @@ done
 ME=$(curl -sf "$BASE/api/me" -H "Authorization: Bearer $TOKEN" || echo '')
 echo "$ME" | grep -q '"role":"admin"' && ok "CLI token /api/me" || bad "CLI token 异常: $ME"
 
+# 5b. 改密码闭环：改密 → 旧密码 401 → 新密码可用 → 恢复原密码
+PW_TMP=$(python3 -c "import secrets;print(secrets.token_urlsafe(12))")
+CJ2=$(mktemp)
+curl -sf -c "$CJ2" -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+    -d "{\"username\":\"admin\",\"password\":\"$PW\"}" >/dev/null
+R1=$(curl -sf -b "$CJ2" -c "$CJ2" -X POST "$BASE/api/password" -H 'Content-Type: application/json'     -d "{\"old_password\":\"$PW\",\"new_password\":\"$PW_TMP\"}" || echo '')
+echo "$R1" | grep -q '"ok":true' && ok "改密码接受" || bad "改密码失败: $R1"
+R2=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" -H 'Content-Type: application/json'     -d "{\"username\":\"admin\",\"password\":\"$PW\"}")
+[[ "$R2" == 401 ]] && ok "旧密码已失效" || bad "旧密码仍可用（HTTP $R2）"
+R3=$(curl -sf -X POST "$BASE/api/login" -H 'Content-Type: application/json'     -d "{\"username\":\"admin\",\"password\":\"$PW_TMP\"}" || echo '')
+echo "$R3" | grep -q '"role":"admin"' && ok "新密码可用" || bad "新密码登录失败: $R3"
+# 恢复原密码（避免影响后续用例）
+curl -sf -b "$CJ2" -X POST "$BASE/api/password" -H 'Content-Type: application/json'     -d "{\"old_password\":\"$PW_TMP\",\"new_password\":\"$PW\"}" >/dev/null && ok "密码已还原" || bad "密码还原失败"
+rm -f "$CJ2"
+
+# 5c. 安全响应头
+H1=$(curl -s -D- -o /dev/null "$BASE/")
+echo "$H1" | grep -qi "x-frame-options: DENY" && ok "X-Frame-Options" || bad "缺 X-Frame-Options"
+echo "$H1" | grep -qi "x-content-type-options: nosniff" && ok "X-Content-Type-Options" || bad "缺 XCTO"
+echo "$H1" | grep -qi "content-security-policy" && ok "CSP" || bad "缺 CSP"
+
 # 6. 未登录访问受保护端点应 401
 CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/papers")
 [[ "$CODE" == 401 ]] && ok "未登录 401 保护" || bad "未登录访问返回 $CODE（应 401）"
