@@ -237,9 +237,14 @@ def canonical_name(paper) -> str:
     """规范文件名：首作者姓+年份+标题（导出/PDF下载统一使用；元数据更新自动跟随）."""
     import re as _re
 
-    title = (paper["title"] or "").strip() or paper["id"]
-    authors = (paper["authors"] or "").strip()
-    year = (paper["year"] or "").strip()
+    def g(k):
+        try:
+            return paper[k] or ""
+        except (IndexError, KeyError):
+            return ""
+    title = g("title").strip() or paper["id"]
+    authors = g("authors").strip()
+    year = g("year").strip()
     surname = ""
     if authors:
         first = authors.split(",")[0].strip()
