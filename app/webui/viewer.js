@@ -266,7 +266,7 @@ async function openPaper(id) {
   // PDF
   try {
     state.pdfDoc = await pdfjsLib.getDocument(`/api/papers/${id}/pdf`).promise;
-    state.pageNum = 1; state.fitWidth = true;
+    state.pageNum = 1; state.fitWidth = true; _pdfBuilt = null;
     $('#pdf-toolbar').hidden = false;
     renderPage();
     applyVsplit();   // 按当前分栏宽度自适应首帧
@@ -299,24 +299,78 @@ async function openPaper(id) {
     renderQaTab();   // dock 常驻，范围变化即刷新
   }
 }
-async function renderPage(opts = {}) {
-  const page = await state.pdfDoc.getPage(state.pageNum);
-  $('#pg-label').textContent = `${state.pageNum} / ${state.pdfDoc.numPages}`;
-  $('#zoom-label').textContent = Math.round(state.scale * 100) + '%';
+async function renderPage(opts = {}) { /* 连续模式入口：滚动到当前页并维护覆盖层 */
+  await pdfEnsureAll();
+  pdfScrollToPage(state.pageNum, opts.noFollow);
+}
+let _pdfBuilt = null;   // {pid, scale, wrappers:Map}
+async function pdfEnsureAll() {
+  if (!state.pdfDoc) return;
+  if (_pdfBuilt && _pdfBuilt.pid === state.current?.id && _pdfBuilt.scale === state.scale) return;
   const host = $('#pdf-host');
-  $$('.hl-rect', host).forEach(x => x.remove());
-  $$('.layout-rect', host).forEach(x => x.remove());   // 清残留布局框（wrap 重建已带走，双保险）
-  $$('.pdf-host .pdf-page').forEach(x => x.remove());
+  host.innerHTML = '';
+  const wraps = new Map();
+  _pdfBuilt = {pid: state.current?.id, scale: state.scale, wraps};
+  for (let i = 1; i <= state.pdfDoc.numPages; i++) {
+    const w = document.createElement('div');
+    w.className = 'pdf-page'; w.dataset.page = i - 1;
+    w.innerHTML = `<div class="pdf-ph" style="height:${Math.round(state.pdfDoc.pgHeights?.[i-1] || 1000)}px">…</div>`;
+    host.appendChild(w);
+    wraps.set(i - 1, w);
+  }
+  // 预计算各页高度（按第一页比例），占位防跳动
+  const p1 = await state.pdfDoc.getPage(1);
+  const v1 = p1.getViewport({scale: state.scale});
+  state.pdfDoc.pgHeights = [];
+  for (let i = 1; i <= state.pdfDoc.numPages; i++) {
+    const pg = await state.pdfDoc.getPage(i);
+    const vp = pg.getViewport({scale: state.scale});
+    state.pdfDoc.pgHeights[i-1] = vp.height;
+    const w = wraps.get(i - 1);
+    w.querySelector('.pdf-ph').style.height = Math.round(vp.height) + 'px';
+    state.pdfDoc[`pgvp_${i}`] = vp;
+  }
+  // 懒渲染观察器：进入视口即渲染该页（画布+文字层+覆盖层）
+  if (state._pdfObs) state._pdfObs.disconnect();
+  state._pdfObs = new IntersectionObserver(async entries => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      const wrap = en.target;
+      if (!wrap.dataset.rendered) { wrap.dataset.rendered = '1'; await renderOneWrap(wrap); }
+    }
+  }, { root: $('#pdf-host'), rootMargin: '600px 0px' });
+  wraps.forEach(w => state._pdfObs.observe(w));
+  // 当前页可见性 → 同步页码 + 右侧跟随
+  if (state._pdfPageObs) state._pdfPageObs.disconnect();
+  state._pdfPageObs = new IntersectionObserver(entries => {
+    const vis = entries.filter(e => e.isIntersecting)
+      .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+    if (!vis) return;
+    const pg = +vis.target.dataset.page + 1;
+    if (pg !== state.pageNum) {
+      state.pageNum = pg;
+      $('#pg-label').textContent = `${pg} / ${state.pdfDoc.numPages}`;
+      if (state.syncLink && !state._suppressFollow && ['orig','bilingual','zh'].includes(state.view)) {
+        const first = $(`#content-view .blk[data-page="${pg - 1}"]`);
+        if (first && typeof first.scrollIntoView === 'function') first.scrollIntoView({block: 'start'});
+      }
+    }
+  }, { root: $('#pdf-host'), threshold: [0.35, 0.6] });
+  wraps.forEach(w => state._pdfPageObs.observe(w));
+  await renderOneWrap(wraps.get(state.pageNum - 1));   // 立即渲染当前页
+}
+async function renderOneWrap(wrap) {
+  if (!wrap) return;
+  const idx = +wrap.dataset.page;
+  const page = await state.pdfDoc.getPage(idx + 1);
   const vp = page.getViewport({scale: state.scale});
-  const wrap = document.createElement('div');
-  wrap.className = 'pdf-page';
+  const host0 = $('#pdf-host'); host0.style.setProperty('--scale-factor', state.scale);
+  wrap.innerHTML = '';
   const canvas = document.createElement('canvas');
   canvas.width = vp.width; canvas.height = vp.height;
   wrap.appendChild(canvas);
-  host.appendChild(wrap);
   await page.render({canvasContext: canvas.getContext('2d'), viewport: vp}).promise;
-  // 文字层：透明可选中（划词/复制）
-  host.style.setProperty('--scale-factor', state.scale);
+  wrap._vp = vp; wrap._pageObj = page;
   try {
     const tc = await page.getTextContent();
     const tl = document.createElement('div');
@@ -324,40 +378,53 @@ async function renderPage(opts = {}) {
     tl.style.width = vp.width + 'px'; tl.style.height = vp.height + 'px';
     wrap.appendChild(tl);
     await new pdfjsLib.TextLayer({textContentSource: tc, container: tl, viewport: vp}).render();
-  } catch (e) { console.warn('textLayer 跳过:', e); }
-  state._lastVP = vp; state._lastPage = page;
-  drawHighlights(page, vp);
-  // 版面布局框（可开关）：当前页所有块的检测边界
+  } catch (e) {}
+  drawOverlays(wrap);
+}
+function drawOverlays(wrap) {
+  if (!wrap || !wrap._vp) return;
+  const idx = +wrap.dataset.page;
+  const vp = wrap._vp;
+  // 黄框：当前激活块（在该页才画）
+  const active = $('.blk.active');
+  $$('.hl-rect', wrap).forEach(x => x.remove());
+  if (active && +active.dataset.page === idx && active.dataset.bbox && active.dataset.bbox !== '') {
+    try { JSON.parse(active.dataset.bbox).forEach(b => {
+      if (!b || b.length < 4) return;
+      const r = document.createElement('div');
+      r.className = 'hl-rect';
+      r.style.left = (b[0]*vp.width)+'px'; r.style.top = (b[1]*vp.height)+'px';
+      r.style.width = ((b[2]-b[0])*vp.width)+'px'; r.style.height = ((b[3]-b[1])*vp.height)+'px';
+      wrap.appendChild(r);
+    }); } catch {}
+  }
+  // 布局框
+  $$('.layout-rect', wrap).forEach(x => x.remove());
   if (state.showLayout) {
-    const wrap = $('.pdf-page');
     const colors = {text: '#4a6cf7', title: '#8a5cf6', equation: '#e6a23c',
                     table: '#2eaa6e', image: '#e0528f', ref_text: '#8a93b0'};
-    state.blocks.filter(b => b.page_index === state.pageNum - 1 && b.bbox).forEach(b => {
+    state.blocks.filter(b => b.page_index === idx && b.bbox).forEach(b => {
       const bb = JSON.parse(b.bbox);
       if (!bb || bb.length < 4) return;
       const r = document.createElement('div');
       r.className = 'layout-rect';
-      r.style.left = (bb[0] * vp.width) + 'px';
-      r.style.top = (bb[1] * vp.height) + 'px';
-      r.style.width = ((bb[2] - bb[0]) * vp.width) + 'px';
-      r.style.height = ((bb[3] - bb[1]) * vp.height) + 'px';
+      r.style.left = (bb[0]*vp.width)+'px'; r.style.top = (bb[1]*vp.height)+'px';
+      r.style.width = ((bb[2]-bb[0])*vp.width)+'px'; r.style.height = ((bb[3]-bb[1])*vp.height)+'px';
       r.style.borderColor = colors[b.type] || '#9aa3bd';
-      r.title = `${b.type} · ${b.block_id.slice(-11)}`;
+      r.title = `${b.type}`;
       wrap.appendChild(r);
     });
   }
-  // 🔗 左→右：翻页/跳页时右侧滚到本页首块
-  if (state.syncLink && !opts.noFollow && ['orig', 'bilingual', 'zh'].includes(state.view)) {
-    const first = $(`#content-view .blk[data-page="${state.pageNum - 1}"]`);
-    if (first && typeof first.scrollIntoView === 'function') first.scrollIntoView({ block: 'start' });
-  }
 }
-function redrawHl() {
-  const host = $('#pdf-host');
-  $$('.hl-rect', host).forEach(x => x.remove());
-  const canvas = $('canvas', host);
-  if (canvas && state._lastVP) drawHighlights(state._lastPage, state._lastVP);
+function pdfScrollToPage(n, noFollow) {
+  const wrap = _pdfBuilt?.wraps?.get(n - 1);
+  if (!wrap) return;
+  state._suppressFollow = !noFollow ? false : true;   // 程序滚动时抑制回调跟随右侧
+  wrap.scrollIntoView({block: 'start'});
+  setTimeout(() => { state._suppressFollow = false; }, 350);
+  $('#pg-label').textContent = `${n} / ${state.pdfDoc.numPages}`;
 }
+function redrawHl() { _pdfBuilt?.wraps?.forEach(drawOverlays); }
 function drawHighlights(page, vp) {
   // 当前激活 block 有 bbox（归一化）→ 在对应页高亮（激活块在其他页则跳过）
   const active = $('.blk.active');
@@ -379,8 +446,8 @@ function drawHighlights(page, vp) {
 }
 $('#pg-prev').onclick = () => { if (state.pageNum > 1) { state.pageNum--; renderPage(); } };
 $('#pg-next').onclick = () => { if (state.pdfDoc && state.pageNum < state.pdfDoc.numPages) { state.pageNum++; renderPage(); } };
-$('#zoom-in').onclick = () => { state.scale = Math.min(3, state.scale + 0.2); renderPage(); };
-$('#zoom-out').onclick = () => { state.scale = Math.max(0.5, state.scale - 0.2); renderPage(); };
+$('#zoom-in').onclick = () => { state.scale = Math.min(3, state.scale + 0.2); state.fitWidth = false; _pdfBuilt = null; renderPage({noFollow: true}); };
+$('#zoom-out').onclick = () => { state.scale = Math.max(0.5, state.scale - 0.2); state.fitWidth = false; _pdfBuilt = null; renderPage({noFollow: true}); };
 state.showLayout = false;
 $('#layout-btn').onclick = () => {
   state.showLayout = !state.showLayout;
@@ -574,7 +641,8 @@ function renderContentView() {
     el.innerHTML = state.blocks.map(b => {
       const note = state._bnotes?.[b.block_id];
       const ord = state.showOrder ? `<span class="ord-badge" title="语义阅读顺序">${state.blocks.indexOf(b) + 1}</span>` : '';
-      return `<div class="blk" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${b.block_id}')">
+      const aux = ['page_number', 'footer', 'header', 'aside_text', 'page_footnote'].includes(b.type) ? ' blk-aux' : '';
+      return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${b.block_id}')">
         ${ord}${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
         ${note ? `<div class="bnote" title="双击段落编辑批注">📌 ${esc(note)}</div>` : ''}
       </div>`;}).join('');
@@ -1565,24 +1633,6 @@ window.delPaperFromLib = async pid => {
 };
 window.viewPaper = pid => { switchPage('reader'); openPaper(pid); };
 
-/* PDF 滚轮翻页（联动右跟随） */
-(() => {
-  let last = 0;
-  const host = $('#pdf-host');
-  host.addEventListener('wheel', e => {
-    if (e.ctrlKey) return;                 // 缩放手势不劫持
-    const now = Date.now();
-    if (now - last < 350 || Math.abs(e.deltaY) < 20) return;
-    last = now;
-    e.preventDefault();
-    const dir = e.deltaY > 0 ? 1 : -1;
-    const n = state.pageNum + dir;
-    if (state.pdfDoc && n >= 1 && n <= state.pdfDoc.numPages) {
-      state.pageNum = n;
-      renderPage();                        // 联动开时右侧自动滚到对应段
-    }
-  }, { passive: false });
-})();
 
 /* 图片灯箱预览 */
 window.lightbox = (src, caption) => {
@@ -1839,20 +1889,19 @@ const renderBlockBody = b => {
   document.addEventListener('mouseover', e => {
     const blk = e.target.closest && e.target.closest('.blk');
     clear();
-    if (!blk || !blk.dataset.bbox || blk.dataset.bbox === '' || !state._lastVP) return;
-    if (+blk.dataset.page !== state.pageNum - 1) return;   // 只画当前页
-    let bboxes;
-    try { bboxes = JSON.parse(blk.dataset.bbox); } catch { return; }
+    if (!blk || !blk.dataset.bbox || blk.dataset.bbox === '') return;
+    const pg = +blk.dataset.page;
+    const wrap = _pdfBuilt && _pdfBuilt.wraps.get(pg);
+    if (!wrap || !wrap._vp || wrap.dataset.rendered !== '1') return;
+    let bboxes; try { bboxes = JSON.parse(blk.dataset.bbox); } catch { return; }
     const b = (bboxes || [])[0];
     if (!b || b.length < 4) return;
-    const vp = state._lastVP;
+    const vp = wrap._vp;
     const r = document.createElement('div');
     r.className = 'hl-rect hl-hover';
-    r.style.left = (b[0] * vp.width) + 'px';
-    r.style.top = (b[1] * vp.height) + 'px';
-    r.style.width = ((b[2] - b[0]) * vp.width) + 'px';
-    r.style.height = ((b[3] - b[1]) * vp.height) + 'px';
-    $('#pdf-host .pdf-page').appendChild(r);
+    r.style.left = (b[0]*vp.width)+'px'; r.style.top = (b[1]*vp.height)+'px';
+    r.style.width = ((b[2]-b[0])*vp.width)+'px'; r.style.height = ((b[3]-b[1])*vp.height)+'px';
+    wrap.appendChild(r);
     tmp = r;
   });
   document.addEventListener('mouseout', e => {
@@ -1881,7 +1930,7 @@ window.fitPdf = () => {
   state.pdfDoc.getPage(1).then(p1 => {
     const base = p1.getViewport({scale: 1}).width;
     const s = Math.max(0.4, Math.min(3, w / base));
-    if (Math.abs(s - state.scale) > 0.02) { state.scale = Math.round(s * 20) / 20; renderPage({noFollow: true}); }
+    if (Math.abs(s - state.scale) > 0.02) { state.scale = Math.round(s * 20) / 20; _pdfBuilt = null; renderPage({noFollow: true}); }
   });
 };
 (() => {
@@ -1911,7 +1960,7 @@ window.fitPdf = () => {
     let rw;
     new ResizeObserver(() => {
       clearTimeout(rw);
-      rw = setTimeout(() => { if (state.pdfDoc) renderPage({noFollow: true}); }, 120);
+      rw = setTimeout(() => { if (state.pdfDoc && state.fitWidth) fitPdf(); }, 150);
     }).observe($('#pane-left'));
   }
 })();
