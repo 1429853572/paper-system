@@ -318,8 +318,9 @@ def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
     if collection_id == "none":
         vis += " AND collection_id IS NULL"
     elif collection_id:
-        vis += " AND collection_id=?"
-        args.append(collection_id)
+        ids = [x for x in collection_id.split(",") if x]
+        vis += f" AND collection_id IN ({','.join('?' * len(ids))})"
+        args.extend(ids)
     cond = "deleted_at IS NULL" if not trash else "deleted_at IS NOT NULL"
     rows = db.all(f"SELECT * FROM papers WHERE {cond}{vis} ORDER BY created_at DESC LIMIT 500", tuple(args))
     return {"papers": [dict(r) for r in rows]}
@@ -651,12 +652,26 @@ def list_collections(request: Request):
     total = db.one(
         f"SELECT COUNT(*) AS n FROM papers p WHERE p.deleted_at IS NULL{vis}", args)["n"]
     rows = db.all(
-        "SELECT c.*, (SELECT COUNT(*) FROM papers p WHERE p.collection_id=c.id "
+        "SELECT c.id, c.name, c.parent_id, (SELECT COUNT(*) FROM papers p WHERE p.collection_id=c.id "
         "AND p.deleted_at IS NULL AND (p.visibility='shared' OR p.owner_id=?)) AS papers "
         "FROM collections c WHERE c.owner_id=? ORDER BY c.created_at",
         (u["id"], u["id"]),
     )
-    return {"total": total, "collections": [dict(r) for r in rows]}
+    nodes = [dict(r) for r in rows]
+    # 汇总：父库计数含全部子孙
+    children = {}
+    for n in nodes:
+        children.setdefault(n["parent_id"], []).append(n)
+    def rollup(nid):
+        for ch in children.get(nid, []):
+            ch["papers_total"] = ch["papers"] + rollup(ch["id"])
+            rollup(ch["id"])
+        return sum(ch.get("papers_total", ch["papers"]) for ch in children.get(nid, []))
+    roots = [n for n in nodes if not n["parent_id"]]
+    rollup(None)
+    for n in nodes:
+        n.setdefault("papers_total", n["papers"])
+    return {"total": total, "collections": nodes}
 
 
 @app.post("/api/collections")
@@ -666,10 +681,22 @@ async def create_collection(request: Request):
     name = (body.get("name") or "").strip()
     if not (1 <= len(name) <= 50):
         raise HTTPException(400, "库名 1-50 字符")
+    parent = body.get("parent_id") or None
+    if parent:
+        prow = db.one("SELECT id, parent_id FROM collections WHERE id=? AND owner_id=?", (parent, u["id"]))
+        if prow is None:
+            raise HTTPException(400, "父库不存在")
+        depth, cur = 1, prow
+        while cur and cur["parent_id"]:
+            cur = db.one("SELECT id, parent_id FROM collections WHERE id=?", (cur["parent_id"],))
+            depth += 1
+        if depth >= 3:
+            raise HTTPException(400, "最多三级目录")
     cid = "c" + secrets.token_hex(6)
     with db.write() as c:
-        c.execute("INSERT INTO collections(id,name,owner_id) VALUES(?,?,?)", (cid, name, u["id"]))
-    return {"id": cid, "name": name}
+        c.execute("INSERT INTO collections(id,name,owner_id,parent_id) VALUES(?,?,?,?)",
+                  (cid, name, u["id"], parent))
+    return {"id": cid, "name": name, "parent_id": parent}
 
 
 @app.patch("/api/collections/{cid}")

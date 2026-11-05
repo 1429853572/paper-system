@@ -52,36 +52,66 @@ async function loadCollections() {
   state.totalPapers = d.total;
   renderCollections();
 }
+function colDescendants(cid) {
+  const out = [];
+  const walk = id => {
+    state.collections.filter(c => c.parent_id === id).forEach(c => { out.push(c.id); walk(c.id); });
+  };
+  walk(cid);
+  return out;
+}
 function renderCollections() {
   const el = $('#collections');
-  const total = state.papers.length;  // 仅当前视图
-  const row = (id, name, count, active, deletable) => `
-    <div class="col-item ${active ? 'on' : ''}" data-id="${id}">
-      <span class="col-name">📁 ${esc(name)}</span>
-      <span class="col-count">${count}</span>
-      ${deletable ? `<button class="col-del" title="删除文献库">✕</button>` : ''}
-    </div>`;
+  if (!el) return;
+  const colState = JSON.parse(localStorage.getItem('ps-col-open') || '{}');
+  const nodes = state.collections;
+  const children = {};
+  nodes.forEach(c => (children[c.parent_id || 'root'] ||= []).push(c));
+  const row = (c, depth) => {
+    const kids = children[c.id] || [];
+    const open = colState[c.id] !== false;
+    const selected = state.currentCollection === c.id;
+    const desc = colDescendants(c.id);
+    const active = selected || desc.includes(state.currentCollection);
+    return `<div class="col-item ${active ? 'on' : ''}" data-id="${c.id}" style="padding-left:${8 + depth * 14}px">
+      ${kids.length ? `<span class="col-arrow ${open ? '' : 'closed'}" data-toggle="${c.id}">${open ? '▾' : '▸'}</span>` : '<span class="col-arrow-none"></span>'}
+      <span class="col-name">📁 ${esc(c.name)}</span>
+      <span class="col-count">${c.papers_total ?? c.papers ?? 0}</span>
+      <button class="col-del" title="删除文献库">✕</button>
+    </div>` + (kids.length && open ? kids.map(k => row(k, depth + 1)).join('') : '');
+  };
+  const roots = children['root'] || [];
   el.innerHTML =
-    row('', '全部文献', state.totalPapers ?? state.papers.length, state.currentCollection === '', false) +
-    state.collections.map(c => row(c.id, c.name, c.papers, state.currentCollection === c.id, true)).join('') +
+    `<div class="col-item ${state.currentCollection === '' ? 'on' : ''}" data-id="">
+      <span class="col-arrow-none"></span><span class="col-name">📚 全部文献</span>
+      <span class="col-count">${state.totalPapers ?? 0}</span>
+    </div>` +
+    roots.map(r => row(r, 0)).join('') +
     `<button class="col-new" id="col-new">＋ 新建文献库</button>
-    <div class="col-new-form" id="col-new-form" hidden>
-      <input id="col-new-name" placeholder="文献库名称，回车创建" maxlength="50">
-      <div><button class="btn small primary" id="col-new-ok">创建</button>
-      <button class="btn small" id="col-new-cancel">取消</button></div>
-    </div>`;
+     <div class="col-new-form" id="col-new-form" hidden>
+       <input id="col-new-name" placeholder="文献库名称，回车创建" maxlength="50">
+       <div><button class="btn small primary" id="col-new-ok">创建</button>
+       <button class="btn small" id="col-new-cancel">取消</button></div>
+     </div>`;
   $$('.col-item', el).forEach(item => item.onclick = e => {
-    if (e.target.classList.contains('col-del')) return;
-    state.currentCollection = item.dataset.id;
+    if (e.target.classList.contains('col-del') || e.target.dataset.toggle) return;
+    const id = item.dataset.id;
+    state.currentCollection = id;
     $('#dz-target').textContent =
-      state.collections.find(c => c.id === item.dataset.id)?.name || '默认文献库';
+      state.collections.find(c => c.id === id)?.name || '默认文献库';
     renderCollections(); loadPapers();
+  });
+  $$('.col-arrow', el).forEach(a => a.onclick = e => {
+    e.stopPropagation();
+    colState[a.dataset.toggle] = colState[a.dataset.toggle] === false ? true : false;
+    localStorage.setItem('ps-col-open', JSON.stringify(colState));
+    renderCollections();
   });
   $$('.col-del', el).forEach(btn => btn.onclick = async e => {
     e.stopPropagation();
     const cid = e.target.closest('.col-item').dataset.id;
     const name = state.collections.find(c => c.id === cid)?.name || '';
-    if (!confirm(`删除文献库「${name}」？库内论文保留（变为未分库）`)) return;
+    if (!confirm(`删除文献库「${name}」？子库与论文保留`)) return;
     await api('/api/collections/' + cid, {method: 'DELETE'});
     if (state.currentCollection === cid) state.currentCollection = '';
     loadCollections(); loadPapers();
@@ -106,10 +136,15 @@ function renderCollections() {
   $('#col-new-ok').onclick = createCol;
   $('#col-new-name').onkeydown = e => { if (e.key === 'Enter') createCol(); if (e.key === 'Escape') $('#col-new-form').hidden = true; };
   $('#col-new-cancel').onclick = () => { $('#col-new-form').hidden = true; };
-  // 批量移动下拉
+  // 批量移动下拉（树形缩进标签）
   $('#batch-move').innerHTML = '<option value="">移入…</option>' +
-    state.collections.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('') +
+    nodes.map(c => `<option value="${c.id}">${'　'.repeat(treeDepth(c.id))}${esc(c.name)}</option>`).join('') +
     '<option value="__none__">未分库</option>';
+}
+function treeDepth(cid) {
+  let d = 0, cur = state.collections.find(c => c.id === cid);
+  while (cur && cur.parent_id) { cur = state.collections.find(c => c.id === cur.parent_id); d++; }
+  return d;
 }
 
 /* ---------------- 文库 ---------------- */
@@ -134,7 +169,9 @@ async function renderContentSearch() {
   } catch (e) { el.innerHTML = `<p class="muted" style="padding:14px">检索失败: ${esc(e.message)}</p>`; }
 }
 async function loadPapers() {
-  const params = new URLSearchParams({q: state.q.trim(), collection_id: state.currentCollection});
+  const scope = state.currentCollection
+    ? [state.currentCollection, ...colDescendants(state.currentCollection)].join(',') : '';
+  const params = new URLSearchParams({q: state.q.trim(), collection_id: scope});
   const d = await api('/api/papers?' + params);
   state.papers = d.papers;
   renderPapers();
@@ -1552,10 +1589,11 @@ async function renderCollectionsPage() {
     const totTok = papers.reduce((s, p) => s + ((st[p.id]?.tokens?.p || 0) + (st[p.id]?.tokens?.c || 0)), 0);
     return `<div class="card lib-card" data-cid="${c.id}">
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-        <h2 style="margin:0;flex:1">📁 ${esc(c.name)}
+        <h2 style="margin:0;flex:1">${'　'.repeat(treeDepth(c.id))}📁 ${esc(c.name)}
           <span class="muted" style="font-size:13px">${papers.length} 篇</span>
           <span class="muted" style="font-size:12px">· 已译 ${doneTr}/${papers.length} · ${totTok.toLocaleString()} tok</span></h2>
-        <button class="btn small primary" onclick="libUpload('${c.id}')">⬆ 上传到此库</button>
+        <button class="btn small primary" onclick="libUpload('${c.id}')">⬆ 上传</button>
+        <button class="btn small" onclick="addSubLib('${c.id}')" ${treeDepth(c.id) >= 2 ? 'disabled title="最多三级"' : ''}>＋ 子库</button>
         <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">✏️ 重命名</button>
         <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">删除库</button>
       </div>
@@ -2271,4 +2309,13 @@ window.updateMergeBar = () => {
   }
   bar.hidden = state.mergeSel.size < 1;
   $('#mb-n').textContent = state.mergeSel.size;
+};
+
+window.addSubLib = async pid => {
+  const name = prompt('子库名称：');
+  if (!name?.trim()) return;
+  try {
+    await api('/api/collections', {method: 'POST', body: JSON.stringify({name: name.trim(), parent_id: pid})});
+    toast('子库已创建'); loadCollections(); renderCollectionsPage();
+  } catch (e) { toast('创建失败: ' + e.message); }
 };
