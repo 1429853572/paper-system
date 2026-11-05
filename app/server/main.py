@@ -1098,17 +1098,24 @@ async def translate_papers(request: Request):
     if not paper_ids:
         raise HTTPException(400, "paper_ids 为空")
     batch = len(paper_ids) > 1
-    queued = []
+    queued, skipped = [], []
     for pid in paper_ids:
         p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
         if p is None:
             raise HTTPException(404, f"论文 {pid} 不存在")
         _require_visible(u, p)
+        # 防重复：已有进行中的翻译任务 → 跳过（除非显式 force_new_version）
+        in_flight = db.one(
+            "SELECT id FROM jobs WHERE paper_id=? AND job_type='translate' "
+            "AND status IN ('queued','pending_gate','running')", (pid,))
+        if in_flight and not body.get("force_new_version"):
+            skipped.append(pid)
+            continue
         scheduler.enqueue(u["id"], "translate", pid,
                           {"force_new_version": bool(body.get("force_new_version"))},
                           priority="background" if batch else "interactive")
         queued.append(pid)
-    return {"queued": queued}
+    return {"queued": queued, "skipped_in_flight": skipped}
 
 
 @app.get("/api/papers/{paper_id}/bilingual")

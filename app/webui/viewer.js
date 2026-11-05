@@ -386,8 +386,8 @@ async function parseCtrl() {
 }
 async function startTranslate() {
   try {
-    await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [state.current.id]})});
-    toast('翻译任务已加入队列，完成后自动出现双语视图');
+    const r = await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [state.current.id]})});
+    toast(r.skipped_in_flight?.length ? '该论文已在翻译队列中，无需重复' : '翻译任务已加入队列，完成后自动出现双语视图');
   } catch (e) { toast(e.message); }
   refreshJobState();
 }
