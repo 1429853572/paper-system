@@ -675,8 +675,9 @@ window.loadRank = async (pid) => {
   try {
     const r = await api(`/api/papers/${pid}/journal-rank`);
     if (r.found) {
-      const bits = [r.cas && `中科院${r.cas}区`, r.cas_small && `小类${r.cas_small}`,
-                    r.jcr && `JCR ${r.jcr}`, r.impact_factor && `IF ${r.impact_factor}`].filter(Boolean);
+      const bits = [r.cas && `中科院·${r.cas}`, r.cas_top && `TOP`,
+                    r.jcr && `JCR ${r.jcr}`, r.impact_factor && `IF ${r.impact_factor}`,
+                    r.if5 && `5年IF ${r.if5}`, r.warning && `⚠预警`].filter(Boolean);
       el.innerHTML = `<span class="badge ok">📊</span> ${esc(bits.join(' · ') || '无分区数据')}
         <span class="muted" style="font-size:11px">via easyScholar${r.cached ? '（缓存）' : ''}</span>`;
     } else {
