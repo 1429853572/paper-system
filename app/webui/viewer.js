@@ -441,7 +441,12 @@ function renderContentView() {
   if (state.view === 'meta') { renderMeta(); return; }
   if (state.view === 'assets') { renderAssets(); return; }
   if (state.view === 'json') {
-    el.innerHTML = `<pre style="font-size:11px">${esc(JSON.stringify(state.blocks, null, 2))}</pre>`;
+    el.innerHTML = `<div class="card json-view">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <b>解析块 JSON（调试）</b><span class="muted" style="font-size:12px">${state.blocks.length} blocks</span>
+        <button class="btn small" style="margin-left:auto" onclick="copyJson()">复制</button>
+      </div>
+      <pre>${esc(JSON.stringify(state.blocks, null, 2))}</pre></div>`;
     return;
   }
   if (state.view === 'bilingual') {
@@ -1228,6 +1233,7 @@ function drawSummary(s, pid, target = '#content-view', asBubble = false) {
 }
 
 /* ---- 对话导出 ---- */
+window.copyJson = () => copyText(JSON.stringify(state.blocks, null, 2), 'JSON');
 window.exportChat = () => {
   if (!state.qaSession) { toast('当前还没有对话记录'); return; }
   location.href = `/api/chat/sessions/${state.qaSession}/export`;
