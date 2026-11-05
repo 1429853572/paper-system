@@ -1541,37 +1541,20 @@ function followupButtons(sections) {
     if (bar) return bar;
     bar = document.createElement('div');
     bar.id = 'sel-bar'; bar.hidden = true;
-    bar.innerHTML = `<button data-a="tr">🌐翻译</button><button data-a="ex">💡解释</button>
-                     <button data-a="ask">💬提问</button><button data-a="cp">📋复制</button>
-                     <div class="sel-out" hidden></div>`;
+    bar.innerHTML = `<button data-a="ask">💬 提问</button><button data-a="cp">📋 复制</button>`;
     document.body.appendChild(bar);
-    bar.onclick = async e => {
+    bar.onclick = e => {
       const b = e.target.closest('button'); if (!b || !lastSel) return;
       const {text, page} = lastSel;
-      const out = bar.querySelector('.sel-out');
-      if (b.dataset.a === 'cp') { copyText(text, '选中文字'); return; }
-      if (b.dataset.a === 'tr') {
-        out.hidden = false; out.textContent = '翻译中…';
-        try {
-          const r = await api('/api/translate-inline', {method: 'POST',
-            body: JSON.stringify({text, paper_id: state.current?.id})});
-          out.textContent = r.zh;
-        } catch (err) { out.textContent = '翻译失败: ' + err.message; }
-        return;
-      }
+      if (b.dataset.a === 'cp') { copyText(text, '选中文字'); hideBar(); return; }
       const quote = `（第${(page ?? 0) + 1}页）\n> ${text.slice(0, 500)}\n`;
-      if (b.dataset.a === 'ex') {
-        $('#qa-text').value = `请结合论文解释下面这段内容${quote}`;
-        sendQa();
-      } else {
-        $('#qa-text').value = `关于这段内容${quote}我的问题是：`;
-        $('#qa-text').focus();
-      }
+      $('#qa-text').value = `关于这段内容${quote}我的问题是：`;
+      $('#qa-text').focus();
       hideBar();
     };
     return bar;
   };
-  const hideBar = () => { if (bar) { bar.hidden = true; bar.querySelector('.sel-out').hidden = true; } };
+  const hideBar = () => { if (bar) bar.hidden = true; };
   document.addEventListener('mouseup', e => {
     const sel = window.getSelection();
     const text = sel ? sel.toString().trim() : '';

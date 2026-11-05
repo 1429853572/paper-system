@@ -1011,26 +1011,6 @@ async def set_block_note(paper_id: str, request: Request):
     return {"ok": True}
 
 
-@app.post("/api/translate-inline")
-async def translate_inline(request: Request):
-    """划词翻译（单段，BYOK 翻译配置）."""
-    u = require(request)
-    body = await request.json()
-    text = (body.get("text") or "").strip()[:2000]
-    if not text:
-        raise HTTPException(400, "text 必填")
-    try:
-        from core.llm import LLMClient, resolve_llm
-        cfg = resolve_llm(u["id"], "translate")
-        client = LLMClient(cfg, user_id=u["id"], paper_id=body.get("paper_id"))
-        zh = client.complete(
-            [{"role": "system", "content": "把用户给出的学术文本翻译成简体中文，只输出译文。"},
-             {"role": "user", "content": text}], max_tokens=max(256, len(text)))
-        return {"zh": zh.strip()}
-    except NoKeyError as e:
-        raise HTTPException(400, str(e))
-
-
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
 def reindex_paper(paper_id: str, request: Request):
