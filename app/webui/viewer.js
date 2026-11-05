@@ -360,8 +360,8 @@ function renderJobButtons(js) {
   if (js.translating) {
     tb.textContent = '⏹ 取消翻译'; tb.onclick = cancelTranslate;
   } else if (js.translated) {
-    tb.textContent = `✓ 已译·${(js.translated_model || '').split('-').pop()}`;
-    tb.title = '已有完整译文；点击用当前模型/术语表重译生成新版本';
+    tb.textContent = '✓ 已译';
+    tb.title = `已有完整译文（${js.translated_model || ''}）｜点击重译生成新版本`;
     tb.onclick = retranslate;
   } else {
     tb.textContent = '🌐 翻译全文'; tb.title = ''; tb.onclick = startTranslate;
@@ -452,6 +452,13 @@ function switchView(v, s) {
   state.view = v === 'read' ? (s || state.rpane.readingView || 'orig') : v;
   $$('.view-tabs [data-v]').forEach(x => x.classList.toggle('on', x.dataset.v === v));
   $('#r-subtabs').hidden = v !== 'read';
+  // 问答 dock 只在阅读主视图常驻；其他视图整栏给内容
+  const isRead = v === 'read';
+  $('#qa-dock').hidden = !isRead;
+  $('#rpane-handle').hidden = !isRead;
+  const top = $('#rpane-top');
+  if (isRead) { top.style.flex = 'none'; top.style.height = state.rpane.top + '%'; }
+  else { top.style.flex = '1 1 auto'; top.style.height = ''; }
   $$('.r-subtabs [data-s]').forEach(x => x.classList.toggle('on', x.dataset.s === state.view));
   renderContentView();
 }
@@ -836,9 +843,9 @@ async function renderSumBubble() {
   const paper = (state.qaAllPapers || state.papers).find(x => x.id === pid) || state.current || {};
   const title = paper.title || pid;
   const multi = state.qaPapers.size > 1;
-  const head = `<div class="muted" style="font-size:12px;margin-bottom:6px">📋 导读针对：<b>${esc(title.slice(0, 46))}</b>` +
-    (multi ? `　<span class="badge run">已选 ${state.qaPapers.size} 篇，导读仅第一篇；如需他篇请调整范围✕</span>` : '') + `</div>`;
-  state._sumHead = head;
+  // 悬浮提示而非常驻文字（优雅优先；多篇警示仅在生成按钮气泡里出现一次）
+  state._sumTip = `针对：${title}` + (multi ? `（已选 ${state.qaPapers.size} 篇，导读仅第一篇）` : '');
+  state._sumHead = multi ? `<div class="muted" style="font-size:11px;margin-bottom:4px">已选 ${state.qaPapers.size} 篇 · 导读针对第一篇</div>` : '';
   const cached = state._sumCache?.[pid];
   if (cached) { drawSummary(cached.summary, pid, '#qa-sum-bubble', true); return; }
   const d = await api(`/api/papers/${pid}/summary`).catch(() => null);
@@ -1293,7 +1300,7 @@ function drawSummary(s, pid, target = '#content-view', asBubble = false) {
   const t = $(target);
   const sec = Object.entries(s.sections || {});
   t.innerHTML = (asBubble ? (state._sumHead || '') + '<div class="msg assistant"><div class="bubble" style="width:100%">' : '<div class="card">') +
-    (asBubble ? '' : '<h2>科研导读</h2>') +
+    (asBubble ? `<b title="${esc(state._sumTip || '')}">📋 导读</b>` : '<h2>科研导读</h2>') +
     (sec.length ? sec.map(([k, v]) =>
       `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><p>${renderCites(v, s.evidence)}</p></div>`).join('')
       : '<p class="muted">导读内容为空，请重新生成。</p>') +
