@@ -587,3 +587,12 @@ table.list input[type=checkbox] { width: auto; }
 @keyframes hlflash { 0%,100% { opacity: 0; } 12%, 70% { opacity: 1; } }
 
 .inline-fig img, .fig-grid img { cursor: text; }   /* 单击=正常选中，双击才放大 */
+
+/* 段落合并 */
+.blk.merge-sel { outline: 2px dashed var(--primary); outline-offset: 1px; background: #eef1ff; }
+#merge-bar { position: absolute; top: 96px; left: 50%; transform: translateX(-50%); z-index: 30;
+             background: var(--panel); border: 1px solid var(--border); border-radius: 20px;
+             padding: 8px 14px; display: flex; gap: 10px; align-items: center; font-size: 13px;
+             box-shadow: 0 8px 24px rgba(0,0,0,.14); }
+.merge-badge { font-size: 10px; background: #e8f7ef; color: #2eaa6e; border: 1px solid #bfe3cf;
+               border-radius: 9px; padding: 1px 7px; cursor: pointer; position: absolute; right: 6px; top: 4px; }

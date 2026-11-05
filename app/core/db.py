@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -281,6 +281,16 @@ class Database:
             c.executescript("""
                 ALTER TABLE papers ADD COLUMN meta_source TEXT;
                 ALTER TABLE papers ADD COLUMN meta_verified_at TEXT;
+            """)
+        if from_v < 9:
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS block_merges (
+                    paper_id  TEXT NOT NULL,
+                    head_bid  TEXT NOT NULL,
+                    member_bids TEXT NOT NULL,      -- JSON 有序数组
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY(paper_id, head_bid)
+                );
             """)
         if from_v < 8:
             # 译文幂等：同 paper+cache_key+block 唯一（部分翻译重跑不再产生重复行）

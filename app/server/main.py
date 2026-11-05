@@ -1075,6 +1075,36 @@ async def set_block_note(paper_id: str, request: Request):
     return {"ok": True}
 
 
+@app.get("/api/papers/{paper_id}/merges")
+def get_merges(paper_id: str, request: Request):
+    require(request)
+    rows = db.all("SELECT head_bid, member_bids FROM block_merges WHERE paper_id=?", (paper_id,))
+    import json as _j
+    return {"merges": [{"head_bid": r["head_bid"], "member_bids": _j.loads(r["member_bids"])} for r in rows]}
+
+
+@app.post("/api/papers/{paper_id}/merges")
+async def create_merge(paper_id: str, request: Request):
+    """合并段落：member_bids 有序数组（识别错拆的段落并回一块）."""
+    u = require(request)
+    body = await request.json()
+    bids = body.get("member_bids") or []
+    if len(bids) < 2:
+        raise HTTPException(400, "至少选择两段")
+    with db.write() as c:
+        c.execute("INSERT OR REPLACE INTO block_merges(paper_id, head_bid, member_bids) VALUES(?,?,?)",
+                  (paper_id, bids[0], json.dumps(bids)))
+    return {"ok": True}
+
+
+@app.delete("/api/papers/{paper_id}/merges/{head_bid}")
+def delete_merge(paper_id: str, head_bid: str, request: Request):
+    require(request)
+    with db.write() as c:
+        c.execute("DELETE FROM block_merges WHERE paper_id=? AND head_bid=?", (paper_id, head_bid))
+    return {"ok": True}
+
+
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
 def reindex_paper(paper_id: str, request: Request):
