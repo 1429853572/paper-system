@@ -63,7 +63,109 @@ else
     info ".env 已生成（SECRET/FERNET/初始admin密码 已随机化）"
 fi
 
-# ---------- 3. 构建镜像 ----------
+# ---------- 3. 前端依赖（pdf.js / KaTeX） ----------
+# vendor/ 已随仓库提供（git 内 41 个文件）。若被误删或裁剪，这里自动补齐，
+# 否则前端会因 pdf.js 缺失而白屏。版本与仓库内文件逐字节一致（sha256 已核对）。
+echo "== 前端依赖检查 =="
+VENDOR="app/webui/vendor"
+PDFJS_VER="4.10.38"
+KATEX_VER="0.16.47"
+# 国内优先 npmmirror，回退 jsdelivr
+MIRRORS_PDF=("https://registry.npmmirror.com/pdfjs-dist/${PDFJS_VER}/files"
+             "https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VER}")
+MIRRORS_KA=("https://registry.npmmirror.com/katex/${KATEX_VER}/files"
+            "https://cdn.jsdelivr.net/npm/katex@${KATEX_VER}")
+
+# 需要的文件：<目标相对路径>|<包内源路径>
+PDFJS_FILES=(
+    "pdfjs/pdf.min.mjs|build/pdf.min.mjs"
+    "pdfjs/pdf.worker.min.mjs|build/pdf.worker.min.mjs"
+    "pdfjs/pdf_viewer.css|web/pdf_viewer.css"
+    "pdfjs/standard_fonts/LiberationSans-Regular.ttf|standard_fonts/LiberationSans-Regular.ttf"
+    "pdfjs/standard_fonts/LiberationSans-Bold.ttf|standard_fonts/LiberationSans-Bold.ttf"
+    "pdfjs/standard_fonts/LiberationSans-Italic.ttf|standard_fonts/LiberationSans-Italic.ttf"
+    "pdfjs/standard_fonts/LiberationSans-BoldItalic.ttf|standard_fonts/LiberationSans-BoldItalic.ttf"
+    "pdfjs/standard_fonts/FoxitFixed.pfb|standard_fonts/FoxitFixed.pfb"
+    "pdfjs/standard_fonts/FoxitFixedBold.pfb|standard_fonts/FoxitFixedBold.pfb"
+    "pdfjs/standard_fonts/FoxitFixedItalic.pfb|standard_fonts/FoxitFixedItalic.pfb"
+    "pdfjs/standard_fonts/FoxitFixedBoldItalic.pfb|standard_fonts/FoxitFixedBoldItalic.pfb"
+    "pdfjs/standard_fonts/FoxitSerif.pfb|standard_fonts/FoxitSerif.pfb"
+    "pdfjs/standard_fonts/FoxitSerifBold.pfb|standard_fonts/FoxitSerifBold.pfb"
+    "pdfjs/standard_fonts/FoxitSerifBoldItalic.pfb|standard_fonts/FoxitSerifBoldItalic.pfb"
+    "pdfjs/standard_fonts/FoxitSerifItalic.pfb|standard_fonts/FoxitSerifItalic.pfb"
+    "pdfjs/standard_fonts/FoxitSymbol.pfb|standard_fonts/FoxitSymbol.pfb"
+    "pdfjs/standard_fonts/FoxitDingbats.pfb|standard_fonts/FoxitDingbats.pfb"
+    "pdfjs/standard_fonts/LICENSE_FOXIT|standard_fonts/LICENSE_FOXIT"
+    "pdfjs/standard_fonts/LICENSE_LIBERATION|standard_fonts/LICENSE_LIBERATION"
+)
+KATEX_FILES=(
+    "katex/katex.mjs|dist/katex.mjs"
+    "katex/katex.min.css|dist/katex.min.css"
+)
+KATEX_FONT_NAMES=(
+    KaTeX_AMS-Regular KaTeX_Caligraphic-Bold KaTeX_Caligraphic-Regular
+    KaTeX_Fraktur-Bold KaTeX_Fraktur-Regular
+    KaTeX_Main-BoldItalic KaTeX_Main-Bold KaTeX_Main-Italic
+    KaTeX_Main-Regular KaTeX_Math-BoldItalic KaTeX_Math-Italic
+    KaTeX_SansSerif-Bold KaTeX_SansSerif-Italic KaTeX_SansSerif-Regular
+    KaTeX_Script-Regular
+    KaTeX_Size1-Regular KaTeX_Size2-Regular KaTeX_Size3-Regular
+    KaTeX_Size4-Regular KaTeX_Typewriter-Regular
+)
+for f in "${KATEX_FONT_NAMES[@]}"; do
+    KATEX_FILES+=("katex/fonts/${f}.woff2|dist/fonts/${f}.woff2")
+done
+
+fetch_to() {   # fetch_to <目标相对路径> <源相对路径> <源base>...；成功返回 0
+    local dest_rel="$1" src_rel="$2"; shift 2
+    local dest="$VENDOR/$dest_rel"
+    [[ -s "$dest" ]] && return 0
+    mkdir -p "$(dirname "$dest")"
+    local base
+    for base in "$@"; do
+        if curl -fsSL --retry 2 --connect-timeout 15 --max-time 120 "$base/$src_rel" -o "$dest" 2>/dev/null \
+           && [[ -s "$dest" ]]; then
+            return 0
+        fi
+        rm -f "$dest"
+    done
+    return 1
+}
+
+ensure_vendor() {
+    local missing=0 spec dest src
+    for spec in "${PDFJS_FILES[@]}" "${KATEX_FILES[@]}"; do
+        dest="${spec%%|*}"; src="${spec##*|}"
+        [[ -s "$VENDOR/$dest" ]] || missing=$((missing + 1))
+    done
+    if (( missing == 0 )); then
+        info "前端依赖已就位（pdf.js ${PDFJS_VER} / KaTeX ${KATEX_VER}）"
+        return 0
+    fi
+    warn "前端依赖缺失 ${missing} 个文件 → 自动下载（pdf.js ${PDFJS_VER} / KaTeX ${KATEX_VER}）"
+    local ok=1
+    for spec in "${PDFJS_FILES[@]}"; do
+        dest="${spec%%|*}"; src="${spec##*|}"
+        fetch_to "$dest" "$src" "${MIRRORS_PDF[@]}" || { ok=0; break; }
+    done
+    if (( ok )); then
+        for spec in "${KATEX_FILES[@]}"; do
+            dest="${spec%%|*}"; src="${spec##*|}"
+            fetch_to "$dest" "$src" "${MIRRORS_KA[@]}" || { ok=0; break; }
+        done
+    fi
+    if (( ok )); then
+        info "前端依赖已补齐（$(find "$VENDOR" -type f | wc -l) 个文件）"
+    else
+        fail "前端依赖下载失败——pdf.js/KaTeX 缺失会导致前端白屏。
+     请手动补齐后重试（源：npmmirror / jsdelivr 的 ${PDFJS_VER}、${KATEX_VER}）：
+       pdf.js  ${PDFJS_VER}  → $VENDOR/pdfjs/   (build/pdf.min.mjs, build/pdf.worker.min.mjs, web/pdf_viewer.css, standard_fonts/*)
+       KaTeX   ${KATEX_VER}  → $VENDOR/katex/   (dist/katex.mjs, dist/katex.min.css, dist/fonts/*.woff2)"
+    fi
+}
+ensure_vendor
+
+# ---------- 4. 构建镜像 ----------
 echo "== 镜像准备 =="
 if (( OFFLINE )); then
     fail "离线模式在里程碑6实现（psys export-images / docker load）"
@@ -75,7 +177,7 @@ else
     docker compose pull --ignore-pull-failures caddy ollama || true
 fi
 
-# ---------- 4. 启动与健康检查 ----------
+# ---------- 5. 启动与健康检查 ----------
 echo "== 启动服务 =="
 docker compose up -d
 info "等待健康检查（mineru vLLM 首次加载模型需数分钟）..."
@@ -87,7 +189,7 @@ done
 [[ "${OK:-}" == "healthy" ]] || warn "app 未在 10 分钟内 healthy，请 docker compose logs app 排查"
 docker compose ps
 
-# ---------- 5. 完成提示 ----------
+# ---------- 6. 完成提示 ----------
 echo
 info "安装完成！"
 echo -e "  访问地址:  ${G}http://$(hostname -I | awk '{print $1}'):7861${N}"
