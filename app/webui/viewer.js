@@ -258,9 +258,11 @@ async function openPaper(id) {
   renderContentView();
   loadBilingual(id);
   refreshJobState();          // 解析/翻译控制按钮状态
-  // 问答 scope 默认当前论文
-  state.qaPapers.clear(); state.qaPapers.add(id);
-  renderQaScope();
+  // 问答 scope 跟随当前论文（用户显式多选了其他论文则保留）
+  if (state.qaPapers.size <= 1) {
+    state.qaPapers.clear(); state.qaPapers.add(id);
+    if (state.view === 'qa') renderQaTab();
+  }
 }
 async function renderPage() {
   const page = await state.pdfDoc.getPage(state.pageNum);
@@ -434,10 +436,11 @@ function switchView(v, s) {
 }
 function renderContentView() {
   const el = $('#content-view');
+  if (state.view === 'qa') { renderQaTab(); return; }   // 问答不依赖当前论文（可从面板选文）
   if (!state.current) { el.innerHTML = '<p class="muted">选择左侧论文开始阅读</p>'; return; }
   if (state.mainView === 'read' || ['orig','bilingual','zh'].includes(state.view)) {
     // 阅读：走下方 orig/bilingual/zh 分支
-  } else if (state.view === 'qa') { renderQaTab(); return; }
+  }
   if (state.view === 'meta') { renderMeta(); return; }
   if (state.view === 'assets') { renderAssets(); return; }
   if (state.view === 'json') {
@@ -1116,9 +1119,10 @@ async function renderSettings() {
   bind('f-chat', 'chat'); bind('f-translate', 'translate');
   for (const [fid, key] of [['f-chat', 'chat'], ['f-translate', 'translate']]) {
     const form = $('#' + fid);
-    form.base_url.value = d[key].base_url || '';
-    form.model.value = d[key].model || '';
-    if (d[key].configured) form.api_key.placeholder = '已配置（输入新值可更换）';
+    const q = n => form.querySelector(`[name=${n}]`);
+    if (q('base_url')) q('base_url').value = d[key].base_url || '';
+    if (q('model')) q('model').value = d[key].model || '';
+    if (d[key].configured && q('api_key')) q('api_key').placeholder = '已配置（输入新值可更换）';
   }
   loadGlossary();
 }

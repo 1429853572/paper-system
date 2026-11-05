@@ -144,6 +144,29 @@ def _verify_arxiv(arxiv_id: str, title: str) -> dict | None:
             "source": "arXiv", "title": t, "match": round(_title_ratio(t, title), 2)}
 
 
+def _verify_s2(title: str) -> dict | None:
+    """Semantic Scholar 标题精确匹配（带 key）。"""
+    from .config import S2_API_KEY
+    r = httpx.get(
+        "https://api.semanticscholar.org/graph/v1/paper/search/match",
+        params={"query": title, "fields": "title,year,venue,authors,externalIds"},
+        headers={"x-api-key": S2_API_KEY} if S2_API_KEY else {}, timeout=15)
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        return None
+    d = r.json().get("data") or [{}]
+    p = d[0] if d else {}
+    if not p or _title_ratio(p.get("title", ""), title) < 0.75:
+        return None
+    ext = p.get("externalIds") or {}
+    doi = ext.get("DOI") or (f"10.48550/arXiv.{ext['ArXiv']}" if ext.get("ArXiv") else "")
+    return {"authors": ", ".join(a.get("name", "") for a in (p.get("authors") or [])),
+            "year": str(p.get("year") or ""), "journal": p.get("venue") or "",
+            "doi": doi, "source": "Semantic Scholar",
+            "title": p.get("title", ""), "match": round(_title_ratio(p.get("title", ""), title), 2)}
+
+
 def _verify_crossref(title: str) -> dict | None:
     r = httpx.get("https://api.crossref.org/works",
                   params={"query.bibliographic": title, "rows": 1},
@@ -185,6 +208,11 @@ def verify_meta_online(paper_id: str) -> dict:
     if arxiv_id:
         try:
             candidate = _verify_arxiv(arxiv_id, title)
+        except httpx.HTTPError:
+            candidate = None
+    if candidate is None:
+        try:
+            candidate = _verify_s2(title)
         except httpx.HTTPError:
             candidate = None
     if candidate is None:

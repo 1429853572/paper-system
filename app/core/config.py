@@ -77,6 +77,7 @@ MINERU_BASE_URL = os.environ.get("MINERU_BASE_URL", "http://mineru:8000")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
 EASYSCHOLAR_KEY = os.environ.get("EASYSCHOLAR_KEY", "")
+S2_API_KEY = os.environ.get("S2_API_KEY", "")
 EASYSCHOLAR_URL = os.environ.get("EASYSCHOLAR_URL", "https://www.easyscholar.cc/open/getRank")
 EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "1024"))
 
