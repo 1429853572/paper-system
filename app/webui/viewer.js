@@ -1347,7 +1347,8 @@ window.jumpEvidence = page => { switchPage('reader'); if (state.pdfDoc) { state.
 /* ---- 回收站 ---- */
 async function renderTrash() {
   const d = await api('/api/papers?trash=1');
-  $('#page-trash').innerHTML = `<div class="card"><h2>回收站（30 天后自动清理）</h2>
+  $('#page-trash').innerHTML = `<div class="card"><h2 style="display:flex;gap:10px;align-items:center">回收站（30 天后自动清理）
+    <button class="btn small danger" style="margin-left:auto" onclick="emptyTrash()">🗑 清空回收站</button></h2>
     <table class="list"><tr><th>标题</th><th>删除时间</th><th></th></tr>
     ${d.papers.map(p => `<tr><td>${esc(p.title)}</td><td class="muted">${p.deleted_at}</td>
       <td class="row-actions"><button class="btn small" onclick="restorePaper('${p.id}')">恢复</button>
@@ -2326,4 +2327,11 @@ window.addSubLib = async pid => {
     await api('/api/collections', {method: 'POST', body: JSON.stringify({name: name.trim(), parent_id: pid})});
     toast('子库已创建'); loadCollections(); renderCollectionsPage();
   } catch (e) { toast('创建失败: ' + e.message); }
+};
+
+window.emptyTrash = async () => {
+  if (!confirm('彻底清空回收站？所有已删除论文（含译文/索引/会话）将永久移除，不可恢复。')) return;
+  const r = await api('/api/trash/empty', {method: 'POST'});
+  toast(`已彻底删除 ${r.purged} 篇`);
+  renderTrash(); loadPapers();
 };

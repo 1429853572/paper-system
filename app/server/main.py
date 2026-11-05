@@ -1132,6 +1132,19 @@ def delete_merge(paper_id: str, head_bid: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/trash/empty")
+def empty_trash(request: Request):
+    """清空回收站：彻底删除全部已软删论文（仅 admin）."""
+    u = require(request)
+    if u["role"] != "admin":
+        raise HTTPException(403, "仅管理员可清空回收站")
+    rows = db.all("SELECT id FROM papers WHERE deleted_at IS NOT NULL")
+    from core.jobs import scheduler
+    for r in rows:
+        scheduler.hard_delete_paper(r["id"])
+    return {"purged": len(rows)}
+
+
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
 def reindex_paper(paper_id: str, request: Request):
