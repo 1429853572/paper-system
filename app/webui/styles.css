@@ -528,3 +528,17 @@ table.list input[type=checkbox] { width: auto; }
 .pair.zh.blk-title-zh, .blk.zh.blk-title-zh { font-size: 16px; font-weight: 700; color: #1a2233;
                      background: #eef7f1; border-left: 3px solid #7cc79c; }
 .pair.en.blk-title h3 { margin: 0; font-size: inherit; }
+
+/* 次级工具条自适应：不换行挤压，横向滚动；窄栏辅助键隐藏 */
+.r-subtabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; gap: 4px; }
+.pane-right.narrow .aux { display: none; }
+.r-subtabs::-webkit-scrollbar { height: 4px; }
+.pair.en.blk-title { font-size: clamp(13.5px, 1.15vw + 10px, 17px); }
+.pair.zh.blk-title-zh, .blk.zh.blk-title-zh { font-size: clamp(13px, 1.1vw + 10px, 16px); }
+
+/* 次级工具条自适应：不换行挤压 → 横向滚动；窄栏收纳辅助键 */
+.r-subtabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; gap: 4px; }
+.pane-right.narrow .aux { display: none; }
+.r-subtabs::-webkit-scrollbar { height: 4px; }
+.pair.en.blk-title { font-size: clamp(13.5px, 1.15vw + 10px, 17px); }
+.pair.zh.blk-title-zh, .blk.zh.blk-title-zh { font-size: clamp(13px, 1.1vw + 10px, 16px); }
