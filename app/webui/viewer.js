@@ -1103,6 +1103,7 @@ async function boot() {
   await initPdfJs();
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
   renderQaTab();          // 问答 dock 常驻
+  $('#link-toggle').classList.toggle('on', state.syncLink);
   await loadCollections();
   await loadPapers();
   watchJobs();
@@ -1473,6 +1474,25 @@ window.delPaperFromLib = async pid => {
   toast('已移入回收站'); loadPapers(); renderCollectionsPage();
 };
 window.viewPaper = pid => { switchPage('reader'); openPaper(pid); };
+
+/* PDF 滚轮翻页（联动右跟随） */
+(() => {
+  let last = 0;
+  const host = $('#pdf-host');
+  host.addEventListener('wheel', e => {
+    if (e.ctrlKey) return;                 // 缩放手势不劫持
+    const now = Date.now();
+    if (now - last < 350 || Math.abs(e.deltaY) < 20) return;
+    last = now;
+    e.preventDefault();
+    const dir = e.deltaY > 0 ? 1 : -1;
+    const n = state.pageNum + dir;
+    if (state.pdfDoc && n >= 1 && n <= state.pdfDoc.numPages) {
+      state.pageNum = n;
+      renderPage();                        // 联动开时右侧自动滚到对应段
+    }
+  }, { passive: false });
+})();
 
 /* 图片灯箱预览 */
 window.lightbox = (src, caption) => {
