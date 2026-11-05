@@ -32,6 +32,18 @@
       </div>
       <button class="tool-arrow" id="sel-toggle" title="批量选择">☑</button>
       <button class="tool-arrow" id="newlib-arrow" title="新建文献库">＋</button>
+      <span class="spacer"></span>
+      <button class="tool-arrow" id="vis-toggle" title="上传可见性：当前为共享（点击改为仅自己可见）">🔓</button>
+      <button class="tool-arrow" id="upload-arrow" title="上传文献（也可直接把文件拖到下方列表区）">📄</button>
+      <div class="tool-pop upload-pop" id="upload-pop" hidden>
+        <div class="tp-item" id="upload-file-btn">📄 选择文件上传</div>
+        <div class="url-import">
+          <input id="url-import-input" placeholder="粘贴 URL 导入（pdf/arxiv 直链）">
+          <button class="btn small primary" id="url-import-btn">导入</button>
+        </div>
+        <div class="muted" style="font-size:11px;padding:2px 12px 4px" id="upload-target">上传到：全部文献</div>
+      </div>
+      <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
     </div>
     <div class="batch-bar" id="batch-bar">
       <button class="btn small primary" id="batch-translate">批量翻译</button>
@@ -40,21 +52,6 @@
       <button class="btn small" id="batch-cancel">取消</button>
     </div>
     <div class="paper-list" id="paper-list"></div>
-    <div class="dropzone" id="dropzone">
-      <div style="font-size:26px">📄</div>
-      <div><b>上传文献</b></div>
-      <div class="muted">拖拽 PDF 到这里，或点击选择<br>多文件支持 · 当前上传到：<span id="dz-target">全部文献</span></div>
-      <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
-      <div class="url-import">
-        <input id="url-import-input" placeholder="或粘贴 URL 导入（pdf/arxiv 直链）">
-        <button class="btn small primary" id="url-import-btn">导入</button>
-      </div>
-    </div>
-    <footer>
-      <label style="font-size:12px;display:flex;gap:4px;align-items:center">
-        <input type="checkbox" id="vis-private" style="width:auto"> 仅自己可见
-      </label>
-    </footer>
   </aside>
 
   <!-- ======= 主区 ======= -->
@@ -77,7 +74,7 @@
       <div class="reader">
         <div class="pane-left" id="pane-left">
           <div class="pdf-toolbar" id="pdf-toolbar" hidden>
-            <button id="layout-btn" title="显示/隐藏版面布局框（MinerU 检测的块边界）">▭布局</button>
+            <button id="layout-btn" title="显示/隐藏版面布局框（MinerU 检测的块边界）">▭</button>
             <button id="pg-prev">◀</button>
             <span id="pg-label">- / -</span>
             <button id="pg-next">▶</button>
@@ -94,6 +91,7 @@
           </div>
         </div>
         <button class="side-restore" id="side-restore" hidden></button>
+        <button class="rpane-restore" id="rpane-restore" hidden title="展开右栏（阅读/问答）">« 展开右栏</button>
         <div class="pane-right">
           <button class="qa-reopen" id="qa-reopen" hidden title="重新打开论文问答（恢复默认位置）">💬 问答</button>
           <div class="view-tabs">
@@ -101,7 +99,8 @@
             <button data-v="meta">文献信息</button>
             <button data-v="assets">图表</button>
             <button data-v="json" title="调试视图">JSON</button>
-
+            <span class="spacer"></span>
+            <button class="tab-collapse" id="rpane-collapse" title="收起右栏（只留 PDF；再点可展开）">»</button>
           </div>
           <div class="view-tabs r-subtabs" id="r-subtabs">
             <button id="toc-btn" class="btn small aux" title="章节目录导航">☰</button>

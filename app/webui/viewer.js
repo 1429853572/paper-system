@@ -97,8 +97,7 @@ function renderCollections() {
     if (e.target.classList.contains('col-del') || e.target.dataset.toggle) return;
     const id = item.dataset.id;
     state.currentCollection = id;
-    $('#dz-target').textContent =
-      state.collections.find(c => c.id === id)?.name || '默认文献库';
+    updateUploadTarget();
     renderCollections(); loadPapers();
   });
   $$('.col-arrow', el).forEach(a => a.onclick = e => {
@@ -215,10 +214,39 @@ function toggleSelect(id, on) {
   $('#batch-bar').classList.toggle('show', state.selectMode && state.selected.size > 0);
 }
 
-/* 上传 */
-const dz = $('#dropzone');
-dz.onclick = () => $('#file-input').click();
-$('#file-input').onchange = e => uploadFiles(e.target.files);
+/* 上传：入口是工具条图标 + 直接把文件拖到论文列表区（不再有独立大拖放框） */
+state.uploadPrivate = localStorage.getItem('ps-upload-private') === '1';
+function updateUploadTarget() {
+  const el = $('#upload-target');
+  if (el) el.textContent = '上传到：' +
+    (state.currentCollection ? (state.collections.find(c => c.id === state.currentCollection)?.name || '默认文献库') : '全部文献');
+}
+function updateVisToggle() {
+  const b = $('#vis-toggle');
+  if (!b) return;
+  b.textContent = state.uploadPrivate ? '🔒' : '🔓';
+  b.classList.toggle('has-val', state.uploadPrivate);
+  b.title = state.uploadPrivate
+    ? '上传可见性：仅自己可见（点击改为共享）'
+    : '上传可见性：共享（点击改为仅自己可见）';
+}
+$('#vis-toggle').onclick = () => {
+  state.uploadPrivate = !state.uploadPrivate;
+  localStorage.setItem('ps-upload-private', state.uploadPrivate ? '1' : '0');
+  updateVisToggle();
+  toast(state.uploadPrivate ? '新上传的文献将仅自己可见' : '新上传的文献将对所有人可见');
+};
+const upPop = $('#upload-pop');
+$('#upload-arrow').onclick = e => {
+  e.stopPropagation();
+  upPop.hidden = !upPop.hidden;
+  updateUploadTarget();
+};
+$('#upload-file-btn').onclick = () => { upPop.hidden = true; $('#file-input').click(); };
+document.addEventListener('click', e => {
+  if (!upPop.hidden && !e.target.closest('#upload-pop') && !e.target.closest('#upload-arrow')) upPop.hidden = true;
+});
+$('#file-input').onchange = e => { uploadFiles(e.target.files); e.target.value = ''; };
 $('#url-import-btn').onclick = async () => {
   const url = $('#url-import-input').value.trim();
   if (!url) { toast('请输入 URL'); return; }
@@ -227,18 +255,25 @@ $('#url-import-btn').onclick = async () => {
       url, collection_id: state.currentCollection || undefined})});
     toast(r.status === 'duplicate' ? '该 URL 已在库中' : '已加入解析队列');
     $('#url-import-input').value = '';
+    upPop.hidden = true;
     loadPapers();
   } catch (e) { toast('导入失败: ' + e.message); }
 };
 $('#url-import-input').onkeydown = e => { if (e.key === 'Enter') $('#url-import-btn').click(); };
-['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
-['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
-dz.addEventListener('drop', e => uploadFiles(e.dataTransfer.files));
+// 论文列表区 = 拖放上传目标
+const plist = $('#paper-list');
+['dragover', 'dragenter'].forEach(ev => plist.addEventListener(ev, e => {
+  e.preventDefault(); plist.classList.add('drop-hint');
+}));
+['dragleave', 'drop'].forEach(ev => plist.addEventListener(ev, e => {
+  e.preventDefault(); plist.classList.remove('drop-hint');
+}));
+plist.addEventListener('drop', e => uploadFiles(e.dataTransfer.files));
 async function uploadFiles(files, targetCid) {
   const okFile = f => /\.(pdf|png|jpe?g|docx?|pptx?|xlsx?)$/i.test(f.name);
   const pdfs = [...files].filter(okFile);
   if (!pdfs.length) { toast('支持 PDF / 图片 / Office 文档'); return; }
-  const vis = $('#vis-private')?.checked ? 'private' : 'shared';
+  const vis = state.uploadPrivate ? 'private' : 'shared';
   const col = (targetCid || state.currentCollection) ? `&collection_id=${targetCid || state.currentCollection}` : '';
   const fd = new FormData();
   pdfs.forEach(f => fd.append('files', f));
@@ -295,6 +330,20 @@ async function initPdfJs() {
   try { state.katex = (await import('/static/vendor/katex/katex.mjs')).default; }
   catch (e) { console.warn('katex 加载失败:', e); }
 }
+
+/* ---- 渲染分辨率（DPR 感知）----
+   canvas 的位图尺寸若只按 CSS 像素给，HiDPI 屏(dpr=2)浏览器会把 1× 位图拉伸成 2× 设备像素
+   → 文字/线条整体发虚（典型 pdf.js 糊屏根因）。
+   正确做法：位图按 CSS 尺寸 × devicePixelRatio 渲染，再用 style 把显示尺寸钉回 CSS 尺寸。
+   dpr 受像素预算限制，避免高倍缩放时画布过大爆内存。 */
+const MAX_PAGE_PX = 12e6;     // 单页画布像素上限（~48MB RGBA）
+const MAX_CROP_PX = 8e6;      // 裁剪用整页画布像素上限（~32MB，临时）
+function dprFor(cssW, cssH, budget) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const area = Math.max(1, cssW * cssH);
+  return Math.max(1, Math.min(dpr, Math.sqrt(budget / area)));
+}
+
 async function openPaper(id) {
   const d = await api('/api/papers/' + id);
   state.current = d.paper; state.blocks = d.blocks;
@@ -335,8 +384,8 @@ async function openPaper(id) {
   // 问答 scope 跟随当前论文（用户显式多选了其他论文则保留）
   if (state.qaPapers.size <= 1) {
     state.qaPapers.clear(); state.qaPapers.add(id);
-    renderQaTab();   // dock 常驻，范围变化即刷新
   }
+  renderQaTab();   // dock 常驻：切论文时同步会话内容
 }
 async function renderPage(opts = {}) { /* 连续模式入口：滚动到当前页并维护覆盖层 */
   await pdfEnsureAll();
@@ -345,11 +394,14 @@ async function renderPage(opts = {}) { /* 连续模式入口：滚动到当前�
 let _pdfBuilt = null;   // {pid, scale, wrappers:Map}
 async function pdfEnsureAll() {
   if (!state.pdfDoc) return;
-  if (_pdfBuilt && _pdfBuilt.pid === state.current?.id && _pdfBuilt.scale === state.scale) return;
+  const pid = state.current?.id;
+  if (_pdfBuilt && _pdfBuilt.pid === pid && _pdfBuilt.scale === state.scale) return;
+  // 仅倍率变化（拖动分栏 / 缩放）：原地更新尺寸，不重建页面骨架——避免整页重绘闪烁
+  if (_pdfBuilt && _pdfBuilt.pid === pid) { await _pdfRescale(); return; }
   const host = $('#pdf-host');
   host.innerHTML = '';
   const wraps = new Map();
-  _pdfBuilt = {pid: state.current?.id, scale: state.scale, wraps};
+  _pdfBuilt = {pid, scale: state.scale, wraps};
   for (let i = 1; i <= state.pdfDoc.numPages; i++) {
     const w = document.createElement('div');
     w.className = 'pdf-page'; w.dataset.page = i - 1;
@@ -375,7 +427,11 @@ async function pdfEnsureAll() {
     for (const en of entries) {
       if (!en.isIntersecting) continue;
       const wrap = en.target;
-      if (!wrap.dataset.rendered) { wrap.dataset.rendered = '1'; await renderOneWrap(wrap); }
+      // 倍率变了也要重绘（否则旧尺寸画布留在页面上）
+      if (!wrap.dataset.rendered || wrap._scale !== state.scale) {
+        wrap.dataset.rendered = '1';
+        await renderOneWrap(wrap);
+      }
     }
   }, { root: $('#pdf-host'), rootMargin: '600px 0px' });
   wraps.forEach(w => state._pdfObs.observe(w));
@@ -394,19 +450,62 @@ async function pdfEnsureAll() {
   }, { root: $('#pdf-host'), threshold: [0.35, 0.6] });
   wraps.forEach(w => state._pdfPageObs.observe(w));
   await renderOneWrap(wraps.get(state.pageNum - 1));   // 立即渲染当前页
+  updateZoomLabel();
+}
+/* 倍率变化：只更新占位高度 + 重绘当前可见页（DOM 骨架不动，滚动位置保持） */
+let _pdfFitBusy = false, _pdfFitPending = false;
+async function _pdfRescale() {
+  if (_pdfFitBusy) { _pdfFitPending = true; return; }   // 拖拽时可能重入：合并到下一次
+  _pdfFitBusy = true;
+  try {
+    const b = _pdfBuilt; if (!b) return;
+    const host = $('#pdf-host');
+    const cur = b.wraps.get(state.pageNum - 1);
+    const oldTop = cur?.offsetTop ?? 0, oldScroll = host.scrollTop;
+    b.scale = state.scale;
+    for (let i = 1; i <= state.pdfDoc.numPages; i++) {
+      const pg = await state.pdfDoc.getPage(i);
+      const vp = pg.getViewport({scale: state.scale});
+      state.pdfDoc.pgHeights[i-1] = vp.height;
+      state.pdfDoc[`pgvp_${i}`] = vp;
+      const ph = b.wraps.get(i - 1)?.querySelector('.pdf-ph');
+      if (ph) ph.style.height = Math.round(vp.height) + 'px';
+    }
+    // 视口内的页立即按新倍率重绘；视口外的页滚进来时由观察器重绘
+    const hr = host.getBoundingClientRect();
+    for (const w of b.wraps.values()) {
+      if (!w.dataset.rendered) continue;
+      const r = w.getBoundingClientRect();
+      if (r.bottom > hr.top - 200 && r.top < hr.bottom + 200) await renderOneWrap(w);
+    }
+    // 保持当前页在视口中的相对位置（高度变化不引起跳动）
+    const newTop = cur?.offsetTop ?? 0;
+    host.scrollTop = Math.max(0, oldScroll - oldTop + newTop);
+    updateZoomLabel();
+  } finally {
+    _pdfFitBusy = false;
+    if (_pdfFitPending) { _pdfFitPending = false; _pdfRescale(); }
+  }
+}
+function updateZoomLabel() {
+  const el = $('#zoom-label');
+  if (el) el.textContent = Math.round(state.scale * 100) + '%';
 }
 async function renderOneWrap(wrap) {
   if (!wrap) return;
   const idx = +wrap.dataset.page;
   const page = await state.pdfDoc.getPage(idx + 1);
-  const vp = page.getViewport({scale: state.scale});
+  const vp = page.getViewport({scale: state.scale});           // CSS 尺寸：覆盖层/文字层/点击命中都用它
+  const ds = dprFor(vp.width, vp.height, MAX_PAGE_PX);
+  const rvp = page.getViewport({scale: state.scale * ds});     // 位图尺寸：按 DPR 提分辨率
   const host0 = $('#pdf-host'); host0.style.setProperty('--scale-factor', state.scale);
   wrap.innerHTML = '';
   const canvas = document.createElement('canvas');
-  canvas.width = vp.width; canvas.height = vp.height;
+  canvas.width = Math.floor(rvp.width); canvas.height = Math.floor(rvp.height);
+  canvas.style.width = vp.width + 'px'; canvas.style.height = vp.height + 'px';
   wrap.appendChild(canvas);
-  await page.render({canvasContext: canvas.getContext('2d'), viewport: vp}).promise;
-  wrap._vp = vp; wrap._pageObj = page;
+  await page.render({canvasContext: canvas.getContext('2d'), viewport: rvp}).promise;
+  wrap._vp = vp; wrap._pageObj = page; wrap._scale = state.scale;
   try {
     const tc = await page.getTextContent();
     const tl = document.createElement('div');
@@ -421,14 +520,13 @@ function drawOverlays(wrap) {
   if (!wrap || !wrap._vp) return;
   const idx = +wrap.dataset.page;
   const vp = wrap._vp;
-  // 黄框：当前激活块（在该页才画）
+  // 高亮框：当前激活块（在该页才画），颜色与右侧激活块同色
   const active = $('.blk.active');
   $$('.hl-rect', wrap).forEach(x => x.remove());
   if (active && +active.dataset.page === idx && active.dataset.bbox && active.dataset.bbox !== '') {
     const ab = state.blocks.find(x => x.block_id === active.dataset.bid);
     const hc = typeColor(ab ? ab.type : 'text');
-    try { JSON.parse(active.dataset.bbox).forEach(b => {
-      if (!b || b.length < 4) return;
+    for (const b of parseBoxes(active.dataset.bbox)) {
       const r = document.createElement('div');
       r.className = 'hl-rect';
       r.style.borderColor = hc;
@@ -436,7 +534,7 @@ function drawOverlays(wrap) {
       r.style.left = (b[0]*vp.width)+'px'; r.style.top = (b[1]*vp.height)+'px';
       r.style.width = ((b[2]-b[0])*vp.width)+'px'; r.style.height = ((b[3]-b[1])*vp.height)+'px';
       wrap.appendChild(r);
-    }); } catch {}
+    }
   }
   // 布局框
   $$('.layout-rect', wrap).forEach(x => x.remove());
@@ -444,17 +542,26 @@ function drawOverlays(wrap) {
     const colors = {text: '#4a6cf7', title: '#8a5cf6', equation: '#e6a23c',
                     table: '#2eaa6e', image: '#e0528f', ref_text: '#8a93b0'};
     state.blocks.filter(b => b.page_index === idx && b.bbox).forEach(b => {
-      const bb = JSON.parse(b.bbox);
-      if (!bb || bb.length < 4) return;
-      const r = document.createElement('div');
-      r.className = 'layout-rect';
-      r.style.left = (bb[0]*vp.width)+'px'; r.style.top = (bb[1]*vp.height)+'px';
-      r.style.width = ((bb[2]-bb[0])*vp.width)+'px'; r.style.height = ((bb[3]-bb[1])*vp.height)+'px';
-      r.style.borderColor = colors[b.type] || '#9aa3bd';
-      r.title = `${b.type}`;
-      wrap.appendChild(r);
+      for (const bb of parseBoxes(b.bbox)) {
+        const r = document.createElement('div');
+        r.className = 'layout-rect';
+        r.style.left = (bb[0]*vp.width)+'px'; r.style.top = (bb[1]*vp.height)+'px';
+        r.style.width = ((bb[2]-bb[0])*vp.width)+'px'; r.style.height = ((bb[3]-bb[1])*vp.height)+'px';
+        r.style.borderColor = colors[b.type] || '#9aa3bd';
+        r.title = `${b.type}`;
+        wrap.appendChild(r);
+      }
     });
   }
+}
+/* 块 bbox 统一解析：DB 存的是扁平 [x0,y0,x1,y1]；兼容列表 [[...],[...]]（跨栏/多框块）。
+   注意：不要直接对扁平数组用 .forEach 取框——那会把 4 个数字当框迭代，算出 NaN 尺寸。 */
+function parseBoxes(bbox) {
+  if (!bbox) return [];
+  let v; try { v = JSON.parse(bbox); } catch { return []; }
+  if (!Array.isArray(v) || v.length === 0) return [];
+  if (typeof v[0] === 'number') return v.length >= 4 ? [[v[0], v[1], v[2], v[3]]] : [];
+  return v.filter(b => Array.isArray(b) && b.length >= 4);
 }
 function pdfScrollToPage(n, noFollow) {
   const wrap = _pdfBuilt?.wraps?.get(n - 1);
@@ -465,35 +572,39 @@ function pdfScrollToPage(n, noFollow) {
   $('#pg-label').textContent = `${n} / ${state.pdfDoc.numPages}`;
 }
 function redrawHl() { _pdfBuilt?.wraps?.forEach(drawOverlays); }
-function drawHighlights(page, vp) {
-  // 当前激活 block 有 bbox（归一化）→ 在对应页高亮（激活块在其他页则跳过）
-  const active = $('.blk.active');
-  if (!active || !active.dataset.bbox) return;
-  if (+active.dataset.page !== state.pageNum - 1) return;
-  const bboxes = JSON.parse(active.dataset.bbox);
-  const host = $('#pdf-host');
-  for (const b of bboxes || []) {
-    if (!b || b.length < 4) continue;
-    const [x0, y0, x1, y1] = b;  // 归一化 [0,1]，原点左下（PDF）→ 转左上
-    const rect = document.createElement('div');
-    rect.className = 'hl-rect';
-    rect.style.left = (x0 * vp.width) + 'px';
-    rect.style.top = (y0 * vp.height) + 'px';   // MinerU bbox 为左上原点，不翻转
-    rect.style.width = ((x1 - x0) * vp.width) + 'px';
-    rect.style.height = ((y1 - y0) * vp.height) + 'px';
-    host.appendChild(rect);
-  }
-}
 $('#pg-prev').onclick = () => { if (state.pageNum > 1) { state.pageNum--; renderPage(); } };
 $('#pg-next').onclick = () => { if (state.pdfDoc && state.pageNum < state.pdfDoc.numPages) { state.pageNum++; renderPage(); } };
-$('#zoom-in').onclick = () => { state.scale = Math.min(3, state.scale + 0.2); state.fitWidth = false; _pdfBuilt = null; renderPage({noFollow: true}); };
-$('#zoom-out').onclick = () => { state.scale = Math.max(0.5, state.scale - 0.2); state.fitWidth = false; _pdfBuilt = null; renderPage({noFollow: true}); };
+// 手动缩放：走 _pdfRescale 轻量路径（不重建页面骨架），并退出宽度自适应
+$('#zoom-in').onclick = () => { state.scale = Math.min(3, state.scale + 0.2); state.fitWidth = false; updateZoomLabel(); renderPage({noFollow: true}); };
+$('#zoom-out').onclick = () => { state.scale = Math.max(0.5, state.scale - 0.2); state.fitWidth = false; updateZoomLabel(); renderPage({noFollow: true}); };
 state.showLayout = false;
 $('#layout-btn').onclick = () => {
   state.showLayout = !state.showLayout;
   $('#layout-btn').classList.toggle('on', state.showLayout);
-  renderPage({noFollow: true});
+  // 立即生效：只重画覆盖层（布局框），不重建位图、不触发滚动跳转
+  redrawHl();
+  ensureCurrentRendered();
 };
+/* 当前页若尚未渲染则补渲染（布局框/高亮依赖已渲染的页） */
+function ensureCurrentRendered() {
+  const w = _pdfBuilt?.wraps?.get(state.pageNum - 1);
+  if (w && (!w.dataset.rendered || w._scale !== state.scale)) {
+    w.dataset.rendered = '1';
+    renderOneWrap(w);
+  }
+}
+/* 右侧段落 → PDF：在该块所在页立即画高亮框（页未渲染则先渲染，渲染完自动带出） */
+function highlightBlockOnPdf(blkEl) {
+  const pg = parseInt(blkEl?.dataset.page ?? '-1');
+  if (!Number.isFinite(pg) || pg < 0) return;
+  const wrap = _pdfBuilt?.wraps?.get(pg);
+  if (!wrap) return;
+  if (wrap.dataset.rendered !== '1' || wrap._scale !== state.scale) {
+    renderOneWrap(wrap);      // 未渲染 → 渲染完成后 drawOverlays 会画出高亮
+  } else {
+    redrawHl();               // 已渲染 → 直接重画覆盖层（不重绘位图）
+  }
+}
 
 /* 内容视图（统一走 switchView，保证 mainView/view 两级状态一致） */
 $$('.view-tabs [data-v]').forEach(b => b.onclick = () => switchView(b.dataset.v));
@@ -707,6 +818,7 @@ function renderContentView() {
     if (state.pdfDoc && page >= 1 && page <= state.pdfDoc.numPages) {
       state.pageNum = page; renderPage();
     }
+    highlightBlockOnPdf(x);   // 右侧 → PDF：立刻在该页画出高亮框
   });
 }
 
@@ -901,9 +1013,9 @@ function canonicalName(p) {
   return ((surname || '') + year + ' ' + title).replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
 }
 window.reindexPaper = async (pid) => {
-  if (!confirm('重建该论文的检索索引？（不影响解析/翻译结果）')) return;
-  await api(`/api/papers/${pid}/reindex`, {method: 'POST'});
-  toast('索引重建任务已入队');
+  if (!confirm('重建该论文的块结构与检索索引？（从已存解析产物重新入库，不重新解析、不影响译文）')) return;
+  const r = await api(`/api/papers/${pid}/reindex`, {method: 'POST'});
+  toast(`已重建 ${r.blocks} 块 / ${r.chunks} 分块，向量回填中`);
 };
 window.verifyMeta = async (pid) => {
   toast('联网校准中…（arXiv/CrossRef，只发送标题）');
@@ -966,6 +1078,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     </div>
     <div class="qa-parse-hint" id="qa-parse-hint" hidden></div>
     <div class="qa-msgs" id="qa-msgs">
+      <div class="qa-no-paper" id="qa-no-paper" hidden>💬 先在左侧选一篇论文，即可对它提问</div>
       <div id="qa-sum-bubble"></div>
       <div id="qa-msg-list"></div>
     </div>
@@ -987,8 +1100,11 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     if (!el) return;
     const qs = [...presets.questions];
     if (state.qaPapers.size >= 2) qs.unshift('对比所选论文的方法、数据集与实验结果有何异同？');
-    el.innerHTML = qs.map(q =>
-      `<button onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('');
+    // 预设问题默认收起成一行，不占正文版面；点标题展开，提问后自动收起
+    el.innerHTML = `<button class="preset-toggle" id="preset-toggle">💡 推荐问题<span class="arrow">▾</span></button>
+      <div class="preset-list" id="preset-list" hidden>${qs.map(q =>
+      `<button onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('')}</div>`;
+    $('#preset-toggle').onclick = () => togglePresetList();
   });
   $('#qa-pick-toggle').onclick = () => {
     const panel = $('#qa-pick-panel');
@@ -1003,9 +1119,22 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(150, e.target.scrollHeight) + 'px';
   };
-  // 会话恢复（就近取最近会话，输入区上方提示）
-  api('/api/chat/sessions').then(d => {
-    if (!state.qaSession && d.sessions.length) state.qaSession = d.sessions[0].id;
+  // 会话恢复：只取「当前论文」的会话；没选论文时清空（不显示上一篇的残留问答）
+  const curPid = state.current?.id || '';
+  api('/api/chat/sessions' + (curPid ? `?paper_id=${encodeURIComponent(curPid)}` : '')).then(d => {
+    if (!curPid) {                       // 未选论文 → 问答区留空，等选了再显示
+      state.qaSession = '';
+      const list = $('#qa-msg-list'); if (list) list.innerHTML = '';
+      const hint = $('#qa-no-paper');
+      if (hint) hint.hidden = false;
+      const inp = $('#qa-text'); if (inp) inp.disabled = true;
+      return;
+    }
+    const hint = $('#qa-no-paper');
+    if (hint) hint.hidden = true;
+    const inp = $('#qa-text'); if (inp) inp.disabled = false;
+    const cur = d.sessions.find(s => s.id === state.qaSession);
+    if (!state.qaSession || !cur) state.qaSession = d.sessions.length ? d.sessions[0].id : '';
     if (state.qaSession) loadSession(state.qaSession);
     else renderSumBubble();
   });
@@ -1117,6 +1246,14 @@ window.qaAddCurrent = () => {
   state.qaPapers.add(state.current.id); renderQaScope(); renderSumBubble();
 };
 window.askPreset = q => { $('#qa-text').value = q; sendQa(); };
+/* 推荐问题：展开/收起（默认收起，避免长期占用阅读空间） */
+function togglePresetList(force) {
+  const list = $('#preset-list'), tg = $('#preset-toggle');
+  if (!list) return;
+  list.hidden = force !== undefined ? !force : !list.hidden;
+  tg?.classList.toggle('open', !list.hidden);
+}
+function collapsePresetList() { togglePresetList(false); }
 window.autoParseForQA = async (pid, p) => {
   if (p.parse_status === 'parsing' || p.parse_status === 'pending') return;   // 已在队列
   try {
@@ -1218,6 +1355,7 @@ function sendQa() {
   });
   if (!parsedScope.length) { toast('所选论文尚未解析完成，请稍候'); return; }
   $('#qa-text').value = '';
+  collapsePresetList();      // 已提问 → 收起推荐问题，把版面让给回答
   const quote = state.qaQuote || '';
   $('#qa-msg-list').insertAdjacentHTML('beforeend',
     `<div class="msg user"><div class="bubble">${quote ? '<div class="muted" style="font-size:11px;border-left:2px solid #c9d2ee;padding-left:6px;margin-bottom:4px">📎 ' + esc(quote.split('\n> ')[1]?.slice(0, 80) || '') + '…</div>' : ''}${esc(text)}</div></div>
@@ -1295,6 +1433,7 @@ async function boot() {
   await initPdfJs();
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
   applyQaLayout();
+  updateVisToggle(); updateUploadTarget();
   if (state.qaOpen) renderQaTab();   // 问答 dock（按记忆的开合状态）
   await loadCollections();
   await loadPapers();
@@ -1927,7 +2066,9 @@ const renderBlockBody = b => {
   if (b.type === 'table') {
     const html = b.en !== undefined ? b.en : b.text;   // pairs 用 en，blocks 用 text
     const fallback = html && html.includes('<') ? `<div class="tbl">${sanitizeTbl(html)}</div>` : '';
-    const ub = b.bbox ? JSON.parse(b.bbox) : null;
+    const boxes = parseBoxes(b.bbox);
+    const ub = boxes.length ? [Math.min(...boxes.map(x=>x[0])), Math.min(...boxes.map(x=>x[1])),
+                               Math.max(...boxes.map(x=>x[2])), Math.max(...boxes.map(x=>x[3]))] : null;
     if (!ub) return fallback;
     const bbs = (b.bbox || '').replace(/\s/g, '');
     const ta = (state.assets?.tables || []).find(t =>
@@ -1951,16 +2092,19 @@ const renderBlockBody = b => {
     const pg = +blk.dataset.page;
     const wrap = _pdfBuilt && _pdfBuilt.wraps.get(pg);
     if (!wrap || !wrap._vp || wrap.dataset.rendered !== '1') return;
-    let bboxes; try { bboxes = JSON.parse(blk.dataset.bbox); } catch { return; }
-    const b = (bboxes || [])[0];
-    if (!b || b.length < 4) return;
+    let bboxes; try { bboxes = parseBoxes(blk.dataset.bbox); } catch { return; }
+    if (!bboxes.length) return;
     const vp = wrap._vp;
-    const r = document.createElement('div');
-    r.className = 'hl-rect hl-hover';
-    r.style.left = (b[0]*vp.width)+'px'; r.style.top = (b[1]*vp.height)+'px';
-    r.style.width = ((b[2]-b[0])*vp.width)+'px'; r.style.height = ((b[3]-b[1])*vp.height)+'px';
-    wrap.appendChild(r);
-    tmp = r;
+    const made = [];
+    for (const b of bboxes) {     // 跨栏合并块有多框，逐框画
+      const r = document.createElement('div');
+      r.className = 'hl-rect hl-hover';
+      r.style.left = (b[0]*vp.width)+'px'; r.style.top = (b[1]*vp.height)+'px';
+      r.style.width = ((b[2]-b[0])*vp.width)+'px'; r.style.height = ((b[3]-b[1])*vp.height)+'px';
+      wrap.appendChild(r);
+      made.push(r);
+    }
+    tmp = made.length === 1 ? made[0] : { remove: () => made.forEach(x => x.remove()) };
   });
   document.addEventListener('mouseout', e => {
     if (e.target.closest && e.target.closest('.blk')) clear();
@@ -2009,21 +2153,61 @@ window.fitPdf = () => {
   state.pdfDoc.getPage(1).then(p1 => {
     const base = p1.getViewport({scale: 1}).width;
     const s = Math.max(0.4, Math.min(3, w / base));
-    if (Math.abs(s - state.scale) > 0.02) { state.scale = Math.round(s * 20) / 20; _pdfBuilt = null; renderPage({noFollow: true}); }
+    // 适配宽度时不再按 0.05 粒度舍入（舍入会白白丢掉几个百分点分辨率），改用 0.001 精度
+    if (Math.abs(s - state.scale) > 0.002) {
+      state.scale = Math.round(s * 1000) / 1000;
+      pdfEnsureAll();      // 轻量重排：只改尺寸 + 重绘可见页，不重建骨架、不跳滚动
+    }
   });
 };
+
+/* ---- 右栏整体折叠 / 展开（参考 MinerU 官网：收起后右侧留一条可点的窄边） ---- */
+state.rpaneCollapsed = localStorage.getItem('ps-rpane-collapsed') === '1';
+window.applyRpaneCollapse = () => {
+  const reader = $('.reader');
+  if (!reader) return;
+  reader.classList.toggle('rpane-collapsed', state.rpaneCollapsed);
+  const rs = $('#rpane-restore');
+  if (rs) rs.hidden = !state.rpaneCollapsed;
+  const cb = $('#rpane-collapse');
+  if (cb) { cb.textContent = state.rpaneCollapsed ? '«' : '»'; cb.title = state.rpaneCollapsed ? '展开右栏' : '收起右栏（只留 PDF）'; }
+  // 右栏宽度变了 → PDF 重新按新宽度适配
+  if (state.pdfDoc && state.fitWidth) setTimeout(() => window.fitPdf?.(), 80);
+};
+$('#rpane-collapse').onclick = () => {
+  state.rpaneCollapsed = !state.rpaneCollapsed;
+  localStorage.setItem('ps-rpane-collapsed', state.rpaneCollapsed ? '1' : '0');
+  applyRpaneCollapse();
+};
+$('#rpane-restore').onclick = () => {
+  state.rpaneCollapsed = false;
+  localStorage.setItem('ps-rpane-collapsed', '0');
+  applyRpaneCollapse();
+};
+applyRpaneCollapse();
 (() => {
   const h = $('#v-handle');
   let dragging = false;
+  let dragFitAt = 0;
   h.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
     const r = $('.reader').getBoundingClientRect();
     const pct = Math.min(99, Math.max(1, Math.round(100 * (e.clientX - r.left) / r.width)));
-    if (pct !== state.vsplit) { state.vsplit = pct; applyVsplit(); }
+    if (pct !== state.vsplit) {
+      state.vsplit = pct;
+      applyVsplit(false);                  // 先只改栏宽（CSS，立即生效）
+      // PDF 跟随栏宽重排：节流 ~12fps，避免每次 mousemove 触发整页重绘
+      const now = Date.now();
+      if (now - dragFitAt > 80) { dragFitAt = now; fitPdf(); }
+    }
   });
   document.addEventListener('mouseup', () => {
-    if (dragging) { dragging = false; localStorage.setItem('ps-vsplit', String(state.vsplit)); }
+    if (dragging) {
+      dragging = false;
+      localStorage.setItem('ps-vsplit', String(state.vsplit));
+      fitPdf();                            // 收尾精确对齐
+    }
   });
   h.addEventListener('dblclick', () => {
     state.vsplit = 50; localStorage.setItem('ps-vsplit', '50');
@@ -2096,13 +2280,16 @@ window.figCropPass = async () => {
       const rw = (ub[2] - ub[0]) * base.width, rh = (ub[3] - ub[1]) * base.height;
       const holder = fig.querySelector('.fig-holder');
       const targetW = Math.min(holder.clientWidth || 640, 1200);
-      const scale = Math.max(2, targetW / rw);
+      // 裁剪倍率：显示宽度 × DPR（HiDPI 才够清晰）；再按整页像素预算封顶，防止高倍渲染爆内存
+      const want = Math.max(2, targetW * Math.min(window.devicePixelRatio || 1, 2) / Math.max(1, rw));
+      const cap = Math.sqrt(MAX_CROP_PX / Math.max(1, base.width * base.height));
+      const scale = Math.min(want, cap);
       const vp = page.getViewport({scale});
       const full = document.createElement('canvas');
-      full.width = vp.width; full.height = vp.height;
+      full.width = Math.floor(vp.width); full.height = Math.floor(vp.height);
       await page.render({canvasContext: full.getContext('2d'), viewport: vp}).promise;
       const out = document.createElement('canvas');
-      out.width = Math.round(rw * scale); out.height = Math.round(rh * scale);
+      out.width = Math.max(1, Math.round(rw * scale)); out.height = Math.max(1, Math.round(rh * scale));
       out.getContext('2d').drawImage(full,
         rx * scale, ry * scale, rw * scale, rh * scale,
         0, 0, out.width, out.height);
@@ -2127,16 +2314,15 @@ window.figCropPass = async () => {
     const ny = (e.clientY - rect.top) / vp.height;   // bbox 左上原点 ✓
     if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
     const pg = +wrap.dataset.page;
-    // 命中：该页所有 bbox 中包含点、面积最小者（最内层块）
+    // 命中：该页所有 bbox 中包含点、面积最小者（最内层块）；跨栏合并块有多框，逐框判
     let hit = null, hitArea = 1e9;
     for (const b of state.blocks) {
       if (b.page_index !== pg || !b.bbox) continue;
-      let bb; try { bb = JSON.parse(b.bbox); } catch { continue; }
-      const [[x0, y0, x1, y1]] = [bb];
-      if (!x1 || x0 === undefined) continue;
-      if (nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1) {
-        const area = (x1 - x0) * (y1 - y0);
-        if (area < hitArea) { hit = b; hitArea = area; }
+      for (const [x0, y0, x1, y1] of parseBoxes(b.bbox)) {
+        if (nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1) {
+          const area = (x1 - x0) * (y1 - y0);
+          if (area < hitArea) { hit = b; hitArea = area; }
+        }
       }
     }
     if (!hit) {   // 空白处：跳该页第一块
@@ -2184,16 +2370,18 @@ window.pdfFlashBlock = async b => {
   state._suppressFollow = true;
   wrap.scrollIntoView({ block: 'center' });
   setTimeout(() => { state._suppressFollow = false; }, 350);
-  let bb; try { bb = JSON.parse(b.bbox || 'null'); } catch { bb = null; }
-  if (bb && bb.length >= 4) {
+  let bb; try { bb = parseBoxes(b.bbox); } catch { bb = []; }
+  if (bb.length) {
     const c = typeColor(b.type);
-    const r = document.createElement('div');
-    r.className = 'hl-rect hl-flash';
-    r.style.borderColor = c; r.style.background = c + '30';
-    r.style.left = (bb[0]*vp.width)+'px'; r.style.top = (bb[1]*vp.height)+'px';
-    r.style.width = ((bb[2]-bb[0])*vp.width)+'px'; r.style.height = ((bb[3]-bb[1])*vp.height)+'px';
-    wrap.appendChild(r);
-    setTimeout(() => r.remove(), 2600);
+    for (const [x0, y0, x1, y1] of bb) {
+      const r = document.createElement('div');
+      r.className = 'hl-rect hl-flash';
+      r.style.borderColor = c; r.style.background = c + '30';
+      r.style.left = (x0*vp.width)+'px'; r.style.top = (y0*vp.height)+'px';
+      r.style.width = ((x1-x0)*vp.width)+'px'; r.style.height = ((y1-y0)*vp.height)+'px';
+      wrap.appendChild(r);
+      setTimeout(() => r.remove(), 2600);
+    }
   }
   state.pageNum = b.page_index + 1;
   $('#pg-label').textContent = `${state.pageNum} / ${state.pdfDoc.numPages}`;
@@ -2248,7 +2436,7 @@ window.buildRenderBlocks = () => {
       const m = state.merges.find(x => x.head_bid === b.block_id);
       const grp = m.member_bids.map(id => state.blocks.find(x => x.block_id === id)).filter(Boolean);
       const bbox = (() => { try {
-        const bs = grp.map(x => x.bbox && JSON.parse(x.bbox)).filter(Boolean);
+        const bs = grp.flatMap(x => parseBoxes(x.bbox));
         if (!bs.length) return null;
         return JSON.stringify([Math.min(...bs.map(b=>b[0])), Math.min(...bs.map(b=>b[1])),
                                Math.max(...bs.map(b=>b[2])), Math.max(...bs.map(b=>b[3]))]);

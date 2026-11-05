@@ -45,6 +45,8 @@ input:focus { outline: 2px solid #c3ceff; border-color: var(--primary); }
 .sidebar .filters button { border: 1px solid var(--border); background: none; border-radius: 20px; padding: 3px 10px; font-size: 12px; color: var(--muted); }
 .sidebar .filters button.on { background: var(--primary); color: #fff; border-color: var(--primary); }
 .paper-list { flex: 1; overflow-y: auto; }
+/* 拖到列表区即上传 */
+.paper-list.drop-hint { background: #eef1ff; box-shadow: inset 0 0 0 2px var(--primary); }
 .paper-item { padding: 10px 14px; border-bottom: 1px solid #f0f1f5; display: flex; gap: 8px; cursor: pointer; align-items: center; }
 .paper-item:hover { background: #f6f7fb; }
 .paper-item.sel { background: #eef1ff; }
@@ -64,8 +66,10 @@ input:focus { outline: 2px solid #c3ceff; border-color: var(--primary); }
 .batch-bar.show { display: flex; }
 
 /* 上传拖拽 */
-.dropzone { margin: 8px 12px; border: 2px dashed var(--border); border-radius: 8px; padding: 14px; text-align: center; color: var(--muted); font-size: 12px; cursor: pointer; }
-.dropzone.drag { border-color: var(--primary); background: #eef1ff; }
+.lib-tools .spacer { flex: 1; }
+.upload-pop { min-width: 260px; right: 8px; left: auto; }
+.upload-pop .url-import { padding: 4px 8px 6px; }
+.upload-pop .url-import input { width: 100%; }
 
 /* ---------- 顶栏 ---------- */
 .topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
@@ -77,16 +81,34 @@ input:focus { outline: 2px solid #c3ceff; border-color: var(--primary); }
 .topnav button.on { background: #eef1ff; color: var(--primary); }
 
 /* ---------- 阅读双栏 ---------- */
-.reader { flex: 1; display: flex; min-height: 0; }
-.pane-left { width: 50%; border-right: 1px solid var(--border); position: relative; background: #525659; }
-.pdf-host { overflow: auto; height: 100%; }
+.reader { flex: 1; display: flex; min-height: 0; position: relative; }
+.pane-left { width: 50%; border-right: 1px solid var(--border); position: relative; background: #525659; display: flex; flex-direction: column; }
+.pdf-host { overflow: auto; flex: 1; min-height: 0; }
 .pdf-host canvas { display: block; margin: 8px auto; box-shadow: 0 1px 6px rgba(0,0,0,.4); }
-.pdf-toolbar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); background: rgba(30,32,38,.85); color: #fff; border-radius: 20px; padding: 4px 12px; display: flex; gap: 10px; align-items: center; font-size: 12px; z-index: 5; }
-.pdf-toolbar button { background: none; border: none; color: #fff; }
+/* PDF 工具条：冻结在面板顶部（与右侧标签栏同理），不再浮在内容上遮挡正文 */
+.pdf-toolbar { display: flex; gap: 8px; align-items: center; flex: none; padding: 6px 10px;
+               font-size: 12px; color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--border); }
+.pdf-toolbar[hidden] { display: none; }
+.pdf-toolbar button { background: none; border: none; color: var(--muted); font-size: 13px; padding: 3px 6px; border-radius: 5px; line-height: 1.2; }
+.pdf-toolbar button:hover { background: #eef1ff; color: var(--primary); }
+.pdf-toolbar #pg-label, .pdf-toolbar #zoom-label { min-width: 44px; text-align: center; }
 .hl-rect { position: absolute; background: rgba(255, 210, 60, .35); border: 1px solid rgba(230, 160, 20, .8); pointer-events: none; border-radius: 2px; }
 
 .pane-right { width: 50%; display: flex; flex-direction: column; min-height: 0; }
 .view-tabs { display: flex; gap: 2px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
+/* 右栏整体折叠：收起后只留一条窄边，点它展开（参考 MinerU 官网） */
+.view-tabs .tab-collapse { border: none; background: none; color: var(--muted); font-size: 14px;
+                           padding: 4px 8px; border-radius: 6px; cursor: pointer; }
+.view-tabs .tab-collapse:hover { background: #eef1ff; color: var(--primary); }
+.reader.rpane-collapsed .pane-right { display: none; }
+/* 内联 width 由 JS 设置（applyVsplit），这里必须用 !important 才能覆盖 */
+.reader.rpane-collapsed .pane-left { width: 100% !important; }
+.reader.rpane-collapsed .v-handle { display: none; }
+.rpane-restore { position: absolute; right: 0; top: 50%; transform: translateY(-50%); z-index: 30;
+                 writing-mode: vertical-lr; background: var(--panel); border: 1px solid var(--border);
+                 border-right: none; border-radius: 8px 0 0 8px; padding: 14px 5px;
+                 font-size: 12px; color: var(--primary); cursor: pointer; box-shadow: -3px 0 12px rgba(0,0,0,.10); }
+.rpane-restore:hover { background: #eef1ff; }
 .view-tabs button { border: none; background: none; padding: 6px 12px; border-radius: 6px; color: var(--muted); }
 .view-tabs button.on { background: #eef1ff; color: var(--primary); }
 .view-tabs .spacer { flex: 1; }
@@ -120,8 +142,15 @@ input:focus { outline: 2px solid #c3ceff; border-color: var(--primary); }
 .msg.user .bubble { background: var(--primary); color: #fff; }
 .msg .bubble { display: inline-block; text-align: left; background: #f4f6fa; border-radius: 10px; padding: 10px 14px; max-width: 92%; line-height: 1.65; white-space: pre-wrap; }
 .cite { color: var(--primary); cursor: pointer; font-size: 12px; vertical-align: super; }
-.preset-qs { padding: 0 16px 10px; display: flex; flex-direction: column; gap: 6px; }
+.preset-qs { padding: 0 16px 8px; display: flex; flex-direction: column; gap: 6px; }
 .preset-qs button { text-align: left; border: 1px dashed var(--border); background: none; border-radius: 8px; padding: 7px 10px; font-size: 12px; color: var(--muted); }
+/* 推荐问题：默认收起成一行，展开才占版面 */
+.preset-qs .preset-toggle { display: flex; align-items: center; gap: 6px; border: none; border-radius: 6px; padding: 3px 2px; font-size: 12px; color: var(--muted); }
+.preset-qs .preset-toggle:hover { background: #f4f6fc; color: var(--primary); }
+.preset-qs .preset-toggle .arrow { display: inline-block; transition: transform .15s; font-size: 10px; }
+.preset-qs .preset-toggle.open .arrow { transform: rotate(180deg); }
+.preset-qs .preset-list { display: flex; flex-direction: column; gap: 6px; }
+.preset-qs .preset-list[hidden] { display: none; }
 .qa-input { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
 .qa-input textarea { resize: none; height: 44px; }
 
@@ -219,12 +248,6 @@ table.list th { color: var(--muted); font-weight: 500; }
 .col-new:hover { background: #f4f6fc; color: var(--primary); }
 
 /* 上传区加大 */
-.dropzone { margin: 10px 12px; border: 2px dashed #c9d2ee; border-radius: 12px; padding: 18px 12px;
-           text-align: center; color: var(--text); font-size: 13px; cursor: pointer; line-height: 1.7; }
-.dropzone b { font-size: 14px; }
-.dropzone .muted { font-size: 12px; }
-.dropzone:hover, .dropzone.drag { border-color: var(--primary); background: #eef1ff; }
-
 .paper-item { padding: 11px 14px; }
 .paper-item .name { font-size: 13.5px; }
 
@@ -270,6 +293,9 @@ table.list th { color: var(--muted); font-weight: 500; }
                 border-bottom: 1px solid var(--border); }
 .qa-dock-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .qa-dock-body .qa-msgs { flex: 1; }
+.qa-no-paper { margin: 18px 16px; padding: 14px; text-align: center; color: var(--muted);
+               font-size: 12px; background: #f7f8fc; border: 1px dashed var(--border); border-radius: 10px; }
+.qa-input textarea:disabled { background: #f7f8fc; color: var(--muted); cursor: not-allowed; }
 .qa-dock-body .qa-input { border-top: 1px solid var(--border); }
 
 /* ===== 文献信息（管理器式） ===== */
@@ -510,9 +536,8 @@ table.list input[type=checkbox] { width: auto; }
 
 /* 版面布局框（MinerU 检测边界可视化） */
 .layout-rect { position: absolute; border: 1.5px solid #9aa3bd; border-radius: 2px;
-               pointer-events: auto; cursor: help; z-index: 4; mix-blend-mode: multiply; }
-.layout-rect:hover { background: rgba(120, 140, 255, .12); }
-#layout-btn.on { color: #ffd76a; }
+               pointer-events: none; z-index: 4; mix-blend-mode: multiply; }
+#layout-btn.on { color: #d99a1e; background: #fff6e2; }
 
 /* 图片随容器完全自适应（无最小宽度下限） */
 .fig-group .fig-holder img { min-width: 0 !important; }
