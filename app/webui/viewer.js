@@ -304,6 +304,7 @@ async function renderPage(opts = {}) {
   $('#zoom-label').textContent = Math.round(state.scale * 100) + '%';
   const host = $('#pdf-host');
   $$('.hl-rect', host).forEach(x => x.remove());
+  $$('.layout-rect', host).forEach(x => x.remove());   // 清残留布局框（wrap 重建已带走，双保险）
   $$('.pdf-host .pdf-page').forEach(x => x.remove());
   const vp = page.getViewport({scale: state.scale});
   const wrap = document.createElement('div');
@@ -1903,6 +1904,14 @@ window.fitPdf = () => {
   if (zi) zi.addEventListener('click', () => state.fitWidth = false);
   if (zo) zo.addEventListener('click', () => state.fitWidth = false);
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => applyVsplit(), 250); });
+  // PDF 栏宽变化 → 重绘页面与全部覆盖层（布局框/高亮/文字层随尺寸走）
+  if (window.ResizeObserver) {
+    let rw;
+    new ResizeObserver(() => {
+      clearTimeout(rw);
+      rw = setTimeout(() => { if (state.pdfDoc) renderPage({noFollow: true}); }, 120);
+    }).observe($('#pane-left'));
+  }
 })();
 
 /* 划词引用块（输入框保持干净） */

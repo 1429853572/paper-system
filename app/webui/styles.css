@@ -513,3 +513,11 @@ table.list input[type=checkbox] { width: auto; }
                pointer-events: auto; cursor: help; z-index: 4; mix-blend-mode: multiply; }
 .layout-rect:hover { background: rgba(120, 140, 255, .12); }
 #layout-btn.on { color: #ffd76a; }
+
+/* 图片随容器完全自适应（无最小宽度下限） */
+.fig-group .fig-holder img { min-width: 0 !important; }
+.pane-right.narrow .fig-group .fig-holder img { flex: 1 1 100%; }
+
+/* 图片随容器完全自适应（无最小宽度下限） */
+.fig-group .fig-holder img { min-width: 0 !important; }
+.pane-right.narrow .fig-group .fig-holder img { flex: 1 1 100%; }
