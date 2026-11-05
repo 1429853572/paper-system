@@ -278,20 +278,20 @@ async def upload_papers(request: Request, files: list[UploadFile]):
     for f in files:
         data = await f.read()
         try:
-            pages = ingest.preflight_pdf(data, is_admin=is_admin, overrides=overrides)
+            pages, _kind = ingest.preflight_doc(data, f.filename or "", is_admin=is_admin, overrides=overrides)
         except ingest.PreflightError as e:
             results.append({"name": f.filename, "status": "rejected", "reason": str(e)})
             continue
         file_hash = ingest.sha256_bytes(data)
         paper_id, dup = ingest.create_paper(
-            u["id"], file_hash, pages, len(data), visibility, f.filename or "untitled.pdf")
+            u["id"], file_hash, pages, len(data), visibility, f.filename or "untitled")
         if dup:
             results.append({"name": f.filename, "status": "duplicate", "paper_id": paper_id})
             continue
         if collection_id:
             with db.write() as c:
                 c.execute("UPDATE papers SET collection_id=? WHERE id=?", (collection_id, paper_id))
-        ingest.store_pdf(paper_id, data)
+        ingest.store_pdf(paper_id, data, f.filename or "original.pdf")
         tier = "standard" if (is_admin or overrides.get("max_tier", "standard") != "advanced") else "standard"
         scheduler.enqueue(
             u["id"], "parse", paper_id,
@@ -348,15 +348,23 @@ def paper_pdf(paper_id: str, request: Request):
     if p is None or p["deleted_at"]:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
-    path = ingest.PAPERS_DIR / paper_id / "original.pdf"
-    if not path.exists():
-        raise HTTPException(404, "PDF 文件缺失")
+    import mimetypes
+    path = None
+    base = ingest.PAPERS_DIR / paper_id
+    if base.exists():
+        for f in sorted(base.iterdir()):
+            if f.name.startswith("original."):
+                path = f
+                break
+    if path is None:
+        raise HTTPException(404, "原始文件缺失（URL 导入的论文无本地原件）")
     from urllib.parse import quote
     from core.meta import canonical_name
     name = canonical_name(p)
-    return FileResponse(path, media_type="application/pdf",
+    mt = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=mt,
                         headers={"Content-Disposition":
-                                 'attachment; filename="paper.pdf"; filename*=UTF-8\'\'' + quote(name + ".pdf")})
+                                 'inline; filename="paper.' + path.name.rsplit(".", 1)[-1] + '"'})
 
 
 @app.get("/api/papers/{paper_id}/markdown")
@@ -596,6 +604,31 @@ async def admin_set_pool(request: Request):
         c.execute("INSERT INTO settings(key,value) VALUES('pool_enabled',?) "
                   "ON CONFLICT(key) DO UPDATE SET value=?", (val, val))
     return {"ok": True}
+
+
+@app.post("/api/papers/import-url")
+async def import_url(request: Request):
+    """URL 直接导入（MinerU 服务端抓取；支持 pdf/arxiv 直链等）."""
+    u = require(request)
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "无效 URL")
+    name = Path(url.split("?")[0]).name or "document.pdf"
+    if "." not in name:
+        name += ".pdf"
+    file_hash = "url:" + ingest.sha256_bytes(url.encode())
+    exist = db.one("SELECT id FROM papers WHERE file_hash=? AND deleted_at IS NULL", (file_hash,))
+    if exist:
+        return {"paper_id": exist["id"], "status": "duplicate"}
+    paper_id, _ = ingest.create_paper(u["id"], file_hash, 0, 0,
+                                      body.get("visibility", "shared"), name)
+    cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+    with db.write() as c:
+        c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
+    scheduler.enqueue(u["id"], "parse", paper_id, {"tier": "standard", "url": url},
+                      priority="interactive")
+    return {"paper_id": paper_id, "status": "queued"}
 
 
 # ---------------- 文献库（collections） ----------------
@@ -1081,8 +1114,13 @@ def start_parse(paper_id: str, request: Request):
     overrides = _quota_overrides(u["id"])
     _check_daily_quota(u["id"], is_admin, overrides)
     _cancel_paper_jobs(paper_id, "parse")  # 重解析前清掉在途旧任务
+    # URL 导入的论文：从历史任务继承 url（无本地原件）
+    prev = db.one("SELECT payload FROM jobs WHERE paper_id=? AND job_type='parse' "
+                  "AND payload LIKE '%\"url\"%' ORDER BY id DESC LIMIT 1", (paper_id,))
+    import json as _j
+    url = (_j.loads(prev["payload"]).get("url") if prev else None)
     scheduler.enqueue(u["id"], "parse", paper_id,
-                      {"tier": "standard", "reparse": True},
+                      {"tier": "standard", "reparse": True, **({"url": url} if url else {})},
                       priority="interactive")
     with db.write() as c:
         c.execute("UPDATE papers SET parse_status='pending' WHERE id=?", (paper_id,))

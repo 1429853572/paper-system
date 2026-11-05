@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 import queue
 import threading
 import time
@@ -225,8 +226,20 @@ class Scheduler:
             self._update(job["id"], status="failed", error="论文不存在")
             return
 
-        pdf_path = ingest.PAPERS_DIR / paper_id / "original.pdf"
-        data = pdf_path.read_bytes()
+        # 原始文件（pdf/图片/office）；URL 导入无本地文件
+        url = payload.get("url")
+        data = b""
+        fname = f"{paper_id}.pdf"
+        if not url:
+            import os
+            base = ingest.PAPERS_DIR / paper_id
+            for f in sorted(os.listdir(base)) if base.exists() else []:
+                if f.startswith("original."):
+                    data = (base / f).read_bytes()
+                    fname = f
+                    break
+            if not data:
+                raise RuntimeError("原始文件缺失")
 
         # 幂等：有未失效远程任务则先续查；否则新建
         task_id: str | None = None
@@ -245,10 +258,17 @@ class Scheduler:
             if run_id != payload.get("run_id"):
                 payload = {**payload, "run_id": run_id}   # 同步本地，轮询后使用
                 self._update(job["id"], payload=json.dumps(payload))
-            receipt = mineru.create_task(f"{paper_id}.pdf", data, tier=tier)
+            if url:
+                fname = Path(url.split('?')[0]).name or "doc.pdf"
+                if not fname.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx',
+                                               '.ppt', '.pptx', '.xls', '.xlsx', '.html', '.txt')):
+                    fname += ".pdf"   # 无已知扩展名（arxiv ID 含点也会命中）默认按 PDF
+            receipt = mineru.create_task(fname,
+                                         None if url else data, tier=tier, url=url)
             task_id = receipt.task_id
             self._update(job["id"], remote_task_id=task_id)
-            mineru.upload(receipt, data)
+            if not url:
+                mineru.upload(receipt, data)
 
         # 轮询到终态
         run_id = payload.get("run_id")

@@ -54,15 +54,17 @@ class MinerUClient:
             return False
 
     # ---- 创建任务（单文件） ----
-    def create_task(self, file_name: str, file_bytes: bytes, tier: str = "standard") -> TaskReceipt:
-        sha = hashlib.sha256(file_bytes).hexdigest()
+    def create_task(self, file_name: str, file_bytes: bytes | None, tier: str = "standard",
+                    url: str | None = None) -> TaskReceipt:
+        entry: dict = {"file_name": Path(file_name).name}
+        if url:
+            entry["url"] = url
+        else:
+            entry["bytes"] = len(file_bytes or b"")
+            entry["sha256sum"] = hashlib.sha256(file_bytes or b"").hexdigest()
         r = self._client.post(
             f"{self.base}/v1/tasks",
-            json={
-                "files": [{"file_name": Path(file_name).name, "bytes": len(file_bytes), "sha256sum": sha}],
-                "tier": tier,
-                "output_formats": ["default"],
-            },
+            json={"files": [entry], "tier": tier, "output_formats": ["default"]},
         )
         if r.status_code != 202:
             self._raise(r)

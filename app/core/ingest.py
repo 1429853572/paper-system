@@ -17,30 +17,37 @@ PAPERS_DIR = DATA_DIR / "papers"
 
 # 预检：magic bytes
 _PDF_MAGIC = b"%PDF-"
+_IMG_MAGICS = (b"\x89PNG", b"\xff\xd8\xff")          # png / jpeg
+_OFFICE_EXTS = {".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".html", ".txt"}
 
 
 class PreflightError(Exception):
     pass
 
 
-def preflight_pdf(data: bytes, *, is_admin: bool, overrides: dict[str, Any]) -> int:
-    """返回页数；不合规抛 PreflightError。"""
+def preflight_doc(data: bytes, name: str, *, is_admin: bool, overrides: dict[str, Any]) -> tuple[int, str]:
+    """返回 (页数, 类型 pdf|image|office)；不合规抛 PreflightError。MinerU 原生支持这三类."""
     max_mb = overrides.get("max_file_mb") if not is_admin else None
     max_pages = overrides.get("max_pages") if not is_admin else None
     max_mb = int(max_mb if max_mb is not None else config.get("limits", "max_file_mb"))
     max_pages = int(max_pages if max_pages is not None else config.get("limits", "max_pages"))
 
-    if not data.startswith(_PDF_MAGIC):
-        raise PreflightError("不是有效的 PDF 文件")
     if len(data) > max_mb * 1024 * 1024:
         raise PreflightError(f"文件超过 {max_mb}MB 限制")
-    reader = PdfReader(io_stream := __import__("io").BytesIO(data))
-    if reader.is_encrypted:
-        raise PreflightError("PDF 已加密，无法解析")
-    pages = len(reader.pages)
-    if not is_admin and pages > max_pages:
-        raise PreflightError(f"页数 {pages} 超过 {max_pages} 页限制")
-    return pages
+    ext = "." + (name or "").rsplit(".", 1)[-1].lower() if "." in (name or "") else ""
+    if data.startswith(_PDF_MAGIC):
+        reader = PdfReader(__import__("io").BytesIO(data))
+        if reader.is_encrypted:
+            raise PreflightError("PDF 已加密，无法解析")
+        pages = len(reader.pages)
+        if not is_admin and pages > max_pages:
+            raise PreflightError(f"页数 {pages} 超过 {max_pages} 页限制")
+        return pages, "pdf"
+    if data.startswith(_IMG_MAGICS):
+        return 1, "image"
+    if ext in _OFFICE_EXTS:
+        return 0, "office"
+    raise PreflightError("不支持的格式（PDF / 图片 / Office 文档）")
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -51,10 +58,11 @@ def new_paper_id() -> str:
     return "p" + secrets.token_hex(8)
 
 
-def store_pdf(paper_id: str, data: bytes) -> Path:
+def store_pdf(paper_id: str, data: bytes, name: str = "original.pdf") -> Path:
     d = PAPERS_DIR / paper_id
     d.mkdir(parents=True, exist_ok=True)
-    p = d / "original.pdf"
+    safe = "".join(ch for ch in Path(name or "original.pdf").name if ch not in '/\\:')
+    p = d / (safe if safe.endswith((".pdf", ".png", ".jpg", ".jpeg", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".html", ".txt")) else "original." + (safe.rsplit(".", 1)[-1] if "." in safe else "bin"))
     p.write_bytes(data)
     return p
 

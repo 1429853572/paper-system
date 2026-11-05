@@ -463,3 +463,6 @@ table.list input[type=checkbox] { width: auto; }
 .pane-right.narrow .inline-fig img { max-width: 100%; }
 .pane-right.narrow .pair { padding: 4px 8px; }
 .tbl table { min-width: 420px; }
+
+.url-import { display: flex; gap: 6px; margin-top: 8px; }
+.url-import input { font-size: 12px; padding: 5px 8px; }

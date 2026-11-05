@@ -182,12 +182,25 @@ function toggleSelect(id, on) {
 const dz = $('#dropzone');
 dz.onclick = () => $('#file-input').click();
 $('#file-input').onchange = e => uploadFiles(e.target.files);
+$('#url-import-btn').onclick = async () => {
+  const url = $('#url-import-input').value.trim();
+  if (!url) { toast('请输入 URL'); return; }
+  try {
+    const r = await api('/api/papers/import-url', {method: 'POST', body: JSON.stringify({
+      url, collection_id: state.currentCollection || undefined})});
+    toast(r.status === 'duplicate' ? '该 URL 已在库中' : '已加入解析队列');
+    $('#url-import-input').value = '';
+    loadPapers();
+  } catch (e) { toast('导入失败: ' + e.message); }
+};
+$('#url-import-input').onkeydown = e => { if (e.key === 'Enter') $('#url-import-btn').click(); };
 ['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
 ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
 dz.addEventListener('drop', e => uploadFiles(e.dataTransfer.files));
 async function uploadFiles(files, targetCid) {
-  const pdfs = [...files].filter(f => f.name.toLowerCase().endsWith('.pdf'));
-  if (!pdfs.length) { toast('仅支持 PDF'); return; }
+  const okFile = f => /\.(pdf|png|jpe?g|docx?|pptx?|xlsx?)$/i.test(f.name);
+  const pdfs = [...files].filter(okFile);
+  if (!pdfs.length) { toast('支持 PDF / 图片 / Office 文档'); return; }
   const vis = $('#vis-private')?.checked ? 'private' : 'shared';
   const col = (targetCid || state.currentCollection) ? `&collection_id=${targetCid || state.currentCollection}` : '';
   const fd = new FormData();
@@ -255,7 +268,12 @@ async function openPaper(id) {
     $('#pdf-toolbar').hidden = false;
     renderPage();
     applyVsplit();   // 按当前分栏宽度自适应首帧
-  } catch (e) { toast('PDF 加载失败: ' + e.message); }
+  } catch (e) {
+    // URL/Office 导入无本地 PDF——展示占位（右侧解析内容照常）
+    const isImg = /\.(png|jpe?g)(\?|$)/i.test(state.current?.id ? '' : '');
+    $('#pdf-host').innerHTML = `<div style="color:#aab;margin:40px auto;text-align:center;font-size:13px">
+      ⚠ 本篇无 PDF 预览（URL/Office 导入）<br>右侧解析内容与问答功能正常</div>`;
+  }
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
   state.pairs = []; state.versions = []; state.assets = null;
   api(`/api/papers/${id}/block-notes`).then(d => { state._bnotes = d.notes; }).catch(() => { state._bnotes = {}; });

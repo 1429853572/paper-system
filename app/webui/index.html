@@ -32,7 +32,11 @@
       <div style="font-size:26px">📄</div>
       <div><b>上传文献</b></div>
       <div class="muted">拖拽 PDF 到这里，或点击选择<br>多文件支持 · 当前上传到：<span id="dz-target">全部文献</span></div>
-      <input type="file" id="file-input" multiple accept=".pdf" hidden>
+      <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
+      <div class="url-import">
+        <input id="url-import-input" placeholder="或粘贴 URL 导入（pdf/arxiv 直链）">
+        <button class="btn small primary" id="url-import-btn">导入</button>
+      </div>
     </div>
     <footer>
       <label style="font-size:12px;display:flex;gap:4px;align-items:center">
