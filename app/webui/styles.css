@@ -602,3 +602,4 @@ table.list input[type=checkbox] { width: auto; }
 .col-arrow:hover { color: var(--primary); }
 .col-arrow-none { width: 14px; display: inline-block; }
 .col-item.on .col-name { font-weight: 600; }
+.lib-tree .col-arrow { font-size: 15px; }

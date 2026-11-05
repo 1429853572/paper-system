@@ -1549,73 +1549,85 @@ window.exportChat = () => {
 /* ---- 📚 文库管理页 ---- */
 async function renderCollectionsPage() {
   const d = await api('/api/collections');
+  state.collections = d.collections;
+  state.totalPapers = d.total;
   state._statuses = (await api('/api/statuses')).statuses;
   const el = $('#page-collections');
-  const cards = await Promise.all(d.collections.map(async c => {
+  const colState = JSON.parse(localStorage.getItem('ps-col-open') || '{}');
+  const children = {};
+  d.collections.forEach(c => (children[c.parent_id || 'root'] ||= []).push(c));
+  const openState = cid => colState[cid] !== false;
+
+  const moveOpts = exclude => d.collections.filter(x => x.id !== exclude)
+    .map(x => `<option value="${x.id}">${'\u3000'.repeat(treeDepth(x.id))}${esc(x.name)}</option>`).join('');
+
+  const buildCard = async c => {
+    const kids = children[c.id] || [];
+    const open = openState(c.id);
     const papers = (await api('/api/papers?collection_id=' + c.id)).papers;
-    const paperRows = papers.map(p => {
-      const st = state._statuses?.[p.id] || {};
-      const pj = st.parse_job, tj = st.translate_job;
-      const parseBadge = st.parsing
-        ? `<span class="badge run" title="${esc(pj?.error || '')}">⏳解析${pj?.status === 'queued' ? '(排队)' : ''}</span>`
-        : p.parse_status === 'parsed' ? '<span class="badge ok">✓已解析</span>'
-        : p.parse_status === 'failed'
-          ? `<span class="badge err" title="${esc(pj?.error || '解析失败')}">✗失败</span>
-             <button class="btn small" onclick="retryPaperJob('${p.id}')">重试</button>`
-          : '<span class="badge run">排队中</span>';
-      const trBadge = st.translating
-        ? `<span class="badge run">🌐${tj ? tj.done + '/' + tj.total : ''}</span>`
-        : tj?.status === 'failed'
-          ? `<span class="badge err" title="${esc(tj.error || '')}">译✗</span>
-             <button class="btn small" onclick="retryPaperJob('${p.id}')">重试</button>`
-          : (tj?.status === 'done' ? '<span class="badge ok">✓已译</span>' : '<span class="muted">—</span>');
-      const tk = st.tokens;
-      const tkBadge = tk ? `<span class="muted" title="prompt/completion tokens">${(tk.p + tk.c).toLocaleString()} tok</span>` : '';
-      return `<tr>
-        <td style="width:28px"><input type="checkbox" class="lib-ck" data-cid="${c.id}" data-pid="${p.id}" onchange="libCk('${c.id}')"></td>
-        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">${esc(p.title || p.id)}</td>
-        <td>${parseBadge}</td><td>${trBadge}</td><td>${tkBadge}</td>
-        <td class="row-actions">
-          <button class="btn small" onclick="viewPaper('${p.id}')">阅读</button>
-          <select style="width:auto;font-size:11px;padding:2px 4px" onchange="movePaper('${p.id}', this.value, this)">
-            <option value="">移入…</option>
-            ${d.collections.filter(x => x.id !== c.id).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}
-            <option value="__none__">未分库</option>
-          </select>
-          <button class="btn small danger" onclick="delPaperFromLib('${p.id}')">删除</button>
-        </td></tr>`;}).join('');
     const st = state._statuses || {};
     const doneTr = papers.filter(p => st[p.id]?.translate_job?.status === 'done').length;
     const totTok = papers.reduce((s, p) => s + ((st[p.id]?.tokens?.p || 0) + (st[p.id]?.tokens?.c || 0)), 0);
-    return `<div class="card lib-card" data-cid="${c.id}">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-        <h2 style="margin:0;flex:1">${'　'.repeat(treeDepth(c.id))}📁 ${esc(c.name)}
-          <span class="muted" style="font-size:13px">${papers.length} 篇</span>
-          <span class="muted" style="font-size:12px">· 已译 ${doneTr}/${papers.length} · ${totTok.toLocaleString()} tok</span></h2>
+    const depth = treeDepth(c.id);
+    const paperRows = papers.map(p => {
+      const s = st[p.id] || {};
+      const tj = s.translate_job;
+      const parseBadge = s.parsing ? '<span class="badge run">⏳解析</span>'
+        : p.parse_status === 'parsed' ? '<span class="badge ok">✓</span>'
+        : '<span class="badge err">✗</span>';
+      const trBadge = s.translating ? `<span class="badge run">🌐${tj ? tj.done + '/' + tj.total : ''}</span>`
+        : tj?.status === 'done' ? '<span class="badge ok">译✓</span>'
+        : tj?.status === 'failed' ? '<span class="badge err">译✗</span>' : '<span class="muted">—</span>';
+      const tk = s.tokens;
+      return `<tr>
+        <td style="width:26px"><input type="checkbox" class="lib-ck" data-cid="${c.id}" data-pid="${p.id}" onchange="libCk('${c.id}')"></td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">${esc(p.title || p.id)}</td>
+        <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" onclick="retryPaperJob('${p.id}')">↻</button>` : ''}</td>
+        <td>${trBadge}</td>
+        <td class="muted" style="font-size:11px">${tk ? (tk.p + tk.c).toLocaleString() + ' tok' : ''}</td>
+        <td class="row-actions">
+          <button class="btn small" onclick="viewPaper('${p.id}')">阅读</button>
+          <select style="width:auto;font-size:11px;padding:2px 4px" onchange="movePaper('${p.id}', this.value, this)">
+            <option value="">移入…</option>${moveOpts(c.id)}</select>
+          <button class="btn small danger" onclick="delPaperFromLib('${p.id}')">删</button>
+        </td></tr>`;}).join('');
+    return `<div class="card lib-card lib-tree" data-cid="${c.id}" style="margin-left:${depth * 18}px">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+        ${kids.length ? `<button class="col-arrow ${open ? '' : 'closed'}" onclick="toggleColOpen('${c.id}');renderCollectionsPage()">${open ? '▾' : '▸'}</button>` : '<span class="col-arrow-none"></span>'}
+        <h2 style="margin:0;flex:1">📁 ${esc(c.name)}
+          <span class="muted" style="font-size:12px">${papers.length} 篇${kids.length ? ' · 子库' + kids.length : ''} · 译${doneTr}/${papers.length} · ${totTok.toLocaleString()}tok</span></h2>
         <button class="btn small primary" onclick="libUpload('${c.id}')">⬆ 上传</button>
-        <button class="btn small" onclick="addSubLib('${c.id}')" ${treeDepth(c.id) >= 2 ? 'disabled title="最多三级"' : ''}>＋ 子库</button>
-        <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">✏️ 重命名</button>
-        <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">删除库</button>
+        <button class="btn small" onclick="addSubLib('${c.id}')" ${depth >= 2 ? 'disabled title="最多三级"' : ''}>＋子库</button>
+        <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">✏️</button>
+        <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">🗑</button>
       </div>
       <div class="lib-batch" id="lb-${c.id}" hidden>
         <span id="lb-count-${c.id}">0</span> 篇选中
         <button class="btn small primary" onclick="libBatchTranslate('${c.id}')">🌐 批量翻译</button>
-        <select style="width:auto;font-size:12px" onchange="libBatchMove('${c.id}', this.value, this)"><option value="">移入…</option>
-          ${d.collections.filter(x => x.id !== c.id).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
+        <select style="width:auto;font-size:12px" onchange="libBatchMove('${c.id}', this.value, this)"><option value="">移入…</option>${moveOpts(c.id)}</select>
         <button class="btn small danger" onclick="libBatchDelete('${c.id}')">删除</button>
       </div>
-      <table class="list"><tr><th><input type="checkbox" onchange="libCkAll('${c.id}', this.checked)" title="全选"></th><th>论文</th><th>解析</th><th>翻译</th><th>用量</th><th></th></tr>
-      ${paperRows || `<tr><td colspan="6" class="muted">空库——点「⬆ 上传到此库」或拖拽 PDF 进来</td></tr>`}</table>
+      <table class="list"><tr><th></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
+        ${paperRows || '<tr><td colspan="6" class="muted">空库</td></tr>'}</table>
     </div>`;
-  }));
+  };
+
+  const buildTree = async nodes => {
+    const out = [];
+    for (const c of nodes) {
+      out.push(await buildCard(c));
+      if (openState(c.id)) out.push(...await buildTree(children[c.id] || []));
+    }
+    return out;
+  };
+  const cards = await buildTree(children['root'] || []);
+
   el.innerHTML = `
-    <div class="card" style="display:flex;gap:10px;align-items:center">
-      <h2 style="margin:0;flex:1">文献库管理</h2>
-      <span class="muted" style="font-size:12px">拖 PDF 到任意库卡片可直接上传入库</span>
-      <input id="newlib-name" placeholder="新库名称" style="max-width:240px">
-      <button class="btn primary" onclick="createLibFromPage()">＋ 新建文献库</button>
-    </div>` + (cards.join('') || '<div class="card"><p class="muted">暂无文献库——上传论文时会自动创建「默认文献库」</p></div>');
-  // 拖拽上传绑定
+    <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <h2 style="margin:0;flex:1">文献库管理 <span class="muted" style="font-size:12px">拖 PDF 到库卡上传 · ▾/▸ 收起子树</span></h2>
+      <input id="newlib-name" placeholder="新库名称" style="max-width:200px">
+      <button class="btn primary" onclick="createLibFromPage()">＋ 顶层库</button>
+    </div>` + (cards.join('') || '<div class="card"><p class="muted">暂无文献库</p></div>');
   $$('.lib-card').forEach(card => {
     const cid = card.dataset.cid;
     ['dragover', 'dragenter'].forEach(ev => card.addEventListener(ev, e => { e.preventDefault(); card.classList.add('drag'); }));
@@ -1623,6 +1635,13 @@ async function renderCollectionsPage() {
     card.addEventListener('drop', e => uploadFiles(e.dataTransfer.files, cid));
   });
 }
+window.toggleColOpen = cid => {
+  const s = JSON.parse(localStorage.getItem('ps-col-open') || '{}');
+  s[cid] = s[cid] === false ? true : false;
+  localStorage.setItem('ps-col-open', JSON.stringify(s));
+  renderCollections();
+};
+
 function libSelected(cid) {
   return $$('.lib-ck').filter(x => x.dataset.cid === cid && x.checked).map(x => x.dataset.pid);
 }
