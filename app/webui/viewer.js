@@ -587,15 +587,14 @@ async function renderMeta() {
     <div class="meta-head card">
       <h2 id="m-title" style="margin-bottom:8px">${esc(paper.title || paper.id)}</h2>
       <div class="meta-line">👤 <span id="m-authors">${esc(paper.authors || '—')}</span></div>
-      <div class="meta-line" id="m-rank"><span class="muted">期刊分区：</span><button class="btn small" onclick="loadRank('${pid}')">查询</button></div>
+      <div class="meta-line" id="m-rank"><span class="muted">期刊分区：加载中…</span></div>
       <div class="meta-line">📚 <span id="m-src">${esc([paper.journal, paper.year, paper.doi ? 'DOI: ' + paper.doi : ''].filter(Boolean).join(' · ') || '—')}</span>
         ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">✓ 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>
       <div class="meta-line">⭐ <span id="m-stars">${[1,2,3,4,5].map(i => `<span class="star ${i <= (notes.importance||0) ? 'on' : ''}" data-i="${i}">★</span>`).join('')}</span>
         🏷 <span id="m-tags">${esc(notes.tags || '') || '<i class=muted>点击右侧添加</i>'}</span></div>
       <div class="meta-actions">
         <button class="btn small" onclick="editMeta('${pid}')">✏️ 编辑</button>
-        <button class="btn small" onclick="extractMeta('${pid}')">🤖 AI 提取</button>
-        <button class="btn small" onclick="verifyMeta('${pid}')">🌐 联网校准</button>
+        <button class="btn small" onclick="extractMeta('${pid}')" title="用 AI 补全缺失字段（作者/摘要/关键词）">🤖 AI 补全</button>
         <button class="btn small" onclick="copyCite('${pid}')">✂ 引用</button>
         <a class="btn small" href="/api/papers/${pid}/pdf" download="${canonicalName(paper)}.pdf">⬇ PDF</a>
         <button class="btn small" onclick="parseCtrl()">↻ 重新解析</button>
@@ -644,6 +643,7 @@ async function renderMeta() {
   };
   renderRefs('');
   $('#ref-search').oninput = e => renderRefs(e.target.value.toLowerCase());
+  loadRank(pid);   // 分区自动加载（按期刊缓存，同期刊只查一次）
 }
 
 window.editMeta = (pid) => {

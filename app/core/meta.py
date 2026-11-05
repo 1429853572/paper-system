@@ -76,17 +76,25 @@ def extract_meta_llm(user_id: int, paper_id: str) -> dict:
     except ValueError:
         raise RuntimeError("元数据提取失败：模型输出无效")
 
+    # AI 补全语义：已有（校准/规则/人工）字段优先，AI 只填空缺
+    cur = db.one("SELECT authors, journal, year, doi, keywords, abstract FROM papers WHERE id=?",
+                 (paper_id,))
+    merged = {
+        "authors": (cur["authors"] or ", ".join(data.get("authors", [])))[:400],
+        "journal": (cur["journal"] or data.get("journal", ""))[:200],
+        "year": (cur["year"] or str(data.get("year", "")))[:8],
+        "doi": (cur["doi"] or data.get("doi", ""))[:100],
+        "keywords": (cur["keywords"] or json.dumps(data.get("keywords", []), ensure_ascii=False))[:500],
+        "abstract": (cur["abstract"] or data.get("abstract_zh", ""))[:3000],
+    }
     with db.write() as c:
         c.execute(
             "UPDATE papers SET authors=?, journal=?, year=?, doi=?, keywords=?, abstract=? "
             "WHERE id=?",
-            (", ".join(data.get("authors", []))[:400], data.get("journal", "")[:200],
-             str(data.get("year", ""))[:8], data.get("doi", "")[:100],
-             json.dumps(data.get("keywords", []), ensure_ascii=False)[:500],
-             data.get("abstract_zh", "") or paper["abstract"] or "",
-             paper_id),
+            (merged["authors"], merged["journal"], merged["year"], merged["doi"],
+             merged["keywords"], merged["abstract"], paper_id),
         )
-    return data
+    return {**data, **merged}
 
 
 def get_references(paper_id: str, limit: int = 300) -> list[dict]:

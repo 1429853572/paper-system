@@ -82,6 +82,7 @@ class Scheduler:
         for name, fn in (
             ("parse-worker", self._parse_loop),
             ("embed-worker", self._embed_loop),
+            ("meta-worker", self._meta_loop),
             ("translate-worker", self._translate_loop),
             ("janitor", self._janitor_loop),
         ):
@@ -293,9 +294,10 @@ class Scheduler:
 
         self._update(job["id"], status="done", progress_done=1, progress_total=1)
         log.info("paper %s 解析完成: %d blocks, %d chunks", paper_id, n_blocks, n_chunks)
-        # embedding 回填入队（background）
+        # embedding 回填 + 元数据自动校准/补全 入队（background）
         self.enqueue(job["user_id"], "embed_backfill", paper_id, {"run_id": run_id},
                      priority="background")
+        self.enqueue(job["user_id"], "meta", paper_id, {}, priority="background")
 
     def _fail_or_retry(self, job: Any, error: str) -> None:
         retry_max = int(config.get("scheduler", "retry_max"))
@@ -338,6 +340,38 @@ class Scheduler:
             except Exception as e:  # noqa: BLE001
                 log.exception("embed job %s 异常", job["id"])
                 self._fail_or_retry(job, str(e)[:500])
+
+    # ================= 元数据 worker（校准→AI补空，不占GPU） =================
+    def _meta_loop(self) -> None:
+        while not self._stop.is_set():
+            job = self._next_job("meta")
+            if job is None:
+                time.sleep(8)
+                continue
+            if not self._claim(job["id"]):
+                continue
+            try:
+                paper_id = job["paper_id"]
+                # ① 联网校准（arXiv→S2→CrossRef；无需 LLM key）
+                from .meta import verify_meta_online
+                try:
+                    verify_meta_online(paper_id)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("meta verify %s: %s", paper_id, e)
+                # ② AI 补全缺失字段（用发起人 chat key；无 key 静默跳过）
+                row = db.one("SELECT authors, journal, year, abstract, keywords FROM papers WHERE id=?",
+                             (paper_id,))
+                missing = row and any(not (row[k] or "").strip() for k in row.keys())
+                if missing:
+                    try:
+                        from .meta import extract_meta_llm
+                        extract_meta_llm(job["user_id"], paper_id)
+                    except Exception as e:  # noqa: BLE001
+                        log.info("meta AI补全 %s 跳过: %s", paper_id, str(e)[:120])
+                self._update(job["id"], status="done")
+            except Exception as e:  # noqa: BLE001
+                log.exception("meta job %s 异常", job["id"])
+                self._update(job["id"], status="failed", error=str(e)[:300])
 
     # ================= 翻译池（里程碑3填充处理器） =================
     translate_handler: Callable[[Any], None] | None = None
