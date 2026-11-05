@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -282,6 +282,11 @@ class Database:
                 ALTER TABLE papers ADD COLUMN meta_source TEXT;
                 ALTER TABLE papers ADD COLUMN meta_verified_at TEXT;
             """)
+        if from_v < 7:
+            try:
+                c.execute("ALTER TABLE blocks ADD COLUMN asset_path TEXT")
+            except Exception:
+                pass
         if from_v < 6:
             c.executescript("""
                 CREATE TABLE IF NOT EXISTS block_notes (

@@ -184,18 +184,25 @@ def build_blocks(paper_id: str, run_id: str, middle_json: dict) -> int:
                         section_stack.pop()
                 section_stack.append((level, text[:80]))
             normalized = "title" if btype in ("doc_title", "paragraph_title") else btype
+            # 图表资产：image 块取裁剪图路径（正文内嵌渲染用）
+            asset = None
+            if btype in ("image", "table"):
+                for sub in block.get("content", []) or []:
+                    if isinstance(sub, dict) and sub.get("type") in ("image_body", "table_body"):
+                        asset = sub.get("image_path") or None
+                        break
             # MinerU 的 index 每页独立编号 → block_id 必须含页号
             rows.append((
                 paper_id, run_id, f"{paper_id}-{run_id}-p{page_idx:03d}-b{idx:05d}",
                 normalized, current_section(), page_idx, idx,
                 json.dumps(bbox) if bbox else None, text,
-                sha256_bytes(text.encode())[:16],
+                sha256_bytes(text.encode())[:16], asset,
             ))
 
     with db.write() as c:
         c.executemany(
             "INSERT OR REPLACE INTO blocks(paper_id,parse_run_id,block_id,type,section_path,"
-            "page_index,block_index,bbox,text,source_hash) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "page_index,block_index,bbox,text,source_hash,asset_path) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
     return len(rows)

@@ -504,8 +504,10 @@ function renderContentView() {
     el.innerHTML = '<div class="pairs">' + state.pairs.map(p => {
       const zh = p.zh ? esc(p.zh)
         : (SKIP.has(p.type) ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
-      return `<div class="pair en blk" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${linkifyRefs(esc(p.en))}</div>
-              <div class="pair zh blk" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${zh}
+      const zhBody = p.type === 'table' ? renderBlockBody(p)
+        : p.zh ? esc(p.zh) : (p.type === 'image' ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
+      return `<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
+              <div class="pair zh blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${zhBody}
                 <button class="bn-btn" title="段落批注" onclick="event.stopPropagation();editBlockNote('${state.current.id}','${p.block_id}')">📝</button></div>`;
     }).join('') + '</div>';
   } else if (state.view === 'zh') {
@@ -518,7 +520,7 @@ function renderContentView() {
       const note = state._bnotes?.[b.block_id];
       return `<div class="blk" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}'>
         <button class="bn-btn" title="段落批注" onclick="event.stopPropagation();editBlockNote('${state.current.id}','${b.block_id}')">📝</button>
-        ${b.type === 'title' ? '<h3>' : ''}${linkifyRefs(esc(b.text))}${b.type === 'title' ? '</h3>' : ''}
+        ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
         ${note ? `<div class="bnote">📌 ${esc(note)}</div>` : ''}
       </div>`;}).join('');
   }
@@ -1716,3 +1718,53 @@ const restorePos = id => {
   } catch {}
   return false;
 };
+
+/* 表格 HTML 消毒（本地解析产物，剥脚本/事件即可） */
+const sanitizeTbl = html => (html || '')
+  .replace(/<script[\s\S]*?<\/script>/gi, '')
+  .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*')/gi, '')
+  .replace(/javascript:/gi, '');
+/* 块 → HTML（图/表内嵌正文；文本 linkify 引用） */
+const renderBlockBody = b => {
+  const pid = state.current?.id;
+  if (b.type === 'image' && (b.asset_path || (b.bbox && false))) {
+    const name = (b.asset_path || '').split('/').pop();
+    if (!name) return '';
+    return `<figure class="inline-fig">
+      <img loading="lazy" src="/api/papers/${pid}/images/${name}" onclick="lightbox(this.src, '')">
+    </figure>`;
+  }
+  if (b.type === 'table') {
+    const html = b.en !== undefined ? b.en : b.text;   // pairs 用 en，blocks 用 text
+    return html && html.includes('<') ? `<div class="tbl">${sanitizeTbl(html)}</div>` : '';
+  }
+  return linkifyRefs(esc(b.en !== undefined ? b.en : b.text));
+};
+
+/* 悬停 .blk → PDF 临时对应框 */
+(() => {
+  let tmp = null;
+  const clear = () => { if (tmp) { tmp.remove(); tmp = null; } };
+  document.addEventListener('mouseover', e => {
+    const blk = e.target.closest && e.target.closest('.blk');
+    clear();
+    if (!blk || !blk.dataset.bbox || blk.dataset.bbox === '' || !state._lastVP) return;
+    if (+blk.dataset.page !== state.pageNum - 1) return;   // 只画当前页
+    let bboxes;
+    try { bboxes = JSON.parse(blk.dataset.bbox); } catch { return; }
+    const b = (bboxes || [])[0];
+    if (!b || b.length < 4) return;
+    const vp = state._lastVP;
+    const r = document.createElement('div');
+    r.className = 'hl-rect hl-hover';
+    r.style.left = (b[0] * vp.width) + 'px';
+    r.style.top = ((1 - b[3]) * vp.height) + 'px';
+    r.style.width = ((b[2] - b[0]) * vp.width) + 'px';
+    r.style.height = ((b[3] - b[1]) * vp.height) + 'px';
+    $('#pdf-host .pdf-page').appendChild(r);
+    tmp = r;
+  });
+  document.addEventListener('mouseout', e => {
+    if (e.target.closest && e.target.closest('.blk')) clear();
+  });
+})();
