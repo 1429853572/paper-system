@@ -1461,8 +1461,8 @@ async function renderAssets() {
         ${f.label ? `<span class="asset-badge" onclick="jumpEvidence(${f.page_index})" title="跳到 PDF 该页">${esc(f.label)}</span>` : ''}
         <div class="fig-grid">
         <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}"
-             onclick="lightbox(this.src, '')">
-        ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" onclick="lightbox(this.src, '')">`).join('')}
+             ondblclick="lightbox(this.src, '')">
+        ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" ondblclick="lightbox(this.src, '')">`).join('')}
         </div>
         ${f.sub_captions?.length ? `<p class="muted" style="font-size:11px">${esc(f.sub_captions.join(' | ').slice(0, 160))}</p>` : ''}
         <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${f.page_index});return false">📄 第${f.page_index + 1}页</a> · ${esc(f.caption || '（无题注）')}</p>
@@ -2065,7 +2065,7 @@ window.figCropPass = async () => {
         rx * scale, ry * scale, rw * scale, rh * scale,
         0, 0, out.width, out.height);
       const url = out.toDataURL('image/png');
-      holder.innerHTML = `<img src="${url}" onclick="lightbox(this.src, '')">`;
+      holder.innerHTML = `<img src="${url}" ondblclick="lightbox(this.src, '')">`;
       fig.classList.add('from-pdf');
     } catch (e) { /* 保留 MinerU 兜底图 */ }
   }

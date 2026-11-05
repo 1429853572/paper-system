@@ -585,3 +585,5 @@ table.list input[type=checkbox] { width: auto; }
 
 .hl-flash { animation: hlflash 2.6s ease; pointer-events: none; z-index: 6; }
 @keyframes hlflash { 0%,100% { opacity: 0; } 12%, 70% { opacity: 1; } }
+
+.inline-fig img, .fig-grid img { cursor: text; }   /* 单击=正常选中，双击才放大 */
