@@ -983,6 +983,54 @@ def papers_statuses(request: Request):
     return {"statuses": out}
 
 
+@app.get("/api/papers/{paper_id}/block-notes")
+def get_block_notes(paper_id: str, request: Request):
+    u = require(request)
+    rows = db.all("SELECT block_id, note FROM block_notes WHERE user_id=? AND paper_id=?",
+                  (u["id"], paper_id))
+    return {"notes": {r["block_id"]: r["note"] for r in rows}}
+
+
+@app.put("/api/papers/{paper_id}/block-notes")
+async def set_block_note(paper_id: str, request: Request):
+    u = require(request)
+    body = await request.json()
+    bid = body.get("block_id") or ""
+    note = (body.get("note") or "").strip()[:2000]
+    if not bid:
+        raise HTTPException(400, "block_id 必填")
+    with db.write() as c:
+        if note:
+            c.execute(
+                "INSERT INTO block_notes(user_id,paper_id,block_id,note,updated_at) "
+                "VALUES(?,?,?,?,datetime('now')) "
+                "ON CONFLICT(user_id, block_id) DO UPDATE SET note=?, updated_at=datetime('now')",
+                (u["id"], paper_id, bid, note, note))
+        else:
+            c.execute("DELETE FROM block_notes WHERE user_id=? AND block_id=?", (u["id"], bid))
+    return {"ok": True}
+
+
+@app.post("/api/translate-inline")
+async def translate_inline(request: Request):
+    """划词翻译（单段，BYOK 翻译配置）."""
+    u = require(request)
+    body = await request.json()
+    text = (body.get("text") or "").strip()[:2000]
+    if not text:
+        raise HTTPException(400, "text 必填")
+    try:
+        from core.llm import LLMClient, resolve_llm
+        cfg = resolve_llm(u["id"], "translate")
+        client = LLMClient(cfg, user_id=u["id"], paper_id=body.get("paper_id"))
+        zh = client.complete(
+            [{"role": "system", "content": "把用户给出的学术文本翻译成简体中文，只输出译文。"},
+             {"role": "user", "content": text}], max_tokens=max(256, len(text)))
+        return {"zh": zh.strip()}
+    except NoKeyError as e:
+        raise HTTPException(400, str(e))
+
+
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
 def reindex_paper(paper_id: str, request: Request):

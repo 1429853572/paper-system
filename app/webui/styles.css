@@ -399,3 +399,39 @@ table.list input[type=checkbox] { width: auto; }
 .chip-q { cursor: pointer; border: 1px dashed #c9d2ee; background: #f6f8ff; color: var(--primary);
           border-radius: 14px; padding: 3px 12px; font-size: 12px; }
 .chip-q:hover { background: #e8edff; border-style: solid; }
+
+/* ===== 划词工具条 ===== */
+#sel-bar { position: fixed; z-index: 80; background: #2b2f3a; border-radius: 8px; padding: 4px;
+           box-shadow: 0 6px 20px rgba(0,0,0,.3); display: flex; gap: 2px; flex-direction: column; }
+#sel-bar button { border: none; background: none; color: #e8eaf2; padding: 5px 12px; border-radius: 6px;
+                  font-size: 12px; cursor: pointer; }
+#sel-bar button:hover { background: #4a5064; }
+#sel-bar .sel-out { color: #dfe3ee; font-size: 12px; padding: 6px 10px; max-width: 320px;
+                    max-height: 140px; overflow-y: auto; line-height: 1.6; border-top: 1px solid #4a5064; }
+
+/* ===== 引用悬浮卡片 ===== */
+#ref-pop { position: fixed; z-index: 80; background: var(--panel); border: 1px solid var(--border);
+           border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 10px 14px;
+           max-width: 330px; font-size: 12px; line-height: 1.6; }
+.ref-cite { color: var(--primary); cursor: pointer; }
+.ref-cite:hover { text-decoration: underline; }
+
+/* ===== 段落批注 ===== */
+.blk { position: relative; }
+.bn-btn { display: none; position: absolute; left: -22px; top: 4px; border: none; background: none;
+          font-size: 12px; cursor: pointer; opacity: .55; }
+.blk:hover .bn-btn { display: inline-block; }
+.bn-btn:hover { opacity: 1; }
+.bnote { margin-top: 4px; background: #fff8dc; border-left: 3px solid #e6c34d; padding: 5px 10px;
+         border-radius: 4px; font-size: 12.5px; color: #6b5b1e; }
+
+/* ===== 目录面板 ===== */
+#toc-panel { position: absolute; top: 92px; right: 10px; width: 300px; max-height: 64vh; z-index: 30;
+             background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+             box-shadow: 0 12px 40px rgba(0,0,0,.16); overflow-y: auto; }
+#toc-panel .toc-head { display: flex; justify-content: space-between; align-items: center;
+                       padding: 10px 14px; font-weight: 600; border-bottom: 1px solid var(--border);
+                       position: sticky; top: 0; background: var(--panel); }
+.toc-item { padding: 7px 14px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #f4f5f9;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toc-item:hover { background: #eef1ff; color: var(--primary); }

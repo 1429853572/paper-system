@@ -257,9 +257,12 @@ async function openPaper(id) {
   } catch (e) { toast('PDF 加载失败: ' + e.message); }
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
   state.pairs = []; state.versions = []; state.assets = null;
+  api(`/api/papers/${id}/block-notes`).then(d => { state._bnotes = d.notes; }).catch(() => { state._bnotes = {}; });
+  state._refs = null;   // 引用缓存随论文重置
   loadBilingual(id).then(() => {   // 有译文默认双语，否则原文
     if (state.versions.length && state.view === 'orig') switchView('read', 'bilingual');
     else renderContentView();
+    restorePos(id);
   });
   renderContentView();
   refreshJobState();          // 解析/翻译控制按钮状态
@@ -488,8 +491,9 @@ function renderContentView() {
     el.innerHTML = '<div class="pairs">' + state.pairs.map(p => {
       const zh = p.zh ? esc(p.zh)
         : (SKIP.has(p.type) ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
-      return `<div class="pair en blk" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.en)}</div>
-              <div class="pair zh blk" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${zh}</div>`;
+      return `<div class="pair en blk" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${linkifyRefs(esc(p.en))}</div>
+              <div class="pair zh blk" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${zh}
+                <button class="bn-btn" title="段落批注" onclick="event.stopPropagation();editBlockNote('${state.current.id}','${p.block_id}')">📝</button></div>`;
     }).join('') + '</div>';
   } else if (state.view === 'zh') {
     const zh = state.pairs.filter(p => p.zh);
@@ -497,10 +501,13 @@ function renderContentView() {
       `<div class="blk zh" data-bid="${p.block_id}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.zh)}</div>`).join('')
       : '<p class="muted">尚无中文译文。</p>';
   } else {  // orig
-    el.innerHTML = state.blocks.map(b => `
-      <div class="blk" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}'>
-        ${b.type === 'title' ? '<h3>' : ''}${esc(b.text)}${b.type === 'title' ? '</h3>' : ''}
-      </div>`).join('');
+    el.innerHTML = state.blocks.map(b => {
+      const note = state._bnotes?.[b.block_id];
+      return `<div class="blk" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}'>
+        <button class="bn-btn" title="段落批注" onclick="event.stopPropagation();editBlockNote('${state.current.id}','${b.block_id}')">📝</button>
+        ${b.type === 'title' ? '<h3>' : ''}${linkifyRefs(esc(b.text))}${b.type === 'title' ? '</h3>' : ''}
+        ${note ? `<div class="bnote">📌 ${esc(note)}</div>` : ''}
+      </div>`;}).join('');
   }
   // 🔗 联动：右侧滚动 → PDF 跟页 + 当前块高亮（节流：仅页变化时重渲染）
   if (window.IntersectionObserver && state.syncLink) {
@@ -520,6 +527,7 @@ function renderContentView() {
       } else if (state._lastVP) {
         redrawHl();
       }
+      savePos();
     }, { root: el, threshold: [0.4, 0.75] });
     $$('.blk', el).forEach(b => state._blkObs.observe(b));
   }
@@ -1523,3 +1531,172 @@ function followupButtons(sections) {
     qs.map(q => `<button class="chip chip-q" onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('') +
     `</div>`;
 }
+
+/* ================= 四项借鉴功能 ================= */
+
+/* ---- ① 划词工具条（右侧原文/译文区） ---- */
+(() => {
+  let bar = null, lastSel = null;
+  const ensureBar = () => {
+    if (bar) return bar;
+    bar = document.createElement('div');
+    bar.id = 'sel-bar'; bar.hidden = true;
+    bar.innerHTML = `<button data-a="tr">🌐翻译</button><button data-a="ex">💡解释</button>
+                     <button data-a="ask">💬提问</button><button data-a="cp">📋复制</button>
+                     <div class="sel-out" hidden></div>`;
+    document.body.appendChild(bar);
+    bar.onclick = async e => {
+      const b = e.target.closest('button'); if (!b || !lastSel) return;
+      const {text, page} = lastSel;
+      const out = bar.querySelector('.sel-out');
+      if (b.dataset.a === 'cp') { copyText(text, '选中文字'); return; }
+      if (b.dataset.a === 'tr') {
+        out.hidden = false; out.textContent = '翻译中…';
+        try {
+          const r = await api('/api/translate-inline', {method: 'POST',
+            body: JSON.stringify({text, paper_id: state.current?.id})});
+          out.textContent = r.zh;
+        } catch (err) { out.textContent = '翻译失败: ' + err.message; }
+        return;
+      }
+      const quote = `（第${(page ?? 0) + 1}页）\n> ${text.slice(0, 500)}\n`;
+      if (b.dataset.a === 'ex') {
+        $('#qa-text').value = `请结合论文解释下面这段内容${quote}`;
+        sendQa();
+      } else {
+        $('#qa-text').value = `关于这段内容${quote}我的问题是：`;
+        $('#qa-text').focus();
+      }
+      hideBar();
+    };
+    return bar;
+  };
+  const hideBar = () => { if (bar) { bar.hidden = true; bar.querySelector('.sel-out').hidden = true; } };
+  document.addEventListener('mouseup', e => {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().trim() : '';
+    const inContent = e.target.closest && (e.target.closest('#content-view') || e.target.closest('.qa-msgs'));
+    if (!text || text.length < 2 || !inContent) { hideBar(); return; }
+    const blk = e.target.closest('.blk');
+    lastSel = {text, page: blk ? +blk.dataset.page : (state.pageNum - 1)};
+    const b = ensureBar();
+    b.hidden = false;
+    const x = Math.min(e.clientX, innerWidth - 260), y = e.clientY - 44;
+    b.style.left = Math.max(8, x) + 'px'; b.style.top = Math.max(8, y) + 'px';
+  });
+  document.addEventListener('mousedown', e => { if (bar && !bar.contains(e.target)) hideBar(); });
+  window._hideSelBar = hideBar;
+})();
+
+/* ---- ② 引用悬浮预览（原文 [n] → 参考文献卡片） ---- */
+(() => {
+  let pop = null, refsLoading = null;
+  const ensurePop = () => {
+    if (pop) return pop;
+    pop = document.createElement('div');
+    pop.id = 'ref-pop'; pop.hidden = true;
+    document.body.appendChild(pop);
+    return pop;
+  };
+  const loadRefs = pid => {
+    if (state._refs) return Promise.resolve();
+    if (!refsLoading) refsLoading = api(`/api/papers/${pid}/references`)
+      .then(d => { state._refs = d.references; refsLoading = null; })
+      .catch(() => { refsLoading = null; });
+    return refsLoading;
+  };
+  document.addEventListener('mouseover', async e => {
+    const el = e.target.closest && e.target.closest('.ref-cite');
+    const p = ensurePop();
+    if (!el) { p.hidden = true; return; }
+    if (!state.current) return;
+    await loadRefs(state.current.id);
+    const n = +el.dataset.n;
+    const ref = (state._refs || [])[n - 1];
+    if (!ref) { p.hidden = true; return; }
+    p.innerHTML = `<b>[${n}]</b> ${esc(ref.text.slice(0, 220))}${ref.text.length > 220 ? '…' : ''}
+      <div class="muted" style="font-size:11px;margin-top:4px">📄 第${ref.page_index + 1}页 · 点击跳转</div>`;
+    p.hidden = false;
+    const r = el.getBoundingClientRect();
+    p.style.left = Math.min(r.left, innerWidth - 340) + 'px';
+    p.style.top = (r.bottom + 6 > innerHeight - 160 ? r.top - p.offsetHeight - 6 : r.bottom + 6) + 'px';
+  });
+  document.addEventListener('click', e => {
+    const el = e.target.closest && e.target.closest('.ref-cite');
+    if (el && state._refs) {
+      const ref = state._refs[+el.dataset.n - 1];
+      if (ref) jumpEvidence(ref.page_index);
+    }
+    if (pop && !pop.contains(e.target)) ensurePop().hidden = true;
+  });
+})();
+const linkifyRefs = html => html.replace(/\[(\d{1,3})\]/g,
+  (m, n) => `<span class="ref-cite" data-n="${n}">[${n}]</span>`);
+
+/* ---- ③ 段落笔记 ---- */
+window.editBlockNote = async (pid, bid) => {
+  const cur = (state._bnotes || {})[bid] || '';
+  const note = prompt('段落批注（留空删除）：', cur);
+  if (note === null) return;
+  await api(`/api/papers/${pid}/block-notes`, {method: 'PUT',
+    body: JSON.stringify({block_id: bid, note})});
+  state._bnotes = state._bnotes || {};
+  if (note.trim()) state._bnotes[bid] = note.trim(); else delete state._bnotes[bid];
+  toast('批注已保存');
+  renderContentView();
+};
+
+/* ---- ④ 目录导航 + 阅读位置记忆 ---- */
+window.toggleToc = () => {
+  let t = $('#toc-panel');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toc-panel'; t.hidden = true;
+    $('.pane-right').appendChild(t);
+    document.addEventListener('click', e => {
+      if (!t.hidden && !t.contains(e.target) && e.target.id !== 'toc-btn') t.hidden = true;
+    });
+  }
+  if (t.hidden) {
+    const seen = new Set(); const items = [];
+    for (const b of state.blocks) {
+      const sp = b.section_path || '';
+      if (!sp || seen.has(sp)) continue;
+      seen.add(sp);
+      items.push(`<div class="toc-item" data-page="${b.page_index}" data-bid="${b.block_id}">${esc(sp.split(' > ').pop())}</div>`);
+    }
+    t.innerHTML = `<div class="toc-head">目录 <button class="btn small" onclick="toggleToc()">✕</button></div>` +
+      (items.join('') || '<p class="muted" style="padding:10px">无章节结构</p>');
+    $$('.toc-item', t).forEach(x => x.onclick = () => {
+      jumpEvidence(+x.dataset.page);
+      const blk = $(`#content-view .blk[data-bid="${x.dataset.bid}"]`);
+      if (blk) blk.scrollIntoView({block: 'start'});
+      t.hidden = true;
+    });
+  }
+  t.hidden = !t.hidden;
+};
+const savePos = () => {
+  if (!state.current) return;
+  const active = $('.blk.active');
+  try {
+    localStorage.setItem('ps-pos-' + state.current.id, JSON.stringify({
+      page: state.pageNum, bid: active?.dataset?.bid || null,
+    }));
+  } catch {}
+};
+const restorePos = id => {
+  try {
+    const pos = JSON.parse(localStorage.getItem('ps-pos-' + id) || 'null');
+    if (pos?.page && state.pdfDoc && pos.page <= state.pdfDoc.numPages) {
+      state.pageNum = pos.page;
+      renderPage({noFollow: false});
+      if (pos.bid) setTimeout(() => {
+        const blk = $(`#content-view .blk[data-bid="${pos.bid}"]`);
+        if (blk) blk.scrollIntoView({block: 'center'});
+      }, 200);
+      return true;
+    }
+  } catch {}
+  return false;
+};

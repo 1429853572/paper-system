@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -281,6 +281,17 @@ class Database:
             c.executescript("""
                 ALTER TABLE papers ADD COLUMN meta_source TEXT;
                 ALTER TABLE papers ADD COLUMN meta_verified_at TEXT;
+            """)
+        if from_v < 6:
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS block_notes (
+                    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    paper_id   TEXT NOT NULL,
+                    block_id   TEXT NOT NULL,
+                    note       TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY(user_id, block_id)
+                );
             """)
         if from_v < 5:
             c.executescript("""
