@@ -1825,9 +1825,13 @@ state.fitWidth = true;   // PDF 随栏宽自适应（手动缩放后关闭，拖
 window.applyVsplit = (fire = true) => {
   const reader = $('.reader');
   if (!reader || innerWidth <= 880) return;   // 小屏堆叠布局不动
-  $('#pane-left').style.width = state.vsplit + '%';
-  $('#pane-left').style.flex = 'none';
-  $('.pane-right').classList.toggle('narrow', $('.pane-right').getBoundingClientRect().width < 560);
+  const pl = $('#pane-left'), pr = $('.pane-right');
+  pl.style.width = state.vsplit + '%';
+  pl.style.flex = 'none';
+  pr.style.width = 'auto';          // 右栏弹性填充剩余空间（否则残留 50% 出空白）
+  pr.style.flex = '1 1 auto';
+  pr.style.minWidth = 0;
+  pr.classList.toggle('narrow', pr.getBoundingClientRect().width < 560);
   if (fire) fitPdf();
 };
 window.fitPdf = () => {
