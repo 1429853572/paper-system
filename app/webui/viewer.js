@@ -1875,9 +1875,12 @@ const renderBlockBody = b => {
     const subCaps = fig?.sub_captions || [];
     const fb = [b.asset_path, ...(fig?.extra_images || [])].map(p => p.split('/').pop());
     const ub = fig?.union_bbox || null;   // 仅组图并集才裁（子块 bbox 是局部，会截错）
+    const caps = [];
+    if (fig && fig.caption) caps.push(fig.caption);
+    (subCaps || []).forEach(c => c && caps.push(c));
     return `<figure class="inline-fig ${ub ? 'fig-crop' : ''}" ${ub ? `data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'` : ''}>
       <div class="fig-holder">${fb.map(n => `<img loading="lazy" src="/api/papers/${pid}/images/${n}">`).join('')}</div>
-      ${subCaps.length ? `<figcaption class="muted" style="font-size:11px">${esc(subCaps.join(' | ').slice(0, 200))}</figcaption>` : ''}
+      ${caps.length ? `<figcaption class="muted" style="font-size:11.5px;line-height:1.5">${esc(caps.join(' ｜ ').slice(0, 300))}</figcaption>` : ''}
     </figure>`;
   }
   if (b.type === 'equation' && (b.text || b.en)) {
@@ -1893,8 +1896,12 @@ const renderBlockBody = b => {
     const fallback = html && html.includes('<') ? `<div class="tbl">${sanitizeTbl(html)}</div>` : '';
     const ub = b.bbox ? JSON.parse(b.bbox) : null;
     if (!ub) return fallback;
+    const bbs = (b.bbox || '').replace(/\s/g, '');
+    const ta = (state.assets?.tables || []).find(t =>
+      t.page_index === b.page_index && JSON.stringify(t.bbox) === bbs);
     return `<figure class="fig-crop tbl-crop" data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'>
       <div class="fig-holder">${fallback}</div>
+      ${ta && ta.caption ? `<figcaption class="muted" style="font-size:11.5px;line-height:1.5">${esc(ta.caption.slice(0, 200))}</figcaption>` : ''}
     </figure>`;
   }
   return katexify(linkifyRefs(esc(b.en !== undefined ? b.en : b.text)));
