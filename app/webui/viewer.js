@@ -266,7 +266,7 @@ async function openPaper(id) {
     if (state.view === 'qa') renderQaTab();
   }
 }
-async function renderPage() {
+async function renderPage(opts = {}) {
   const page = await state.pdfDoc.getPage(state.pageNum);
   $('#pg-label').textContent = `${state.pageNum} / ${state.pdfDoc.numPages}`;
   $('#zoom-label').textContent = Math.round(state.scale * 100) + '%';
@@ -278,12 +278,25 @@ async function renderPage() {
   canvas.width = vp.width; canvas.height = vp.height;
   host.appendChild(canvas);
   await page.render({canvasContext: canvas.getContext('2d'), viewport: vp}).promise;
+  state._lastVP = vp; state._lastPage = page;
   drawHighlights(page, vp);
+  // 🔗 左→右：翻页/跳页时右侧滚到本页首块
+  if (state.syncLink && !opts.noFollow && ['orig', 'bilingual', 'zh'].includes(state.view)) {
+    const first = $(`#content-view .blk[data-page="${state.pageNum - 1}"]`);
+    if (first && typeof first.scrollIntoView === 'function') first.scrollIntoView({ block: 'start' });
+  }
+}
+function redrawHl() {
+  const host = $('#pdf-host');
+  $$('.hl-rect', host).forEach(x => x.remove());
+  const canvas = $('canvas', host);
+  if (canvas && state._lastVP) drawHighlights(state._lastPage, state._lastVP);
 }
 function drawHighlights(page, vp) {
-  // 当前激活 block 有 bbox（归一化）→ 在对应页高亮
+  // 当前激活 block 有 bbox（归一化）→ 在对应页高亮（激活块在其他页则跳过）
   const active = $('.blk.active');
   if (!active || !active.dataset.bbox) return;
+  if (+active.dataset.page !== state.pageNum - 1) return;
   const bboxes = JSON.parse(active.dataset.bbox);
   const host = $('#pdf-host');
   for (const b of bboxes || []) {
@@ -489,6 +502,28 @@ function renderContentView() {
         ${b.type === 'title' ? '<h3>' : ''}${esc(b.text)}${b.type === 'title' ? '</h3>' : ''}
       </div>`).join('');
   }
+  // 🔗 联动：右侧滚动 → PDF 跟页 + 当前块高亮（节流：仅页变化时重渲染）
+  if (window.IntersectionObserver && state.syncLink) {
+    if (state._blkObs) state._blkObs.disconnect();
+    state._blkObs = new IntersectionObserver(entries => {
+      if (!state.syncLink) return;
+      const vis = entries.filter(e => e.isIntersecting && e.intersectionRatio > 0.4)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!vis) return;
+      const blk = vis.target;
+      $$('.blk.active', $('#content-view')).forEach(x => x.classList.remove('active'));
+      blk.classList.add('active');
+      const pg = +blk.dataset.page;
+      if (state.pdfDoc && pg >= 0 && pg + 1 !== state.pageNum) {
+        state.pageNum = pg + 1;
+        renderPage({noFollow: true});
+      } else if (state._lastVP) {
+        redrawHl();
+      }
+    }, { root: el, threshold: [0.4, 0.75] });
+    $$('.blk', el).forEach(b => state._blkObs.observe(b));
+  }
+
   // 段落点击 → 跳页 + 高亮
   $$('.blk', el).forEach(x => x.onclick = () => {
     $$('.blk').forEach(y => y.classList.remove('active'));
@@ -499,6 +534,17 @@ function renderContentView() {
     }
   });
 }
+
+/* 🔗 联动开关 */
+state.syncLink = localStorage.getItem('ps-link') !== '0';
+$('#link-toggle').onclick = () => {
+  state.syncLink = !state.syncLink;
+  localStorage.setItem('ps-link', state.syncLink ? '1' : '0');
+  $('#link-toggle').classList.toggle('on', state.syncLink);
+  toast(state.syncLink ? '联动已开：滚动双向对应' : '联动已关：两侧独立滚动');
+  if (!state.syncLink && state._blkObs) { state._blkObs.disconnect(); state._blkObs = null; }
+  if (state.syncLink) renderContentView();   // 重新挂 observer
+};
 
 /* 阅读子页签（原文/双语/中文） */
 $$('.r-subtabs [data-s]').forEach(b => b.onclick = () => switchView('read', b.dataset.s));
