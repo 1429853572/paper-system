@@ -1153,7 +1153,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     </div>
     <div class="qa-parse-hint" id="qa-parse-hint" hidden></div>
     <div class="qa-msgs" id="qa-msgs">
-      <div class="qa-no-paper" id="qa-no-paper" hidden>💬 先在左侧选一篇论文，即可对它提问</div>
+      <div class="qa-no-paper" id="qa-no-paper" hidden>💬 先用「选择论文」勾选要提问的文献<br><span style="font-size:11px">也可以先在左侧打开一篇</span></div>
       <div id="qa-sum-bubble"></div>
       <div id="qa-msg-list"></div>
     </div>
@@ -1194,22 +1194,27 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(150, e.target.scrollHeight) + 'px';
   };
-  // 会话恢复：只取「当前论文」的会话；没选论文时清空（不显示上一篇的残留问答）
-  const curPid = state.current?.id || '';
-  api('/api/chat/sessions' + (curPid ? `?paper_id=${encodeURIComponent(curPid)}` : '')).then(d => {
-    if (!curPid) {                       // 未选论文 → 问答区留空，等选了再显示
+  // 会话恢复：按「问答范围」过滤（不是当前打开的论文）
+  // 范围为空 → 问答区留空并禁用输入；范围有论文 → 加载这些论文的会话
+  const scope = [...state.qaPapers];
+  api('/api/chat/sessions').then(d => {
+    const hint = $('#qa-no-paper');
+    const inp = $('#qa-text');
+    if (!scope.length) {                 // 没选论文 → 不显示上一篇的残留问答
       state.qaSession = '';
       const list = $('#qa-msg-list'); if (list) list.innerHTML = '';
-      const hint = $('#qa-no-paper');
+      const sum = $('#qa-sum-bubble'); if (sum) sum.innerHTML = '';
       if (hint) hint.hidden = false;
-      const inp = $('#qa-text'); if (inp) inp.disabled = true;
+      if (inp) inp.disabled = true;
+      updateExportBtn();
       return;
     }
-    const hint = $('#qa-no-paper');
     if (hint) hint.hidden = true;
-    const inp = $('#qa-text'); if (inp) inp.disabled = false;
-    const cur = d.sessions.find(s => s.id === state.qaSession);
-    if (!state.qaSession || !cur) state.qaSession = d.sessions.length ? d.sessions[0].id : '';
+    if (inp) inp.disabled = false;
+    const sessions = d.sessions.filter(s =>
+      (s.paper_scope || '').split(',').some(p => scope.includes(p)));
+    const cur = sessions.find(s => s.id === state.qaSession);
+    if (!state.qaSession || !cur) state.qaSession = sessions.length ? sessions[0].id : '';
     if (state.qaSession) loadSession(state.qaSession);
     else renderSumBubble();
     updateExportBtn();
@@ -2383,6 +2388,7 @@ $('#rpane-collapse').onclick = () => {
   state.rpaneCollapsed = !state.rpaneCollapsed;
   localStorage.setItem('ps-rpane-collapsed', state.rpaneCollapsed ? '1' : '0');
   applyRpaneCollapse();
+  if (state.rpaneCollapsed) toast('右栏已收起（阅读与问答都在右栏）· 点屏幕最右侧的「« 展开右栏」恢复', 4500);
 };
 $('#rpane-restore').onclick = () => {
   state.rpaneCollapsed = false;
