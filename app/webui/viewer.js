@@ -33,6 +33,64 @@ function toast(msg, ms = 2500) {
 }
 function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
 
+/* ---- SVG 图标库（v1.2 起 UI 图标全 SVG 化；toast 消息文本中的 emoji 保留）----
+   线条风格：16 viewBox / stroke 1.5 / 圆角端点 / currentColor 跟随文字色。 */
+const ICONS = {
+  close: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  plus: '<path d="M8 3v10M3 8h10"/>',
+  minus: '<path d="M3 8h10"/>',
+  chevD: '<path d="M4 6l4 4 4-4"/>',
+  chevU: '<path d="M4 10l4-4 4 4"/>',
+  chevL: '<path d="M10 3L5 8l5 5"/>',
+  chevR: '<path d="M6 3l5 5-5 5"/>',
+  dblL: '<path d="M7.5 4L3.5 8l4 4M11.5 4l-4 4 4 4"/>',
+  dblR: '<path d="M8.5 4l4 4-4 4M4.5 4l4 4-4 4"/>',
+  arrowL: '<path d="M13 8H3M7 4L3 8l4 4"/>',
+  arrowR: '<path d="M3 8h10M9 4l4 4-4 4"/>',
+  download: '<path d="M8 2v8M5 7l3 3 3-3M3 13.5h10"/>',
+  upload: '<path d="M8 10V2.5M5 5l3-3 3 3M3 13.5h10"/>',
+  save: '<path d="M3.5 3.5h8l2 2v7a1 1 0 01-1 1h-9a1 1 0 01-1-1v-9a1 1 0 011-1z"/><path d="M5.5 3.5v3h5v-3M5.5 13V9.5h5V13"/>',
+  trash: '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 9.5h5.8l.6-9.5"/>',
+  edit: '<path d="M11.2 2.8l2 2L6.5 11.5l-2.8.8.8-2.8 6.7-6.7z"/>',
+  retry: '<path d="M13 8A5 5 0 1111.6 4.4M13 2.5V5h-2.5"/>',
+  check: '<path d="M3 8.5l3.2 3.2L13 4.5"/>',
+  clock: '<circle cx="8" cy="8" r="5.5"/><path d="M8 4.5V8l2.5 1.5"/>',
+  globe: '<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c2.3 2.8 2.3 8.2 0 11-2.3-2.8-2.3-8.2 0-11z"/>',
+  play: '<path d="M5.5 3.5v9l7-4.5z"/>',
+  stop: '<rect x="4" y="4" width="8" height="8" rx="1.5"/>',
+  menu: '<path d="M3 4.5h10M3 8h10M3 11.5h10"/>',
+  copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5h-7v7"/>',
+  doc: '<path d="M4 2.5h5.5L12.5 5.5V13.5h-8.5z"/><path d="M9.5 2.5v3h3"/>',
+  folder: '<path d="M2.5 5a1 1 0 011-1h3.2l1.5 1.8h5.3a1 1 0 011 1v6.2a1 1 0 01-1 1h-10a1 1 0 01-1-1V5z"/>',
+  library: '<path d="M3 13.5V3.5M6.3 13.5V3.5M9.6 13.5V3.5M2 13.5h12"/>',
+  chat: '<path d="M2.5 5A1.5 1.5 0 014 3.5h8A1.5 1.5 0 0113.5 5v4A1.5 1.5 0 0112 10.5H7.5L4.5 13v-2.5H4A1.5 1.5 0 012.5 9V5z"/>',
+  sliders: '<path d="M3 5h10M3 11h10"/><circle cx="6" cy="5" r="1.8"/><circle cx="10" cy="11" r="1.8"/>',
+  star: '<path d="M8 2.5l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.7l-3.6 1.9.7-4L2.2 6.8l4-.6L8 2.5z"/>',
+  lock: '<rect x="4" y="7" width="8" height="6.5" rx="1.5"/><path d="M5.5 7V5.5a2.5 2.5 0 015 0V7"/>',
+  unlock: '<rect x="4" y="7" width="8" height="6.5" rx="1.5"/><path d="M5.5 7V5.5a2.5 2.5 0 014.9-.8"/>',
+  layout: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/>',
+  panelL: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/>',
+  panelR: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M10 3v10"/>',
+  zoomIn: '<circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M7 5.5v3M5.5 7h3"/>',
+  zoomOut: '<circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M5.5 7h3"/>',
+  bulb: '<path d="M6 13.5h4M6.3 11.2c0-2.2-1.8-2.7-1.8-4.7a3.5 3.5 0 017 0c0 2-1.8 2.5-1.8 4.7h-3.4z"/>',
+  user: '<circle cx="8" cy="5.5" r="2.5"/><path d="M3 13.5c.6-3 2.6-4.2 5-4.2s4.4 1.2 5 4.2"/>',
+  key: '<circle cx="5.5" cy="10.5" r="2.5"/><path d="M7.5 8.5L13 3M11 3h2v2"/>',
+  bolt: '<path d="M8.5 2L4 9h3l-.5 5L12 7H9l-.5-5z"/>',
+  crown: '<path d="M3 11.5L2.5 5l3.5 2L8 3.5 10 7l3.5-2L13 11.5H3z"/>',
+  image: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="M3.5 11.5l3-3 2.5 2.5 1.5-1.5 2.5 2.5"/>',
+  chart: '<path d="M3 13.5V3M3 13.5h10M6.5 13.5V8M10 13.5V5.5"/>',
+  note: '<path d="M3.5 3h9v7l-3 3h-6z"/><path d="M9.5 13v-3h3"/>',
+  pin: '<path d="M8 13.5V9M8 9C6 9 4.5 7.8 4.5 5.8V3.5h7v2.3C11.5 7.8 10 9 8 9z"/>',
+  tag: '<path d="M2.5 8.3V3.5h4.8l6 6-4.8 4.8-6-6z"/><circle cx="5.2" cy="5.2" r=".9"/>',
+  funnel: '<path d="M1.8 2.6h12.4a.5.5 0 01.39.81L9.9 9.4v4.1a.6.6 0 01-.87.54l-2.4-1.2a.6.6 0 01-.33-.54V9.4L1.41 3.41A.5.5 0 011.8 2.6z"/>',
+  checklist: '<path d="M2.2 4.3l1.5 1.5 2.7-3M2.2 11.3l1.5 1.5 2.7-3M9.2 4.4h4.6M9.2 11.6h4.6"/>',
+  search: '<circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5"/>',
+  book: '<path d="M8 4.2C6.6 3 4.2 2.8 2.6 3.6v9c1.6-.8 4-.6 5.4.6 1.4-1.2 3.8-1.4 5.4-.6v-9C11.8 2.8 9.4 3 8 4.2z"/><path d="M8 4.2v9"/>',
+};
+window.icon = (name, size = 14) =>
+  `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+
 /* ---------------- 健康自检 ---------------- */
 async function pollHealth() {
   try {
@@ -76,20 +134,20 @@ function renderCollections() {
     const desc = colDescendants(c.id);
     const active = selected || desc.includes(state.currentCollection);
     return `<div class="col-item ${active ? 'on' : ''}" data-id="${c.id}" style="padding-left:${8 + depth * 14}px">
-      ${kids.length ? `<span class="col-arrow ${open ? '' : 'closed'}" data-toggle="${c.id}">${open ? '▾' : '▸'}</span>` : '<span class="col-arrow-none"></span>'}
-      <span class="col-name">📁 ${esc(c.name)}</span>
+      ${kids.length ? `<span class="col-arrow ${open ? '' : 'closed'}" data-toggle="${c.id}">${open ? icon('chevD') : icon('chevR')}</span>` : '<span class="col-arrow-none"></span>'}
+      <span class="col-name">${icon('folder')} ${esc(c.name)}</span>
       <span class="col-count">${c.papers_total ?? c.papers ?? 0}</span>
-      <button class="col-del" title="删除文献库">✕</button>
+      <button class="col-del" title="删除文献库">${icon('close')}</button>
     </div>` + (kids.length && open ? kids.map(k => row(k, depth + 1)).join('') : '');
   };
   const roots = children['root'] || [];
   el.innerHTML =
     `<div class="col-item ${state.currentCollection === '' ? 'on' : ''}" data-id="">
-      <span class="col-arrow-none"></span><span class="col-name">📚 全部文献</span>
+      <span class="col-arrow-none"></span><span class="col-name">${icon('library')} 全部文献</span>
       <span class="col-count">${state.totalPapers ?? 0}</span>
     </div>` +
     roots.map(r => row(r, 0)).join('') +
-    `<button class="col-new" id="col-new">＋ 新建文献库</button>
+    `<button class="col-new" id="col-new">${icon('plus')} 新建文献库</button>
      <div class="col-new-form" id="col-new-form" hidden>
        <input id="col-new-name" placeholder="文献库名称，回车创建" maxlength="50">
        <div><button class="btn small primary" id="col-new-ok">创建</button>
@@ -155,12 +213,12 @@ async function renderContentSearch() {
   try {
     const d = await api('/api/search', {method: 'POST', body: JSON.stringify({query: state.q.trim(), top_k: 20})});
     if (!d.hits.length) { el.innerHTML = '<p class="muted" style="padding:14px">标题与全文均无匹配</p>'; return; }
-    el.innerHTML = `<div style="padding:8px 14px" class="muted">🔎 全文命中 ${d.hits.length} 处（点击跳转）</div>` +
+    el.innerHTML = `<div style="padding:8px 14px" class="muted">${icon('search')} 全文命中 ${d.hits.length} 处（点击跳转）</div>` +
       d.hits.map(h => {
         const p = state.qaAllPapers?.find(x => x.id === h.paper_id) || state.papers.find(x => x.id === h.paper_id) || {};
         return `<div class="paper-item" data-id="${h.paper_id}" data-page="${h.page_index}">
           <div class="info"><div class="name">${esc(p.title || h.paper_id)}</div>
-          <div class="meta">📄 第${h.page_index + 1}页</div>
+          <div class="meta">${icon('doc')} 第${h.page_index + 1}页</div>
           <div class="muted" style="font-size:11px;padding:2px 0">${esc(h.text.slice(0, 90))}</div></div></div>`;
       }).join('');
     $$('.paper-item', el).forEach(item => item.onclick = async () => {
@@ -198,7 +256,7 @@ function renderPapers() {
           <span>${(p.page_count || '?')}页</span><span>${p.file_size ? (p.file_size/1048576).toFixed(1) + 'M' : ''}</span>
         </div>
       </div>
-      <button class="pi-del" title="移入回收站">🗑</button>
+      <button class="pi-del" title="移入回收站">${icon('trash')}</button>
     </div>`).join('');
   $$('.paper-item', el).forEach(item => {
     const id = item.dataset.id;
@@ -225,7 +283,7 @@ function updateUploadTarget() {
 function updateVisToggle() {
   const b = $('#vis-toggle');
   if (!b) return;
-  b.textContent = state.uploadPrivate ? '🔒' : '🔓';
+  b.innerHTML = state.uploadPrivate ? icon('lock') : icon('unlock');
   b.classList.toggle('has-val', state.uploadPrivate);
   b.title = state.uploadPrivate
     ? '上传可见性：仅自己可见（点击改为共享）'
@@ -445,7 +503,7 @@ async function openPaper(id) {
     // URL/Office 导入无本地 PDF——展示占位（右侧解析内容照常）
     const isImg = /\.(png|jpe?g)(\?|$)/i.test(state.current?.id ? '' : '');
     $('#pdf-host').innerHTML = `<div style="color:#aab;margin:40px auto;text-align:center;font-size:13px">
-      ⚠ 本篇无 PDF 预览（URL/Office 导入）<br>右侧解析内容与问答功能正常</div>`;
+      ${icon('warn')} 本篇无 PDF 预览（URL/Office 导入）<br>右侧解析内容与问答功能正常</div>`;
   }
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
   state.pairs = []; state.versions = []; state.assets = null;
@@ -715,11 +773,11 @@ function renderJobButtons(js) {
     $('.view-tabs').appendChild(extra);
   }
   if (js.parsing) {
-    extra.textContent = '⏹ 取消解析'; extra.classList.add('danger');
+    extra.innerHTML = icon('stop') + " 取消解析"; extra.classList.add('danger');
   } else if (js.parse_status === 'failed') {
-    extra.textContent = '▶ 重新解析'; extra.classList.remove('danger');
+    extra.innerHTML = icon('play') + " 重新解析"; extra.classList.remove('danger');
   } else {
-    extra.textContent = '↻ 重新解析'; extra.classList.remove('danger');
+    extra.innerHTML = icon('retry') + " 重新解析"; extra.classList.remove('danger');
   }
   renderProgressStrip(js);
 }
@@ -732,7 +790,7 @@ function renderProgressStrip(js) {
     strip.hidden = false;
     strip.innerHTML = `<span>${st} ${tp.done}/${tp.total} 段</span>
       <div class="progress"><i style="width:${pct}%"></i></div>
-      <button class="btn small danger" onclick="cancelTranslate()">⏹ 取消</button>`;
+      <button class="btn small danger" onclick="cancelTranslate()">${icon('stop')} 取消</button>`;
   } else if (pp) {
     strip.hidden = false;
     strip.innerHTML = `<span>${pp.status === 'queued' ? '解析排队中（GPU 队列）' : pp.status === 'pending_gate' ? '等待 GPU 就绪…' : '解析中'}</span>
@@ -847,8 +905,8 @@ function renderContentView() {
   if (state.view === 'bilingual') {
     if (!state.translatedComplete) {
       el.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px">
-        <p style="font-size:15px;margin-bottom:14px">${state.translatingNow ? '⏳ 翻译中…' : '未翻译'}</p>
-        ${state.translatingNow ? '' : `<button class="btn primary" onclick="startTranslate()">🌐 全文翻译</button>`}
+        <p style="font-size:15px;margin-bottom:14px">${state.translatingNow ? icon('clock', 12) + " 翻译中…" : '未翻译'}</p>
+        ${state.translatingNow ? '' : `<button class="btn primary" onclick="startTranslate()">${icon('globe')} 全文翻译</button>`}
       </div>`;
       return;
     }
@@ -869,8 +927,8 @@ function renderContentView() {
   } else if (state.view === 'zh') {
     if (!state.translatedComplete) {
       el.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px">
-        <p style="font-size:15px;margin-bottom:14px">${state.translatingNow ? '⏳ 翻译中…' : '未翻译'}</p>
-        ${state.translatingNow ? '' : `<button class="btn primary" onclick="startTranslate()">🌐 全文翻译</button>`}
+        <p style="font-size:15px;margin-bottom:14px">${state.translatingNow ? icon('clock', 12) + " 翻译中…" : '未翻译'}</p>
+        ${state.translatingNow ? '' : `<button class="btn primary" onclick="startTranslate()">${icon('globe')} 全文翻译</button>`}
       </div>`;
       return;
     }
@@ -1002,29 +1060,29 @@ async function renderMeta() {
   $('#content-view').innerHTML = `
     <div class="meta-head card">
       <h2 id="m-title" style="margin-bottom:8px">${esc(paper.title || paper.id)}</h2>
-      <div class="meta-line">👤 <span id="m-authors">${esc(paper.authors || '—')}</span></div>
+      <div class="meta-line">${icon('user')} <span id="m-authors">${esc(paper.authors || '—')}</span></div>
       <div class="meta-line" id="m-rank"><span class="muted">期刊分区：加载中…</span></div>
-      <div class="meta-line">📚 <span id="m-src">${esc([paper.journal, paper.year, paper.doi ? 'DOI: ' + paper.doi : ''].filter(Boolean).join(' · ') || '—')}</span>
-        ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">✓ 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>
-      <div class="meta-line">⭐ <span id="m-stars">${[1,2,3,4,5].map(i => `<span class="star ${i <= (notes.importance||0) ? 'on' : ''}" data-i="${i}">★</span>`).join('')}</span>
-        🏷 <span id="m-tags">${esc(notes.tags || '') || '<i class=muted>点击右侧添加</i>'}</span></div>
+      <div class="meta-line">${icon('library')} <span id="m-src">${esc([paper.journal, paper.year, paper.doi ? 'DOI: ' + paper.doi : ''].filter(Boolean).join(' · ') || '—')}</span>
+        ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">${icon('check')} 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>
+      <div class="meta-line">⭐ <span id="m-stars">${[1,2,3,4,5].map(i => `<span class="star ${i <= (notes.importance||0) ? 'on' : ''}" data-i="${i}">${icon('star')}</span>`).join('')}</span>
+        ${icon('tag')} <span id="m-tags">${esc(notes.tags || '') || '<i class=muted>点击右侧添加</i>'}</span></div>
       <div class="meta-actions">
-        <button class="btn small" onclick="editMeta('${pid}')">✏️ 编辑</button>
-        <button class="btn small" onclick="extractMeta('${pid}')" title="用 AI 补全缺失字段（作者/摘要/关键词）">🤖 AI 补全</button>
-        <button class="btn small" onclick="copyCite('${pid}')">✂ 引用</button>
-        <a class="btn small" href="/api/papers/${pid}/pdf" download="${canonicalName(paper)}.pdf">⬇ PDF</a>
-        <button class="btn small" onclick="parseCtrl()">↻ 重新解析</button>
-        <button class="btn small" onclick="retranslatePaper('${pid}')" title="换模型/术语表后生成新译文版本">🔁 强制重译</button>
+        <button class="btn small" onclick="editMeta('${pid}')">${icon('edit')} 编辑</button>
+        <button class="btn small" onclick="extractMeta('${pid}')" title="用 AI 补全缺失字段（作者/摘要/关键词）">${icon('bolt')} AI 补全</button>
+        <button class="btn small" onclick="copyCite('${pid}')">${icon('copy')} 引用</button>
+        <a class="btn small" href="/api/papers/${pid}/pdf" download="${canonicalName(paper)}.pdf">${icon('download')} PDF</a>
+        <button class="btn small" onclick="parseCtrl()">${icon('retry')} 重新解析</button>
+        <button class="btn small" onclick="retranslatePaper('${pid}')" title="换模型/术语表后生成新译文版本">${icon('retry')} 强制重译</button>
       </div>
     </div>
     <div class="card" style="cursor:pointer" onclick="flashAbstract('${pid}')" title="点击在 PDF 中定位摘要">
-      <h3>摘要 <span class="muted" style="font-weight:400;font-size:12px">📍点击定位</span> ${kw.length ? '<span class="muted" style="font-weight:400;font-size:12px">· 关键词: ' + esc(kw.join(' · ')) + '</span>' : ''}</h3>
+      <h3>摘要 <span class="muted" style="font-weight:400;font-size:12px">${icon('pin')}点击定位</span> ${kw.length ? '<span class="muted" style="font-weight:400;font-size:12px">· 关键词: ' + esc(kw.join(' · ')) + '</span>' : ''}</h3>
       <p style="font-size:13px; line-height:1.7">${esc(paper.abstract || '（无——可点 AI 提取）')}</p></div>
-    <div class="card"><h3>📝 备注</h3>
+    <div class="card"><h3>${icon('note')} 备注</h3>
       <textarea id="m-notes" placeholder="记录阅读笔记…（自动保存）" style="min-height:70px">${esc(notes.notes || '')}</textarea></div>
     <div class="card"><h3>References (${refs.references.length}) <input id="ref-search" placeholder="搜索…" style="width:140px; font-size:12px; margin-left:8px; display:inline-block"></h3>
       <div class="ref-list" id="ref-list"></div></div>
-    <div class="card"><h3>📁 分库</h3>
+    <div class="card"><h3>${icon('folder')} 分库</h3>
       <select id="m-collection" style="max-width:240px"><option value="">未分库</option></select></div>`;
 
   // 分库下拉
@@ -1057,7 +1115,7 @@ async function renderMeta() {
     const list = refs.references.filter(r => !q || r.text.toLowerCase().includes(q));
     state._refs = refs.references;
     $('#ref-list').innerHTML = list.map(r =>
-      `<div class="ref-item" onclick="flashRefBlock('${r.block_id}')">📄 ${esc(r.text.slice(0, 150))}</div>`).join('') ||
+      `<div class="ref-item" onclick="flashRefBlock('${r.block_id}')">${icon('doc')} ${esc(r.text.slice(0, 150))}</div>`).join('') ||
       '<p class="muted">无匹配</p>';
   };
   renderRefs('');
@@ -1111,8 +1169,8 @@ window.loadRank = async (pid) => {
     if (r.found) {
       const bits = [r.cas && `中科院·${r.cas}`, r.cas_top && `TOP`,
                     r.jcr && `JCR ${r.jcr}`, r.impact_factor && `IF ${r.impact_factor}`,
-                    r.if5 && `5年IF ${r.if5}`, r.warning && `⚠预警`].filter(Boolean);
-      el.innerHTML = `<span class="badge ok">📊</span> ${esc(bits.join(' · ') || '无分区数据')}
+                    r.if5 && `5年IF ${r.if5}`, r.warning && `${icon('warn')}预警`].filter(Boolean);
+      el.innerHTML = `<span class="badge ok">${icon('chart')}</span> ${esc(bits.join(' · ') || '无分区数据')}
         <span class="muted" style="font-size:11px">via easyScholar${r.cached ? '（缓存）' : ''}</span>`;
     } else {
       el.innerHTML = `<span class="muted">期刊分区：${esc(r.message)}</span>
@@ -1147,7 +1205,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
   container.innerHTML = `
     <div class="qa-scope" id="qa-scope"></div>
     <div class="qa-picker">
-      <button class="btn small" id="qa-pick-toggle">📄 选择论文（<span id="qa-pick-count">0</span>）</button>
+      <button class="btn small" id="qa-pick-toggle">${icon('doc')} 选择论文（<span id="qa-pick-count">0</span>）</button>
       <div class="qa-pick-panel" id="qa-pick-panel" hidden>
         <input id="qa-pick-filter" placeholder="过滤标题…" style="font-size:12px">
         <div id="qa-pick-list"></div>
@@ -1155,7 +1213,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     </div>
     <div class="qa-parse-hint" id="qa-parse-hint" hidden></div>
     <div class="qa-msgs" id="qa-msgs">
-      <div class="qa-no-paper" id="qa-no-paper" hidden>💬 先用「选择论文」勾选要提问的文献<br><span style="font-size:11px">也可以先在左侧打开一篇</span></div>
+      <div class="qa-no-paper" id="qa-no-paper" hidden>${icon('chat')} 先用「选择论文」勾选要提问的文献<br><span style="font-size:11px">也可以先在左侧打开一篇</span></div>
       <div id="qa-sum-bubble"></div>
       <div id="qa-msg-list"></div>
     </div>
@@ -1163,7 +1221,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     <div class="qa-quote" id="qa-quote" hidden>
       <span class="muted" style="font-size:11px">📎 引用</span>
       <div class="qa-quote-text" id="qa-quote-text"></div>
-      <button class="btn small" id="qa-quote-clear" title="移除引用">✕</button>
+      <button class="btn small" id="qa-quote-clear" title="移除引用">${icon('close')}</button>
     </div>
     <div class="qa-input">
       <textarea id="qa-text" placeholder="对着左侧文章提问…（Ctrl+Enter 发送）"></textarea>
@@ -1178,7 +1236,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     const qs = [...presets.questions];
     if (state.qaPapers.size >= 2) qs.unshift('对比所选论文的方法、数据集与实验结果有何异同？');
     // 预设问题默认收起成一行，不占正文版面；点标题展开，提问后自动收起
-    el.innerHTML = `<button class="preset-toggle" id="preset-toggle">💡 推荐问题<span class="arrow">▾</span></button>
+    el.innerHTML = `<button class="preset-toggle" id="preset-toggle">${icon('bulb')} 推荐问题<span class="arrow">${icon('chevD')}</span></button>
       <div class="preset-list" id="preset-list" hidden>${qs.map(q =>
       `<button onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('')}</div>`;
     $('#preset-toggle').onclick = () => togglePresetList();
@@ -1250,13 +1308,13 @@ async function renderSumBubble() {
   } else {
     el.innerHTML = (state._sumHead || '') + `<div class="msg assistant"><div class="bubble">
       <span class="muted">开始提问前，可先生成该篇的结构化导读：</span><br>
-      <button class="btn small primary" style="margin-top:6px" onclick="genSumBubble('${pid}')">✨ 生成导读</button>
+      <button class="btn small primary" style="margin-top:6px" onclick="genSumBubble('${pid}')">${icon('star')} 生成导读</button>
     </div></div>`;
   }
 }
 window.genSumBubble = async pid => {
   const el = $('#qa-sum-bubble');
-  el.innerHTML = (state._sumHead || '') + '<div class="msg assistant"><div class="bubble">📋 导读生成中…（全文直读，约 20-60 秒）</div></div>';
+  el.innerHTML = (state._sumHead || '') + "<div class=\"msg assistant\"><div class=\"bubble\">" + icon('copy') + " 导读生成中…（全文直读，约 20-60 秒）</div></div>";
   try {
     const d = await api(`/api/papers/${pid}/summary`, {method: 'POST', body: JSON.stringify({session_id: state.qaSession})});
     if (d.session_id) state.qaSession = d.session_id;
@@ -1323,7 +1381,7 @@ function renderQaScope() {
     el.hidden = false;
     el.innerHTML = ids.map(p2 => {
       const p = state.qaAllPapers?.find(x => x.id === p2) || state.papers.find(x => x.id === p2);
-      return `<span class="chip">${esc(p?.title || p2)}<button onclick="qaRemove('${p2}')">✕</button></span>`;
+      return `<span class="chip">${esc(p?.title || p2)}<button onclick="qaRemove('${p2}')">${icon('close')}</button></span>`;
     }).join('');
   }
   const hint = $('#qa-parse-hint');
@@ -1332,7 +1390,7 @@ function renderQaScope() {
       .map(p2 => state.qaAllPapers.find(x => x.id === p2))
       .filter(p2 => p2 && p2.parse_status !== 'parsed');
     hint.hidden = !waiting.length;
-    if (waiting.length) hint.innerHTML = '⏳ ' + waiting.map(p2 =>
+    if (waiting.length) hint.innerHTML = icon('clock', 12) + " " + waiting.map(p2 =>
       `《${esc((p2.title || '').slice(0, 20))}》${p2.parse_status === 'failed' ? '解析失败，将自动重试' : '正在解析，完成后可对其提问'}`).join('，');
   }
 }
@@ -1375,7 +1433,7 @@ function renderPickList(filter) {
   if (!el) return;
   const item = p => {
     const st = p.parse_status !== 'parsed'
-      ? `<span class="badge run">${p.parse_status === 'failed' ? '解析失败' : '⏳解析中'}</span>` : '';
+      ? `<span class="badge run">${p.parse_status === 'failed' ? '解析失败' : icon('clock', 12) + "解析中"}</span>` : '';
     return `<label class="qa-pick-item ${state.qaPapers.has(p.id) ? 'on' : ''}">
       <input type="checkbox" ${state.qaPapers.has(p.id) ? 'checked' : ''} data-id="${p.id}">
       <span>${esc(p.title || p.id)}</span>${st}
@@ -1395,7 +1453,7 @@ function renderPickList(filter) {
     ? visible.map((g, i) => `
       <div class="qa-pick-group" data-gi="${i}">
         <div class="qa-pick-ghead" onclick="this.nextElementSibling.hidden=!this.nextElementSibling.hidden">
-          <span>📁 ${esc(g.name)}</span><span class="muted" style="font-size:11px">${g.papers.length} 篇 ▾</span>
+          <span>${icon('folder')} ${esc(g.name)}</span><span class="muted" style="font-size:11px">${g.papers.length} 篇 ${icon('chevD')}</span>
         </div>
         <div class="qa-pick-gbody">${g.papers.map(item).join('')}</div>
       </div>`).join('')
@@ -1489,7 +1547,7 @@ function sendQa() {
           if (origin) live.insertAdjacentHTML('beforeend',
             `<div class="evo-line">证据来源: ${origin}</div>`);
           if (ev.citations?.illegal?.length) toast('⚠ 部分引用编号无效: ' + ev.citations.illegal.join(','));
-          if (ev.truncated) live.insertAdjacentHTML('beforeend', '<div class="muted" style="font-size:11px;margin-top:6px">⚠ 内容过长，已启用检索取证模式</div>');
+          if (ev.truncated) live.insertAdjacentHTML('beforeend', "<div class=\"muted\" style=\"font-size:11px;margin-top:6px\">" + icon('warn') + " 内容过长，已启用检索取证模式</div>");
         }
       }
     }
@@ -1502,7 +1560,7 @@ async function renderSummaryTab() {
   if (!d.summary) {
     $('#content-view').innerHTML = `<div class="card">
       <p>基于左侧全文生成科研导读（研究问题 / 核心思想 / 方法 / …，带页码证据）。</p>
-      <button class="btn primary" onclick="genSumBubble('${pid}')">✨ 生成导读</button></div>`;
+      <button class="btn primary" onclick="genSumBubble('${pid}')">${icon('star')} 生成导读</button></div>`;
     return;
   }
   drawSummary(d.summary, pid);
@@ -1525,7 +1583,7 @@ async function boot() {
   // 未配置 key 提示横幅
   if (!state.me.llm_configured.chat) {
     $('.main').insertAdjacentHTML('afterbegin',
-      `<div class="check-banner">⚠️ 尚未配置 LLM key——问答/翻译不可用。前往 <a href="#" onclick="switchPage('settings');return false">设置页</a> 配置。</div>`);
+      `<div class="check-banner">${icon('warn')}️ 尚未配置 LLM key——问答/翻译不可用。前往 <a href="#" onclick="switchPage('settings');return false">设置页</a> 配置。</div>`);
   }
   await initPdfJs();
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
@@ -1581,7 +1639,7 @@ window.jumpEvidence = page => { switchPage('reader'); if (state.pdfDoc) { state.
 async function renderTrash() {
   const d = await api('/api/papers?trash=1');
   $('#page-trash').innerHTML = `<div class="card"><h2 style="display:flex;gap:10px;align-items:center">回收站（30 天后自动清理）
-    <button class="btn small danger" style="margin-left:auto" onclick="emptyTrash()">🗑 清空回收站</button></h2>
+    <button class="btn small danger" style="margin-left:auto" onclick="emptyTrash()">${icon('trash')} 清空回收站</button></h2>
     <table class="list"><tr><th>标题</th><th>删除时间</th><th></th></tr>
     ${d.papers.map(p => `<tr><td>${esc(p.title)}</td><td class="muted">${p.deleted_at}</td>
       <td class="row-actions"><button class="btn small" onclick="restorePaper('${p.id}')">恢复</button>
@@ -1595,28 +1653,28 @@ async function renderSettings() {
   const isAdmin = state.me?.role === 'admin';
   const tpl = (purpose, cfg, conf) => `
     <div class="set-card">
-      <div class="set-head">${purpose === 'chat' ? '💬 聊天（问答/导读）' : '🌐 翻译'} ${conf.configured ? '<span class="badge ok">已配置</span>' : '<span class="badge err">未配置</span>'}</div>
+      <div class="set-head">${purpose === 'chat' ? icon('chat') + " 聊天（问答/导读）" : icon('globe') + " 翻译"} ${conf.configured ? '<span class="badge ok">已配置</span>' : '<span class="badge err">未配置</span>'}</div>
       <form id="f-${purpose}">
         <label>API 地址 <input name="base_url" value="${esc(conf.base_url)}" placeholder="https://open.bigmodel.cn/api/anthropic"></label>
         <label>模型 <input name="model" value="${esc(conf.model)}" placeholder="glm-4.7"></label>
         <label>协议 <select name="api_type"><option value="anthropic" ${conf.base_url.includes('anthropic') ? 'selected' : ''}>anthropic</option><option value="openai" ${!conf.base_url.includes('anthropic') ? 'selected' : ''}>openai</option></select></label>
         <label>API Key ${conf.configured ? '<span class="muted" style="font-size:11px">已保存（留空不变）</span>' : ''} <input name="api_key" type="password" placeholder="${conf.configured ? '••••••（输入可更换）' : '粘贴 API Key'}"></label>
         <div class="set-actions">
-          <button class="btn" type="button" onclick="testLlm('f-${purpose}')">⚡ 测试</button>
-          <button class="btn primary" type="submit">💾 保存</button>
+          <button class="btn" type="button" onclick="testLlm('f-${purpose}')">${icon('bolt')} 测试</button>
+          <button class="btn primary" type="submit">${icon('save')} 保存</button>
         </div>
       </form>
     </div>`;
   $('#page-settings').innerHTML = `
     <div class="set-grid">
       <div class="set-col">
-        <h2 class="page-h">🔑 LLM 配置（BYOK）</h2>
+        <h2 class="page-h">${icon('key')} LLM 配置（BYOK）</h2>
         <p class="muted" style="font-size:12px;margin:2px 0 12px">聊天/翻译各自独立；embedding 本机运行无需配置。密钥加密存储、永不回显。</p>
         ${tpl('chat', d.chat, d.chat)}
         ${tpl('translate', d.translate, d.translate)}
       </div>
       <div class="set-col">
-        <h2 class="page-h">📖 翻译术语表（全局）</h2>
+        <h2 class="page-h">${icon('book')} 翻译术语表（全局）</h2>
         <div id="gl-list" style="margin:10px 0"></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <input id="gl-term" placeholder="术语" style="flex:2;min-width:120px">
@@ -1624,7 +1682,7 @@ async function renderSettings() {
             <option value="keep_en">保留英文</option><option value="trans">固定译法</option><option value="first_both">首次并列</option>
           </select>
           <input id="gl-value" placeholder="译法" style="flex:2;min-width:100px">
-          <button class="btn small primary" id="gl-add">＋</button>
+          <button class="btn small primary" id="gl-add">${icon('plus')}</button>
         </div>
         ${isAdmin ? '<div id="admin-zone" style="margin-top:22px"></div>' : ''}
       </div>
@@ -1647,10 +1705,10 @@ async function renderAdminZone() {
   const users = await api('/api/admin/users');
   const pool = await api('/api/admin/pool');
   el.innerHTML = `
-    <h2 class="page-h">👑 管理（仅管理员可见）</h2>
+    <h2 class="page-h">${icon('crown')} 管理（仅管理员可见）</h2>
     <div class="set-card">
       <div class="set-head">邀请码</div>
-      <button class="btn small primary" onclick="createInvite()">＋ 生成（7天）</button>
+      <button class="btn small primary" onclick="createInvite()">${icon('plus')} 生成（7天）</button>
       <div id="invite-out" style="margin-top:8px;font-size:13px"></div>
     </div>
     <div class="set-card">
@@ -1659,7 +1717,7 @@ async function renderAdminZone() {
         <td>${esc(u.username)} ${u.role === 'admin' ? '<span class="badge priv">admin</span>' : ''}</td>
         <td>${u.papers} 篇</td>
         <td style="width:40%"><input style="font-size:11px" id="q-${u.id}" value='${esc(u.overrides || '{}')}'></td>
-        <td><button class="btn small" onclick="saveQuota(${u.id})">💾</button></td></tr>`).join('')}</table>
+        <td><button class="btn small" onclick="saveQuota(${u.id})">${icon('save')}</button></td></tr>`).join('')}</table>
     </div>
     <div class="set-card">
       <div class="set-head">公共额度池 <span class="muted" style="font-size:11px">未配置 key 的成员将使用你的 POOL key</span></div>
@@ -1698,7 +1756,7 @@ async function loadGlossary() {
   if (!el) return;
   el.innerHTML = d.terms.map(t =>
     `<span class="chip">${esc(t.term)}${t.target === 'trans' ? ' → ' + esc(t.value) : t.target === 'first_both' ? ' ⇄ ' + esc(t.value) : ' (EN)'}
-     <button onclick="delGlossary('${esc(t.term).replace(/'/g, "\\'")}')">✕</button></span>`).join('') ||
+     <button onclick="delGlossary('${esc(t.term).replace(/'/g, "\\'")}')">${icon('close')}</button></span>`).join('') ||
     '<span class="muted" style="font-size:12px">暂无术语——按需添加以保证全文译名一致</span>';
   $('#gl-add').onclick = async () => {
     const term = $('#gl-term').value.trim();
@@ -1736,7 +1794,7 @@ async function renderAssets() {
     });
   }, 1200);
   $('#content-view').innerHTML =
-    (figures.length ? `<div class="card"><h2>🖼 图 (${figures.length})</h2>` +
+    (figures.length ? `<div class="card"><h2>${icon('image')} 图 (${figures.length})</h2>` +
       figures.map(f => `<div class="asset">
         ${f.label ? `<span class="asset-badge" onclick="jumpEvidence(${f.page_index})" title="跳到 PDF 该页">${esc(f.label)}</span>` : ''}
         <div class="fig-grid">
@@ -1745,15 +1803,15 @@ async function renderAssets() {
         ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" ondblclick="lightbox(this.src, '')">`).join('')}
         </div>
         ${f.sub_captions?.length ? `<p class="muted" style="font-size:11px">${esc(f.sub_captions.join(' | ').slice(0, 160))}</p>` : ''}
-        <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${f.page_index});return false">📄 第${f.page_index + 1}页</a> · ${esc(f.caption || '（无题注）')}</p>
+        <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${f.page_index});return false">${icon('doc')} 第${f.page_index + 1}页</a> · ${esc(f.caption || '（无题注）')}</p>
       </div>`).join('') + '</div>' : '') +
-    (tables.length ? `<div class="card"><h2>📋 表 (${tables.length})</h2>` +
+    (tables.length ? `<div class="card"><h2>${icon('copy')} 表 (${tables.length})</h2>` +
       tables.map(t => `<div class="asset">
         ${t.label ? `<span class="asset-badge" onclick="jumpEvidence(${t.page_index})">${esc(t.label)}</span>` : ''}
         ${t.bbox ? `<figure class="fig-crop" data-page="${t.page_index}" data-ub='${JSON.stringify(t.bbox)}'>
           <div class="fig-holder">${t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : ''}</div>
         </figure>` : (t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : '')}
-        <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${t.page_index});return false">📄 第${t.page_index + 1}页</a> · ${esc(t.caption || '（无题注）')}</p>
+        <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${t.page_index});return false">${icon('doc')} 第${t.page_index + 1}页</a> · ${esc(t.caption || '（无题注）')}</p>
       </div>`).join('') + '</div>' : '');
   figCropPass();
 }
@@ -1763,13 +1821,13 @@ function drawSummary(s, pid, target = '#content-view', asBubble = false) {
   const t = $(target);
   const sec = Object.entries(s.sections || {});
   t.innerHTML = (asBubble ? (state._sumHead || '') + '<div class="msg assistant"><div class="bubble" style="width:100%">' : '<div class="card">') +
-    (asBubble ? `<b title="${esc(state._sumTip || '')}">📋 导读</b>` : '<h2>科研导读</h2>') +
+    (asBubble ? `<b title="${esc(state._sumTip || '')}">${icon('copy')} 导读</b>` : '<h2>科研导读</h2>') +
     (sec.length ? sec.map(([k, v]) =>
       `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><p>${renderCites(v, s.evidence)}</p></div>`).join('')
       : '<p class="muted">导读内容为空，请重新生成。</p>') +
     (s.evidence?.length ? `<p class="muted" style="font-size:12px">证据: ${s.evidence.map(e =>
       `<span class="cite" data-eid="${e.evidence_id}">[${e.evidence_id}] 第${e.page_index + 1}页</span>`).join(' ')}</p>` : '') +
-    `</div>${asBubble ? '</div>' : ''}<button class="btn small" onclick="genSumBubble('${pid}')">↻ 重新生成</button>`;
+    `</div>${asBubble ? '</div>' : ''}<button class="btn small" onclick="genSumBubble('${pid}')">${icon('retry')} 重新生成</button>`;
   if (asBubble) t.insertAdjacentHTML('beforeend', followupButtons(s.sections));
   $$('.cite', t).forEach(el => {
     if (el.dataset.eid) {
@@ -1847,14 +1905,14 @@ async function renderCollectionsPage() {
     const n = c.papers_total ?? c.papers ?? 0;
     return `<div class="lib-sel ${sel === c.id ? 'on' : ''}" onclick="selectLib('${c.id}')">
         <span class="lib-sel-name" style="padding-left:${6 + depth * 14}px">
-          ${kids.length ? `<button class="col-arrow ${open ? '' : 'closed'}" onclick="event.stopPropagation();toggleColOpen('${c.id}')">${open ? '▾' : '▸'}</button>` : '<span class="col-arrow-none"></span>'}
-          📁 ${esc(c.name)}</span>
+          ${kids.length ? `<button class="col-arrow ${open ? '' : 'closed'}" onclick="event.stopPropagation();toggleColOpen('${c.id}')">${open ? icon('chevD') : icon('chevR')}</button>` : '<span class="col-arrow-none"></span>'}
+          ${icon('folder')} ${esc(c.name)}</span>
         <span class="lib-sel-n">${n}</span>
       </div>` + (open ? kids.map(k => treeRow(k, depth + 1)).join('') : '');
   };
   const sideTree = `<div class="lib-side">
       <div class="lib-sel ${sel === '' ? 'on' : ''}" onclick="selectLib('')">
-        <span class="lib-sel-name">📚 全部文献</span><span class="lib-sel-n">${d.total}</span></div>
+        <span class="lib-sel-name">${icon('library')} 全部文献</span><span class="lib-sel-n">${d.total}</span></div>
       ${(children['root'] || []).map(c => treeRow(c, 0)).join('')}
       ${d.collections.length ? '' : '<p class="muted" style="padding:10px 12px">还没有文献库</p>'}
     </div>`;
@@ -1863,12 +1921,12 @@ async function renderCollectionsPage() {
   const paperRows = shown.map(p => {
     const s = st[p.id] || {};
     const tj = s.translate_job;
-    const parseBadge = s.parsing ? '<span class="badge run">⏳解析</span>'
-      : p.parse_status === 'parsed' ? '<span class="badge ok">✓</span>'
-      : '<span class="badge err">✗</span>';
-    const trBadge = s.translating ? `<span class="badge run">🌐${tj ? tj.done + '/' + tj.total : ''}</span>`
-      : tj?.status === 'done' ? '<span class="badge ok">译✓</span>'
-      : tj?.status === 'failed' ? '<span class="badge err">译✗</span>' : '<span class="muted">—</span>';
+    const parseBadge = s.parsing ? "<span class=\"badge run\">" + icon('clock', 12) + "解析</span>"
+      : p.parse_status === 'parsed' ? "<span class=\"badge ok\">" + icon('check') + "</span>"
+      : "<span class=\"badge err\">" + icon('close') + "</span>";
+    const trBadge = s.translating ? `<span class="badge run">${icon('globe')}${tj ? tj.done + '/' + tj.total : ''}</span>`
+      : tj?.status === 'done' ? "<span class=\"badge ok\">译" + icon('check') + "</span>"
+      : tj?.status === 'failed' ? "<span class=\"badge err\">译" + icon('close') + "</span>" : '<span class="muted">—</span>';
     const tk = s.tokens;
     const owner = d.collections.find(c => c.id === p.collection_id);
     return `<tr class="lib-paper-row ${state.libPaper === p.id ? 'on' : ''}" onclick="selectLibPaper('${p.id}')">
@@ -1876,7 +1934,7 @@ async function renderCollectionsPage() {
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
           ${esc(p.title || p.id)}
           ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size:11px"> · ${esc(owner.name)}</span>` : ''}</td>
-        <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" onclick="event.stopPropagation();retryPaperJob('${p.id}')">↻</button>` : ''}</td>
+        <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="muted" style="font-size:11px">${tk ? (tk.p + tk.c).toLocaleString() + ' tok' : ''}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
@@ -1894,7 +1952,7 @@ async function renderCollectionsPage() {
     const kv = [
       ['作者', pd.authors], ['年份', pd.year], ['期刊', pd.journal], ['DOI', pd.doi],
       ['关键词', pd.keywords], ['页数', pd.page_count], ['大小', pd.file_size ? (pd.file_size / 1048576).toFixed(1) + ' MB' : ''],
-      ['可见性', pd.visibility === 'private' ? '🔒 仅自己可见' : '🌐 共享'],
+      ['可见性', pd.visibility === 'private' ? icon('lock') + " 仅自己可见" : icon('globe') + " 共享"],
       ['解析', pd.parse_status], ['翻译', tj?.status === 'done' ? `已完成（${tj.model || ''}）` : (tj?.status || '未翻译')],
       ['所属库', d.collections.find(c => c.id === pd.collection_id)?.name || '—'],
       ['加入时间', (pd.created_at || '').slice(0, 16)], ['ID', pd.id],
@@ -1905,7 +1963,7 @@ async function renderCollectionsPage() {
         `<div><span class="ld-k">${k}</span><span class="ld-v">${esc(String(v))}</span></div>`).join('')}</div>
       ${pd.abstract ? `<div class="ld-sec">摘要</div><div class="ld-abs">${esc(pd.abstract)}</div>` : ''}
       <div class="ld-actions">
-        <button class="btn small primary" onclick="viewPaper('${pd.id}')">📖 阅读</button>
+        <button class="btn small primary" onclick="viewPaper('${pd.id}')">${icon('book')} 阅读</button>
         <button class="btn small" onclick="copyCite('${pd.id}')">复制引用</button>
       </div></div>`;
   })() : '';
@@ -1918,22 +1976,22 @@ async function renderCollectionsPage() {
       <h2 style="margin:0;flex:1">文献库管理 <span class="muted" style="font-size:12px">左栏选库 · 右栏看论文与详情</span></h2>
       <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:220px" value="${esc(state.libQuery)}">
       <input id="newlib-name" placeholder="新库名称" style="max-width:160px">
-      <button class="btn primary" onclick="createLibFromPage()">＋ 顶层库</button>
+      <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 顶层库</button>
     </div>
     <div class="lib-mgr">
       ${sideTree}
       <div class="lib-main" id="lib-main-drop">
         <div class="lib-head">
-          <h2 style="margin:0;flex:1">${sel ? '📁' : '📚'} ${esc(scopeName)}
+          <h2 style="margin:0;flex:1">${sel ? icon('folder') : icon('library')} ${esc(scopeName)}
             <span class="muted" style="font-size:12px">${papers.length} 篇${scopeIds.length > 1 ? '（含子库）' : ''} · 译${doneTr}/${papers.length} · ${totTok.toLocaleString()}tok</span></h2>
-          ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">⬆ 上传</button>
-          <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>＋子库</button>
-          <button class="btn small" onclick="renameLib('${sel}', '${selNameArg}')">✏️</button>
-          <button class="btn small danger" onclick="delLib('${sel}', '${selNameArg}')">🗑</button>` : ''}
+          ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">${icon('upload')} 上传</button>
+          <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>${icon('plus')}子库</button>
+          <button class="btn small" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
+          <button class="btn small danger" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
         </div>
         <div class="lib-batch" id="lb-${scopeKey}" hidden>
           <span id="lb-count-${scopeKey}">0</span> 篇选中
-          <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">🌐 批量翻译</button>
+          <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 批量翻译</button>
           <select style="width:auto;font-size:12px" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
           <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">删除</button>
         </div>
@@ -2054,7 +2112,7 @@ window.lightbox = (src, caption) => {
     lb = document.createElement('div');
     lb.id = 'ps-lightbox';
     lb.className = 'lightbox';
-    lb.innerHTML = `<img><p class="lb-cap"></p><button class="lb-close">✕</button>`;
+    lb.innerHTML = `<img><p class="lb-cap"></p><button class="lb-close">${icon('close')}</button>`;
     document.body.appendChild(lb);
     lb.onclick = e => { if (e.target === lb || e.target.classList.contains('lb-close')) lb.classList.remove('open'); };
     document.addEventListener('keydown', e => { if (e.key === 'Escape') lb.classList.remove('open'); });
@@ -2100,7 +2158,7 @@ const FOLLOWUP_QS = {
 function followupButtons(sections) {
   const qs = Object.keys(sections || {}).map(k => FOLLOWUP_QS[k]).filter(Boolean).slice(0, 5);
   if (!qs.length) return '';
-  return `<div class="followups"><span class="muted" style="font-size:12px">💬 可以接着问：</span>` +
+  return `<div class="followups"><span class="muted" style="font-size:12px">${icon('chat')} 可以接着问：</span>` +
     qs.map(q => `<button class="chip chip-q" onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('') +
     `</div>`;
 }
@@ -2114,7 +2172,7 @@ function followupButtons(sections) {
     if (bar) return bar;
     bar = document.createElement('div');
     bar.id = 'sel-bar'; bar.hidden = true;
-    bar.innerHTML = `<button data-a="ask">💬 提问</button><button data-a="cp">📋 复制</button>`;
+    bar.innerHTML = `<button data-a="ask">${icon('chat')} 提问</button><button data-a="cp">${icon('copy')} 复制</button>`;
     document.body.appendChild(bar);
     bar.onclick = e => {
       const b = e.target.closest('button'); if (!b || !lastSel) return;
@@ -2169,7 +2227,7 @@ function followupButtons(sections) {
     const ref = (state._refs || [])[n - 1];
     if (!ref) { p.hidden = true; return; }
     p.innerHTML = `<b>[${n}]</b> ${esc(ref.text.slice(0, 220))}${ref.text.length > 220 ? '…' : ''}
-      <div class="muted" style="font-size:11px;margin-top:4px">📄 第${ref.page_index + 1}页 · 点击跳转</div>`;
+      <div class="muted" style="font-size:11px;margin-top:4px">${icon('doc')} 第${ref.page_index + 1}页 · 点击跳转</div>`;
     p.hidden = false;
     const r = el.getBoundingClientRect();
     p.style.left = Math.min(r.left, innerWidth - 340) + 'px';
@@ -2208,7 +2266,7 @@ window.toggleToc = () => {
       seen.add(sp);
       items.push(`<div class="toc-item" data-page="${b.page_index}" data-bid="${b.block_id}">${esc(sp.split(' > ').pop())}</div>`);
     }
-    t.innerHTML = `<div class="toc-head">目录 <button class="btn small" onclick="toggleToc()">✕</button></div>` +
+    t.innerHTML = `<div class="toc-head">目录 <button class="btn small" onclick="toggleToc()">${icon('close')}</button></div>` +
       (items.join('') || '<p class="muted" style="padding:10px">无章节结构</p>');
     $$('.toc-item', t).forEach(x => x.onclick = () => {
       jumpEvidence(+x.dataset.page);
@@ -2339,11 +2397,11 @@ window.applyVsplit = (fire = true) => {
   if (mode === 'text') {            // 只看文字
     pl.style.width = '0'; pl.style.overflow = 'hidden'; pl.style.borderRight = 'none';
     vh.style.display = 'none';
-    sr.hidden = false; sr.textContent = '‹ 显示 PDF'; sr.onclick = () => { state.sideMode = 'both'; localStorage.setItem('ps-side', 'both'); applyVsplit(); };
+    sr.hidden = false; sr.innerHTML = icon('chevL') + " 显示 PDF"; sr.onclick = () => { state.sideMode = 'both'; localStorage.setItem('ps-side', 'both'); applyVsplit(); };
   } else if (mode === 'pdf') {      // 只看 PDF
     pl.style.width = '100%'; pl.style.borderRight = 'none';
     vh.style.display = 'none';
-    sr.hidden = false; sr.textContent = '显示文字 ›'; sr.onclick = () => { state.sideMode = 'both'; localStorage.setItem('ps-side', 'both'); applyVsplit(); };
+    sr.hidden = false; sr.innerHTML = "显示文字 " + icon('chevR'); sr.onclick = () => { state.sideMode = 'both'; localStorage.setItem('ps-side', 'both'); applyVsplit(); };
   } else {                          // 双栏
     pl.style.width = state.vsplit + '%';
     pl.style.overflow = ''; pl.style.borderRight = '';
@@ -2382,7 +2440,7 @@ window.applyRpaneCollapse = () => {
   const rs = $('#rpane-restore');
   if (rs) rs.hidden = !state.rpaneCollapsed;
   const cb = $('#rpane-collapse');
-  if (cb) { cb.textContent = state.rpaneCollapsed ? '«' : '»'; cb.title = state.rpaneCollapsed ? '展开右栏' : '收起右栏（只留 PDF）'; }
+  if (cb) { cb.innerHTML = state.rpaneCollapsed ? icon('dblL') : icon('dblR'); cb.title = state.rpaneCollapsed ? '展开右栏' : '收起右栏（只留 PDF）'; }
   // 右栏宽度变了 → PDF 重新按新宽度适配
   if (state.pdfDoc && state.fitWidth) setTimeout(() => window.fitPdf?.(), 80);
 };
@@ -2627,6 +2685,18 @@ window.linkDiag = () => {
 };
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') { e.preventDefault(); linkDiag(); }
+});
+
+/* 阅读页键盘：←/→ 翻页、+/- 缩放（输入框聚焦时不响应） */
+document.addEventListener('keydown', e => {
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (state.mainView !== 'read' || !state.pdfDoc) return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); $('#pg-prev')?.click(); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); $('#pg-next')?.click(); }
+  else if (e.key === '+' || e.key === '=') { e.preventDefault(); $('#zoom-in')?.click(); }
+  else if (e.key === '-') { e.preventDefault(); $('#zoom-out')?.click(); }
 });
 
 $('#toc-btn').onclick = () => toggleToc();

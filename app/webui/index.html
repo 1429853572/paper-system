@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>paper-system</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="stylesheet" href="/static/vendor/pdfjs/pdf_viewer.css">
 <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
 <link rel="stylesheet" href="/static/styles.css">
@@ -14,11 +15,11 @@
   <!-- ======= 文库侧栏 ======= -->
   <aside class="sidebar">
     <header>
-      <span class="title">📚 我的文库</span>
+      <span class="title"><svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 13.5V3.5M6.3 13.5V3.5M9.6 13.5V3.5M2 13.5h12"/></svg> 我的文库</span>
       <span id="health-dot" class="health-dot bad" title="服务状态"></span>
       <span id="who" class="muted" style="font-size:12px"></span>
       <button class="btn small" id="logout-btn">退出</button>
-      <button class="side-collapse" id="side-collapse" title="收起侧栏（文库）">«</button>
+      <button class="side-collapse" id="side-collapse" title="收起侧栏（文库）" aria-label="收起侧栏"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M7.5 4L3.5 8l4 4M11.5 4l-4 4 4 4"/></svg></button>
     </header>
     <div class="collections" id="collections"></div>
     <div class="search"><input id="lib-search" placeholder="搜索标题/全文…"></div>
@@ -50,10 +51,10 @@
         </svg>
       </button>
       <span class="spacer"></span>
-      <button class="tool-arrow" id="vis-toggle" title="上传可见性：当前为共享（点击改为仅自己可见）">🔓</button>
-      <button class="tool-arrow" id="upload-arrow" title="上传文献（也可直接把文件拖到下方列表区）">📄</button>
+      <button class="tool-arrow" id="vis-toggle" title="上传可见性：当前为共享（点击改为仅自己可见）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6.5" rx="1.5"/><path d="M5.5 7V5.5a2.5 2.5 0 014.9-.8"/></svg></button>
+      <button class="tool-arrow" id="upload-arrow" title="上传文献（也可直接把文件拖到下方列表区）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 10V2.5M5 5l3-3 3 3M3 13.5h10"/></svg></button>
       <div class="tool-pop upload-pop" id="upload-pop" hidden>
-        <div class="tp-item" id="upload-file-btn">📄 选择文件上传</div>
+        <div class="tp-item" id="upload-file-btn"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 2.5h5.5L12.5 5.5V13.5h-8.5z"/><path d="M9.5 2.5v3h3"/></svg> 选择文件上传</div>
         <div class="url-import">
           <input id="url-import-input" placeholder="粘贴 URL 导入（pdf/arxiv 直链）">
           <button class="btn small primary" id="url-import-btn">导入</button>
@@ -70,20 +71,20 @@
     </div>
     <div class="paper-list" id="paper-list"></div>
   </aside>
-  <div class="side-rail" id="side-rail" hidden><button id="side-expand" title="展开侧栏（文库）">»</button></div>
+  <div class="side-rail" id="side-rail" hidden><button id="side-expand" title="展开侧栏（文库）" aria-label="展开侧栏"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.5 4l4 4-4 4M4.5 4l4 4-4 4"/></svg></button></div>
 
   <!-- ======= 主区 ======= -->
   <main class="main">
     <nav class="topbar">
-      <button class="btn small" id="menu-toggle">☰</button>
+      <button class="btn small" id="menu-toggle" aria-label="菜单"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg></button>
       <span class="title" id="page-title">阅读</span>
       <div class="topnav">
         <button data-page="reader" class="on">阅读</button>
-        <button data-page="collections">📚 文库</button>
+        <button data-page="collections"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 13.5V3.5M6.3 13.5V3.5M9.6 13.5V3.5M2 13.5h12"/></svg> 文库</button>
         <button data-page="trash">回收站</button>
-        <button data-page="settings">⚙️ 设置</button>
-        <button class="btn small" id="queue-btn" hidden>⏳ 队列 <span class="qbadge" id="qbadge">0</span></button>
-        <button class="btn small primary" id="qa-open" title="聚焦问答框">💬 问答</button>
+        <button data-page="settings"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 5h10M3 11h10"/><circle cx="6" cy="5" r="1.8"/><circle cx="10" cy="11" r="1.8"/></svg> 设置</button>
+        <button class="btn small" id="queue-btn" hidden><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5V8l2.5 1.5"/></svg> 队列 <span class="qbadge" id="qbadge">0</span></button>
+        <button class="btn small primary" id="qa-open" title="聚焦问答框"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 5A1.5 1.5 0 014 3.5h8A1.5 1.5 0 0113.5 5v4A1.5 1.5 0 0112 10.5H7.5L4.5 13v-2.5H4A1.5 1.5 0 012.5 9V5z"/></svg> 问答</button>
       </div>
     </nav>
 
@@ -92,36 +93,36 @@
       <div class="reader">
         <div class="pane-left" id="pane-left">
           <div class="pdf-toolbar" id="pdf-toolbar" hidden>
-            <button id="layout-btn" title="显示/隐藏版面布局框（MinerU 检测的块边界）">▭</button>
-            <button id="pg-prev">◀</button>
+            <button id="layout-btn" title="显示/隐藏版面布局框（MinerU 检测的块边界）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/></svg></button>
+            <button id="pg-prev" aria-label="上一页"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13 8H3M7 4L3 8l4 4"/></svg></button>
             <span id="pg-label">- / -</span>
-            <button id="pg-next">▶</button>
-            <button id="zoom-out">－</button>
+            <button id="pg-next" aria-label="下一页"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
+            <button id="zoom-out" aria-label="缩小"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M5.5 7h3"/></svg></button>
             <span id="zoom-label">100%</span>
-            <button id="zoom-in">＋</button>
+            <button id="zoom-in" aria-label="放大"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M7 5.5v3M5.5 7h3"/></svg></button>
           </div>
           <div class="pdf-host" id="pdf-host"></div>
         </div>
         <div class="v-handle" id="v-handle" title="拖动调整占比 · 双击复位">
           <div class="v-arrows">
-            <button id="va-l" title="收起 PDF，只看文字">‹</button>
-            <button id="va-r" title="收起文字，只看 PDF">›</button>
+            <button id="va-l" title="收起 PDF，只看文字" aria-label="收起 PDF"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/></svg></button>
+            <button id="va-r" title="收起文字，只看 PDF" aria-label="收起文字"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M10 3v10"/></svg></button>
           </div>
         </div>
         <button class="side-restore" id="side-restore" hidden></button>
-        <button class="rpane-restore" id="rpane-restore" hidden title="展开右栏（阅读/问答）">« 展开右栏</button>
+        <button class="rpane-restore" id="rpane-restore" hidden title="展开右栏（阅读/问答）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M7.5 4L3.5 8l4 4M11.5 4l-4 4 4 4"/></svg> 展开右栏</button>
         <div class="pane-right">
-          <button class="qa-reopen" id="qa-reopen" hidden title="重新打开论文问答（恢复默认位置）">💬 问答</button>
+          <button class="qa-reopen" id="qa-reopen" hidden title="重新打开论文问答（恢复默认位置）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 5A1.5 1.5 0 014 3.5h8A1.5 1.5 0 0113.5 5v4A1.5 1.5 0 0112 10.5H7.5L4.5 13v-2.5H4A1.5 1.5 0 012.5 9V5z"/></svg> 问答</button>
           <div class="view-tabs">
-            <button data-v="read" class="on">📖 阅读</button>
+            <button data-v="read" class="on"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 4.2C6.6 3 4.2 2.8 2.6 3.6v9c1.6-.8 4-.6 5.4.6 1.4-1.2 3.8-1.4 5.4-.6v-9C11.8 2.8 9.4 3 8 4.2z"/><path d="M8 4.2v9"/></svg> 阅读</button>
             <button data-v="meta">文献信息</button>
             <button data-v="assets">图表</button>
             <button data-v="json" title="调试视图">JSON</button>
             <span class="spacer"></span>
-            <button class="tab-collapse" id="rpane-collapse" title="收起右栏（只留 PDF；再点可展开）">»</button>
+            <button class="tab-collapse" id="rpane-collapse" title="收起右栏（只留 PDF；再点可展开）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.5 4l4 4-4 4M4.5 4l4 4-4 4"/></svg></button>
           </div>
           <div class="view-tabs r-subtabs" id="r-subtabs">
-            <button id="toc-btn" class="btn small aux" title="章节目录导航">☰</button>
+            <button id="toc-btn" class="aux" title="章节目录导航"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg></button>
             <button data-s="orig" class="on">原文</button>
             <button data-s="bilingual">双语对照</button>
             <button data-s="zh">中文</button>
@@ -135,9 +136,9 @@
             </div>
             <div class="rpane-handle" id="rpane-handle"></div>
             <div class="qa-dock" id="qa-dock">
-              <div class="qa-dock-head"><span style="flex:1">💬 论文问答</span>
-            <button class="btn small" id="qa-export" title="导出对话记录（Markdown）">⬇</button>
-            <button class="btn small" id="qa-dock-close" title="关闭问答（底部按钮可重开）">✕</button></div>
+              <div class="qa-dock-head"><span style="flex:1"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 5A1.5 1.5 0 014 3.5h8A1.5 1.5 0 0113.5 5v4A1.5 1.5 0 0112 10.5H7.5L4.5 13v-2.5H4A1.5 1.5 0 012.5 9V5z"/></svg> 论文问答</span>
+            <button class="btn small" id="qa-export" title="导出对话记录（Markdown）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v8M5 7l3 3 3-3M3 13.5h10"/></svg></button>
+            <button class="btn small" id="qa-dock-close" title="关闭问答（底部按钮可重开）" aria-label="关闭"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></div>
               <div class="qa-dock-body" id="qa-dock-body"></div>
             </div>
           </div>
@@ -161,7 +162,7 @@
   <div class="qp-head"><b>任务队列</b>
     <button class="btn small" onclick="pauseQueue()">暂停批量</button>
     <button class="btn small" onclick="resumeQueue()">恢复</button>
-    <button class="btn small" onclick="toggleQueue(false)">✕</button></div>
+    <button class="btn small" onclick="toggleQueue(false)" aria-label="关闭"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></div>
   <div class="qp-body" id="queue-list"></div>
 </div>
 <div id="toast"></div>
