@@ -614,9 +614,11 @@ table.list input[type=checkbox] { width: auto; }
 .inline-fig img, .fig-grid img { cursor: text; }   /* 单击=正常选中，双击才放大 */
 
 /* 文献库树 */
-.col-arrow { width: 14px; display: inline-block; cursor: pointer; color: var(--muted); text-align: center; }
-.col-arrow:hover { color: var(--primary); }
-.col-arrow-none { width: 14px; display: inline-block; }
+.col-arrow { width: 18px; height: 18px; flex: none; display: inline-flex; align-items: center;
+             justify-content: center; border-radius: 4px; cursor: pointer; color: var(--muted);
+             background: none; border: none; padding: 0; line-height: 1; }
+.col-arrow:hover { color: var(--primary); background: #eef1ff; }
+.col-arrow-none { width: 18px; flex: none; display: inline-block; }
 .col-item.on .col-name { font-weight: 600; }
 .lib-tree .col-arrow { font-size: 15px; }
 

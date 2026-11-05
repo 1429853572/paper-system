@@ -763,6 +763,7 @@ async function parseCtrl() {
   }
   refreshJobState(); loadPapers();
 }
+window.parseCtrl = parseCtrl;   // 内联 onclick 在全局作用域求值，模块函数需显式挂 window
 async function startTranslate() {
   try {
     const r = await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [state.current.id]})});
@@ -770,6 +771,7 @@ async function startTranslate() {
   } catch (e) { toast(e.message); }
   refreshJobState();
 }
+window.startTranslate = startTranslate;
 async function retranslate() {
   const js = await api(`/api/papers/${state.current.id}/jobstate`);
   if (!confirm(`已有完整译文（${js.translated_model}）。\n用当前模型/术语表重新翻译生成新版本？（消耗 token）`)) return;
@@ -784,6 +786,7 @@ async function cancelTranslate() {
   toast('翻译已取消');
   refreshJobState();
 }
+window.cancelTranslate = cancelTranslate;
 /* 翻译进行中轮询：完成自动刷新视图 */
 let watching = null;
 function watchTranslation() {
@@ -1492,7 +1495,7 @@ async function renderSummaryTab() {
   if (!d.summary) {
     $('#content-view').innerHTML = `<div class="card">
       <p>基于左侧全文生成科研导读（研究问题 / 核心思想 / 方法 / …，带页码证据）。</p>
-      <button class="btn primary" onclick="genSummary('${pid}')">✨ 生成导读</button></div>`;
+      <button class="btn primary" onclick="genSumBubble('${pid}')">✨ 生成导读</button></div>`;
     return;
   }
   drawSummary(d.summary, pid);
@@ -1656,6 +1659,24 @@ async function renderAdminZone() {
       <button class="btn small ${pool.enabled ? 'danger' : 'primary'}" onclick="togglePool(${!pool.enabled})">${pool.enabled ? '关闭' : '开启'}</button>
     </div>`;
 }
+/* 管理区动作（48b9862 改造时误删了实现，按钮留着 → 一按就 ReferenceError） */
+window.createInvite = async () => {
+  const d = await api('/api/admin/invite', {method: 'POST'});
+  const el = $('#invite-out');
+  if (el) el.innerHTML = `邀请码: <code style="font-size:16px">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
+};
+window.saveQuota = async uid => {
+  try {
+    const overrides = JSON.parse($('#q-' + uid).value || '{}');
+    await api(`/api/admin/users/${uid}/quota`, {method: 'PUT', body: JSON.stringify(overrides)});
+    toast('已保存');
+  } catch (e) { toast('JSON 格式错误: ' + e.message); }
+};
+window.togglePool = async enable => {
+  await api('/api/admin/pool', {method: 'POST', body: JSON.stringify({enabled: enable})});
+  toast(enable ? '公共池已开启' : '公共池已关闭');
+  renderAdminZone();
+};
 window.testLlm = async fid => {
   const f = new FormData($('#' + fid));
   if (!f.get('api_key')) { toast('请先输入 key'); return; }
@@ -1821,7 +1842,7 @@ async function renderCollectionsPage() {
         <select style="width:auto;font-size:12px" onchange="libBatchMove('${c.id}', this.value, this)"><option value="">移入…</option>${moveOpts(c.id)}</select>
         <button class="btn small danger" onclick="libBatchDelete('${c.id}')">删除</button>
       </div>
-      <table class="list"><tr><th></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
+      <table class="list"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${c.id}" title="全选本库" onchange="libCkAll('${c.id}', this.checked)"></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
         ${paperRows || '<tr><td colspan="6" class="muted">空库</td></tr>'}</table>
     </div>`;
   };
@@ -1849,6 +1870,7 @@ async function renderCollectionsPage() {
     card.addEventListener('drop', e => uploadFiles(e.dataTransfer.files, cid));
   });
 }
+window.renderCollectionsPage = renderCollectionsPage;   // 内联 onclick 在全局作用域求值
 window.toggleColOpen = cid => {
   const s = JSON.parse(localStorage.getItem('ps-col-open') || '{}');
   s[cid] = s[cid] === false ? true : false;
@@ -1863,6 +1885,13 @@ window.libCk = cid => {
   const n = libSelected(cid).length;
   $('#lb-' + cid).hidden = !n;
   $('#lb-count-' + cid).textContent = n;
+  // 总复选框：随行勾选联动（全选 / 半选 / 未选）
+  const all = document.querySelector(`.lib-ck-all[data-cid="${cid}"]`);
+  if (all) {
+    const boxes = $$(`.lib-ck[data-cid="${cid}"]`);
+    all.checked = boxes.length > 0 && boxes.every(b => b.checked);
+    all.indeterminate = n > 0 && !all.checked;
+  }
 };
 window.libCkAll = (cid, on) => {
   $$(`.lib-ck[data-cid="${cid}"]`).forEach(x => x.checked = on);
