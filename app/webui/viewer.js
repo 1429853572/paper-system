@@ -316,7 +316,6 @@ async function openPaper(id) {
   }
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
   state.pairs = []; state.versions = []; state.assets = null;
-  api(`/api/papers/${id}/block-notes`).then(d => { state._bnotes = d.notes; }).catch(() => { state._bnotes = {}; });
   api(`/api/papers/${id}/assets`).then(d => {
     state.assets = d;
     if (['orig', 'bilingual', 'zh'].includes(state.view)) renderContentView();   // 聚合就绪→升级原图裁剪
@@ -668,7 +667,7 @@ function renderContentView() {
       if (!p.zh) continue;   // 未翻译段：不渲染空壳
       const isTitle = p.type === 'title';
       rows.push(`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
-        <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${p.block_id}')">${katexify(esc(p.zh))}</div>`);
+        <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}">${katexify(esc(p.zh))}</div>`);
     }
     el.innerHTML = '<div class="pairs">' + rows.join('') + '</div>';
   } else if (state.view === 'zh') {
@@ -685,12 +684,10 @@ function renderContentView() {
       : '<p class="muted">尚无中文译文。</p>';
   } else {  // orig
     el.innerHTML = buildRenderBlocks().map(b => {
-      const note = state._bnotes?.[b.block_id];
       const aux = ['page_number', 'footer', 'header', 'aside_text', 'page_footnote'].includes(b.type) ? ' blk-aux' : '';
-      return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${b.block_id}')">
+      return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}'>
         ${b._merged ? `<span class="merge-badge" onclick="event.stopPropagation();unmerge('${b.block_id}')" title="已人工合并，点击拆分">⛓ 已合并</span>` : ''}
         ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
-        ${note ? `<div class="bnote" title="双击段落编辑批注">📌 ${esc(note)}</div>` : ''}
       </div>`;}).join('');
   }
 
@@ -1840,17 +1837,6 @@ const linkifyRefs = html => html.replace(/\[(\d{1,3})\]/g,
   (m, n) => `<span class="ref-cite" data-n="${n}">[${n}]</span>`);
 
 /* ---- ③ 段落笔记 ---- */
-window.editBlockNote = async (pid, bid) => {
-  const cur = (state._bnotes || {})[bid] || '';
-  const note = prompt('段落批注（留空删除；入口=双击段落）：', cur);
-  if (note === null) return;
-  await api(`/api/papers/${pid}/block-notes`, {method: 'PUT',
-    body: JSON.stringify({block_id: bid, note})});
-  state._bnotes = state._bnotes || {};
-  if (note.trim()) state._bnotes[bid] = note.trim(); else delete state._bnotes[bid];
-  toast('批注已保存');
-  renderContentView();
-};
 
 /* ---- ④ 目录导航 + 阅读位置记忆 ---- */
 window.toggleToc = () => {
