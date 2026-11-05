@@ -124,6 +124,21 @@ SYSTEM = (
     "并以问句询问用户是否需要继续；不要复述正文，也不要罗列多个问题"
 )
 
+# 多篇（≥2 篇）时附加的对比规则：按维度组织、明确异同、每篇立场分开说
+COMPARE_ADDENDUM = (
+    "\n6. 当前是多论文对比：按维度组织回答（如研究问题/方法/数据集与指标/主要结果/结论），"
+    "不要逐篇流水账；每个论断明确指出是哪篇论文的（可结合其标题简称），"
+    "异同分开表述——先说共识再说分歧；分歧处若因实验设置不同导致，点明原因\n"
+    "7. 涉及效果比较时基于各自报告的数值，注明实验环境差异，不做无依据的优劣判断"
+)
+
+COMPARE_QUESTIONS = [
+    "对比所选论文的核心方法有何异同？",
+    "对比它们使用的数据集、评价指标与主要结果，哪篇效果更好？",
+    "它们的研究结论是否一致？有哪些共识与分歧？",
+    "如果要把它们的方法结合起来，可行的思路是什么？",
+]
+
 
 def answer(user: dict, question: str, paper_ids: list[str], mode: str = "auto") -> dict:
     """返回 {mode, evidence, truncated}；答案由上层流式接口消费。"""
@@ -156,8 +171,10 @@ def answer(user: dict, question: str, paper_ids: list[str], mode: str = "auto") 
             mode = "retrieval"
 
     context, evidence, truncated = _build_context(mode, papers, question, user)
+    # 多篇 → 附对比规则（副本，避免污染模块常量）
+    system = SYSTEM + (COMPARE_ADDENDUM if len(papers) >= 2 else "")
     return {"cfg": cfg, "mode": mode, "context": context, "evidence": evidence,
-            "truncated": truncated, "question": question}
+            "truncated": truncated, "question": question, "system": system}
 
 
 def validate_citations(answer_text: str, evidence: list[dict]) -> dict:

@@ -157,6 +157,12 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
 .cite { color: var(--primary); cursor: pointer; font-size: var(--fs-sm); vertical-align: super; }
 .preset-qs { padding: 0 16px 8px; display: flex; flex-direction: column; gap: 6px; }
 .preset-qs button { text-align: left; border: 1px dashed var(--border); background: none; border-radius: var(--r-md); padding: 7px 10px; font-size: var(--fs-sm); color: var(--muted); }
+.qa-mode { display: flex; gap: 2px; padding: 8px 16px 0; }
+.qa-mode button { border: none; background: none; padding: 4px 10px; border-radius: var(--r-sm);
+                  color: var(--muted); font-size: var(--fs-sm); display: inline-flex; align-items: center; gap: 5px; }
+.qa-mode button.on { background: var(--tint-primary); color: var(--primary); font-weight: 600; }
+.qa-mode button:hover:not(.on) { background: var(--hover); color: var(--primary); }
+
 /* 推荐问题：默认收起成一行，展开才占版面 */
 .preset-qs .preset-toggle { display: flex; align-items: center; gap: 6px; border: none; border-radius: var(--r-sm); padding: 3px 2px; font-size: var(--fs-sm); color: var(--muted); }
 .preset-qs .preset-toggle:hover { background: var(--hover); color: var(--primary); }

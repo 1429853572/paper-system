@@ -1202,7 +1202,12 @@ function renderQaTab() {   // 问答常驻 dock
 }
 function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock body（分屏）
   const pid = state.current?.id;
+  const isCompare = state.qaMode === 'compare';
   container.innerHTML = `
+    <div class="qa-mode" id="qa-mode">
+      <button data-m="single" class="${!isCompare ? 'on' : ''}" title="针对单篇论文问答">${icon('doc')} 单篇</button>
+      <button data-m="compare" class="${isCompare ? 'on' : ''}" title="跨论文对比（选 2-6 篇）">${icon('copy')} 对比</button>
+    </div>
     <div class="qa-scope" id="qa-scope"></div>
     <div class="qa-picker">
       <button class="btn small" id="qa-pick-toggle">${icon('doc')} 选择论文（<span id="qa-pick-count">0</span>）</button>
@@ -1213,7 +1218,9 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     </div>
     <div class="qa-parse-hint" id="qa-parse-hint" hidden></div>
     <div class="qa-msgs" id="qa-msgs">
-      <div class="qa-no-paper" id="qa-no-paper" hidden>${icon('chat')} 先用「选择论文」勾选要提问的文献<br><span style="font-size:11px">也可以先在左侧打开一篇</span></div>
+      <div class="qa-no-paper" id="qa-no-paper" hidden>${isCompare
+        ? `${icon('chat')} 勾选 2-6 篇论文开始对比<br><span style="font-size:var(--fs-xs)">已解析的论文才能参与对比</span>`
+        : `${icon('chat')} 先用「选择论文」勾选要提问的文献<br><span style="font-size:var(--fs-xs)">也可以先在左侧打开一篇</span>`}</div>
       <div id="qa-sum-bubble"></div>
       <div id="qa-msg-list"></div>
     </div>
@@ -1224,16 +1231,27 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       <button class="btn small" id="qa-quote-clear" title="移除引用">${icon('close')}</button>
     </div>
     <div class="qa-input">
-      <textarea id="qa-text" placeholder="对着左侧文章提问…（Ctrl+Enter 发送）"></textarea>
+      <textarea id="qa-text" placeholder="${isCompare
+        ? '对比模式：跨论文提问，如「两篇的方法有何异同？」'
+        : '对着左侧文章提问…（Ctrl+Enter 发送）'}"></textarea>
       <button class="btn primary" id="qa-send">发送</button>
     </div>`;
   renderQaScope();
   populateQaPicker();
+  $$('#qa-mode button').forEach(b => b.onclick = () => {
+    if (state.qaMode === b.dataset.m) return;
+    state.qaMode = b.dataset.m;
+    localStorage.setItem('ps-qa-mode', state.qaMode);
+    renderQaTab();
+  });
+  if (isCompare && state.qaPapers.size < 2) {   // 对比模式：不足 2 篇自动展开选文引导
+    $('#qa-pick-panel').hidden = false;
+    renderPickList($('#qa-pick-filter').value.toLowerCase());
+  }
   api('/api/presets').then(presets => {
     const el = $('#preset-qs');
     if (!el) return;
-    const qs = [...presets.questions];
-    if (state.qaPapers.size >= 2) qs.unshift('对比所选论文的方法、数据集与实验结果有何异同？');
+    const qs = isCompare ? [...(presets.compare || [])] : [...presets.questions];
     // 预设问题默认收起成一行，不占正文版面；点标题展开，提问后自动收起
     el.innerHTML = `<button class="preset-toggle" id="preset-toggle">${icon('bulb')} 推荐问题<span class="arrow">${icon('chevD')}</span></button>
       <div class="preset-list" id="preset-list" hidden>${qs.map(q =>
@@ -1372,8 +1390,9 @@ function renderQaScope() {
   const cnt = $('#qa-pick-count');
   if (cnt) cnt.textContent = state.qaPapers.size;   // 计数随范围实时同步（避免残留旧值）
   const ids = [...state.qaPapers];
-  // 范围就是「当前论文」时不占版面；多篇或手动改过范围才显示（可逐篇移除）
-  const isDefaultScope = ids.length <= 1 && (!ids.length || ids[0] === state.current?.id);
+  // 单篇模式：范围=当前论文时不占版面；对比模式：chips 常显（直观看到在对比谁）
+  const isDefaultScope = state.qaMode !== 'compare' &&
+    ids.length <= 1 && (!ids.length || ids[0] === state.current?.id);
   if (isDefaultScope) {
     el.innerHTML = '';
     el.hidden = true;
@@ -1439,13 +1458,14 @@ function renderPickList(filter) {
       <span>${esc(p.title || p.id)}</span>${st}
     </label>`;};
   // 按文献库分组（过滤时跨组匹配；空组隐藏）
+  const papers = state.qaAllPapers || state.papers || [];   // boot 早期 qaAllPapers 可能未加载
   const match = p => !filter || (p.title || '').toLowerCase().includes(filter);
   const cols = [...(state.collections || [])].sort((a, b) =>
     (b.name === '默认文献库') - (a.name === '默认文献库'));
   const groups = cols.map(c => ({
-    name: c.name, papers: state.qaAllPapers.filter(p => p.collection_id === c.id && match(p)),
+    name: c.name, papers: papers.filter(p => p.collection_id === c.id && match(p)),
   }));
-  const orphan = state.qaAllPapers.filter(p => !p.collection_id && match(p));
+  const orphan = papers.filter(p => !p.collection_id && match(p));
   if (orphan.length) groups.push({name: '未分库', papers: orphan});
   const visible = groups.filter(g => g.papers.length);
   const matched = visible.reduce((s, g) => s + g.papers.length, 0);
@@ -1461,6 +1481,7 @@ function renderPickList(filter) {
   $$('.qa-pick-item input', el).forEach(cb => cb.onchange = () => {
     const id = cb.dataset.id;
     if (cb.checked) {
+      if (state.qaMode === 'compare' && state.qaPapers.size >= 6) { cb.checked = false; toast('对比模式最多选 6 篇（篇数越多检索噪声越大）'); return; }
       if (state.qaPapers.size >= 10) { cb.checked = false; toast('对比最多 10 篇'); return; }
       state.qaPapers.add(id);
       const p = state.qaAllPapers.find(x => x.id === id);
@@ -1503,6 +1524,7 @@ function sendQa() {
     if (state.current) { state.qaPapers.add(state.current.id); renderQaScope(); }
     else { toast('请先在范围里加入论文'); return; }
   }
+  if (state.qaMode === 'compare' && state.qaPapers.size < 2) { toast('对比模式请先选择 2 篇以上论文'); return; }
   const parsedScope = [...state.qaPapers].filter(p2 => {
     const pp = state.qaAllPapers.find(x => x.id === p2);
     return !pp || pp.parse_status === 'parsed';
@@ -1850,6 +1872,7 @@ window.exportChat = exportChat;   // 兼容内联 onclick 调用
 state.libSel = localStorage.getItem('ps-lib-sel') || '';   // '' = 全部文献
 state.libPaper = '';                                        // 详情面板选中的论文
 state.libQuery = '';                                        // 管理页搜索词
+state.qaMode = localStorage.getItem('ps-qa-mode') || 'single';   // single=单篇问答 | compare=多篇对比
 state._libQTimer = 0;
 
 function libDescendants(cid, list) {   // 含自身 + 全部子孙
