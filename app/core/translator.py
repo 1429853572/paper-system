@@ -223,3 +223,19 @@ def translation_versions(paper_id: str) -> list[dict]:
         (paper_id,),
     )
     return [dict(r) for r in rows]
+
+
+def translation_status(paper_id: str) -> dict:
+    """译文状态：期望段数 + 各版本完整度（前端按钮/批量跳过依据）."""
+    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
+                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    if run is None:
+        return {"expected": 0, "versions": [], "complete_any": False}
+    expected = len(_translatable_blocks(paper_id, run["id"]))
+    rows = db.all(
+        "SELECT cache_key, model, COUNT(*) AS n, MAX(created_at) AS at FROM translations "
+        "WHERE paper_id=? GROUP BY cache_key, model ORDER BY at DESC", (paper_id,))
+    versions = [{"cache_key": r["cache_key"], "model": r["model"],
+                 "blocks": r["n"], "complete": r["n"] >= expected} for r in rows]
+    return {"expected": expected, "versions": versions,
+            "complete_any": any(v["complete"] for v in versions)}

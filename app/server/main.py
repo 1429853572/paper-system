@@ -1081,11 +1081,16 @@ def paper_jobstate(paper_id: str, request: Request):
             return None
         return {"done": r[0]["progress_done"], "total": r[0]["progress_total"], "status": r[0]["status"]}
 
+    from core.translator import translation_status
+    ts = translation_status(paper_id)
+    complete_model = next((v["model"] for v in ts["versions"] if v["complete"]), None)
     return {"parse_status": p["parse_status"],
             "parsing": _prog("parse") is not None,
             "translating": _prog("translate") is not None,
             "parse_progress": _prog("parse"),
-            "translate_progress": _prog("translate")}
+            "translate_progress": _prog("translate"),
+            "translated": ts["complete_any"],
+            "translated_model": complete_model}
 
 
 # ---------------- 翻译 ----------------
@@ -1111,6 +1116,12 @@ async def translate_papers(request: Request):
         if in_flight and not body.get("force_new_version"):
             skipped.append(pid)
             continue
+        # 已有完整译文且非强制重译 → 跳过（缓存零成本也没必要走队列）
+        if not body.get("force_new_version"):
+            from core.translator import translation_status
+            if translation_status(pid)["complete_any"]:
+                skipped.append(pid)
+                continue
         scheduler.enqueue(u["id"], "translate", pid,
                           {"force_new_version": bool(body.get("force_new_version"))},
                           priority="background" if batch else "interactive")

@@ -343,8 +343,12 @@ function renderJobButtons(js) {
   }
   if (js.translating) {
     tb.textContent = '⏹ 取消翻译'; tb.onclick = cancelTranslate;
+  } else if (js.translated) {
+    tb.textContent = `✓ 已译·${(js.translated_model || '').split('-').pop()}`;
+    tb.title = '已有完整译文；点击用当前模型/术语表重译生成新版本';
+    tb.onclick = retranslate;
   } else {
-    tb.textContent = '🌐 翻译全文'; tb.onclick = startTranslate;
+    tb.textContent = '🌐 翻译全文'; tb.title = ''; tb.onclick = startTranslate;
   }
   /* 进度条 */
   const strip = $('#job-progress');
@@ -389,8 +393,16 @@ async function parseCtrl() {
 async function startTranslate() {
   try {
     const r = await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [state.current.id]})});
-    toast(r.skipped_in_flight?.length ? '该论文已在翻译队列中，无需重复' : '翻译任务已加入队列，完成后自动出现双语视图');
+    toast(r.skipped_in_flight?.length ? '该论文已有译文/已在队列，无需重复' : '翻译任务已加入队列');
   } catch (e) { toast(e.message); }
+  refreshJobState();
+}
+async function retranslate() {
+  const js = await api(`/api/papers/${state.current.id}/jobstate`);
+  if (!confirm(`已有完整译文（${js.translated_model}）。\n用当前模型/术语表重新翻译生成新版本？（消耗 token）`)) return;
+  await api('/api/papers/translate', {method: 'POST',
+    body: JSON.stringify({paper_ids: [state.current.id], force_new_version: true})});
+  toast('重译任务已入队（生成新版本，完成后版本下拉可切换）');
   refreshJobState();
 }
 async function cancelTranslate() {
