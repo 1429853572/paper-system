@@ -1006,7 +1006,15 @@ def export_session(session_id: str, request: Request):
                 lines.append("**证据**: " + " ; ".join(
                     f"[{e['evidence_id']}] {e['title']} 第{e['page_index'] + 1}页" for e in ev))
                 lines.append("")
-    return _md_response("\n".join(lines), f"对话-{s['title'] or session_id}.md")
+    # 文件名与文章保持一致：<规范名>_discussion.md（与翻译导出同一命名规则）
+    scope = [x for x in (s["paper_scope"] or "").split(",") if x]
+    fname = "对话_discussion.md"
+    if scope:
+        p = db.one("SELECT * FROM papers WHERE id=?", (scope[0],))
+        if p is not None:
+            from core.meta import canonical_name
+            fname = f"{canonical_name(p)}_discussion.md"
+    return _md_response("\n".join(lines), fname)
 
 
 @app.post("/api/papers/{paper_id}/verify-meta")

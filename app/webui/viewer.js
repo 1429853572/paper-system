@@ -1137,7 +1137,13 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     if (!state.qaSession || !cur) state.qaSession = d.sessions.length ? d.sessions[0].id : '';
     if (state.qaSession) loadSession(state.qaSession);
     else renderSumBubble();
+    updateExportBtn();
   });
+}
+/* 导出按钮：没有会话时禁用 */
+function updateExportBtn() {
+  const b = $('#qa-export');
+  if (b) { b.disabled = !state.qaSession; b.title = state.qaSession ? '导出对话记录（Markdown）' : '还没有对话记录'; }
 }
 
 /* 导读 = 对话首条默认回答 */
@@ -1207,6 +1213,7 @@ window.openQaDock = () => {
   };
   applyQaLayout();
   $('#qa-dock-close').onclick = closeQa;
+  $('#qa-export').onclick = exportChat;
   $('#qa-reopen').onclick = openQaDock;
   const handle = $('#rpane-handle');
   let dragging = false;
@@ -1224,12 +1231,19 @@ window.openQaDock = () => {
 function renderQaScope() {
   const el = $('#qa-scope');
   if (!el) return;
-  el.innerHTML = '问答范围: ' +
-    ([...state.qaPapers].map(p2 => {
+  const ids = [...state.qaPapers];
+  // 范围就是「当前论文」时不占版面；多篇或手动改过范围才显示（可逐篇移除）
+  const isDefaultScope = ids.length <= 1 && (!ids.length || ids[0] === state.current?.id);
+  if (isDefaultScope) {
+    el.innerHTML = '';
+    el.hidden = true;
+  } else {
+    el.hidden = false;
+    el.innerHTML = ids.map(p2 => {
       const p = state.qaAllPapers?.find(x => x.id === p2) || state.papers.find(x => x.id === p2);
       return `<span class="chip">${esc(p?.title || p2)}<button onclick="qaRemove('${p2}')">✕</button></span>`;
-    }).join('') || '<span class="muted">（空——默认用当前论文，或从下方选文）</span>') +
-    `<button class="btn small" style="margin-left:auto" onclick="exportChat()">⬇ 对话</button>`;
+    }).join('');
+  }
   const hint = $('#qa-parse-hint');
   if (hint) {
     const waiting = [...state.qaPapers]
@@ -1383,6 +1397,7 @@ function sendQa() {
         else if (ev.type === 'error') live.textContent += `\n[错误] ${ev.message}`;
         else if (ev.type === 'done') {
           state.qaSession = ev.session_id;
+          updateExportBtn();
           live.innerHTML = renderCites(live.textContent, ev.evidence);
           wireCites(live, ev.evidence);
           // 证据来源分布（跨文献一目了然）
@@ -1433,7 +1448,7 @@ async function boot() {
   await initPdfJs();
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
   applyQaLayout();
-  updateVisToggle(); updateUploadTarget();
+  updateVisToggle(); updateUploadTarget(); updateExportBtn();
   if (state.qaOpen) renderQaTab();   // 问答 dock（按记忆的开合状态）
   await loadCollections();
   await loadPapers();
@@ -1666,10 +1681,11 @@ function drawSummary(s, pid, target = '#content-view', asBubble = false) {
 
 /* ---- 对话导出 ---- */
 window.copyJson = () => copyText(JSON.stringify(state.blocks, null, 2), 'JSON');
-window.exportChat = () => {
+function exportChat() {
   if (!state.qaSession) { toast('当前还没有对话记录'); return; }
   location.href = `/api/chat/sessions/${state.qaSession}/export`;
-};
+}
+window.exportChat = exportChat;   // 兼容内联 onclick 调用
 
 
 /* ---- 📚 文库管理页 ---- */
