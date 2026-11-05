@@ -171,9 +171,9 @@ async function renderContentSearch() {
 async function loadPapers() {
   const scope = state.currentCollection
     ? [state.currentCollection, ...colDescendants(state.currentCollection)].join(',') : '';
-  const params = new URLSearchParams({q: state.q.trim(), collection_id: scope});
+  const params = new URLSearchParams({q: state.q.trim(), collection_id: scope, status: state.filter === 'private' ? '' : state.filter});
   const d = await api('/api/papers?' + params);
-  state.papers = d.papers;
+  state.papers = state.filter === 'private' ? d.papers.filter(p => p.visibility === 'private') : d.papers;
   renderPapers();
 }
 function statusBadge(p) {

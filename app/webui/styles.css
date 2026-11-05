@@ -615,3 +615,16 @@ table.list input[type=checkbox] { width: auto; }
 .set-card label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 .set-card input, .set-card select { margin-top: 3px; font-size: 13px; }
 .set-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+/* 侧栏工具箭头 */
+.lib-tools { display: flex; gap: 4px; align-items: center; padding: 4px 10px 6px; }
+.tool-arrow { border: none; background: #eef0f6; border-radius: 6px; width: 26px; height: 24px;
+              color: var(--muted); cursor: pointer; font-size: 13px; position: relative; }
+.tool-arrow:hover { background: #dfe3ee; color: var(--primary); }
+.tool-arrow.has-val { background: var(--primary); color: #fff; }
+.tool-pop { position: absolute; z-index: 40; left: 8px; top: 30px; background: var(--panel);
+            border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.14);
+            padding: 4px; min-width: 110px; }
+.tp-item { padding: 6px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.tp-item:hover { background: #f0f3fc; }
+.tp-item.on { background: #eef1ff; color: var(--primary); font-weight: 600; }

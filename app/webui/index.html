@@ -20,8 +20,19 @@
       <button class="btn small" id="logout-btn">退出</button>
     </header>
     <div class="collections" id="collections"></div>
-    <div class="search"><input id="lib-search" placeholder="搜索标题…">
-      <button class="btn small" id="sel-toggle" title="批量选择">☑ 多选</button></div>
+    <div class="search"><input id="lib-search" placeholder="搜索标题/全文…"></div>
+    <div class="lib-tools">
+      <button class="tool-arrow" id="filter-arrow" title="筛选">▾</button>
+      <div class="tool-pop" id="filter-pop" hidden>
+        <div class="tp-item ${''}" data-f="">全部</div>
+        <div class="tp-item" data-f="parsed">✓ 已解析</div>
+        <div class="tp-item" data-f="parsing">⏳ 解析中</div>
+        <div class="tp-item" data-f="failed">✗ 失败</div>
+        <div class="tp-item" data-f="private">🔒 仅私人</div>
+      </div>
+      <button class="tool-arrow" id="sel-toggle" title="批量选择">☑</button>
+      <button class="tool-arrow" id="newlib-arrow" title="新建文献库">＋</button>
+    </div>
     <div class="batch-bar" id="batch-bar">
       <button class="btn small primary" id="batch-translate">批量翻译</button>
       <button class="btn small danger" id="batch-delete">删除</button>
