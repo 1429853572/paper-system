@@ -612,7 +612,7 @@ function watchTranslation() {
     refreshJobState();
   }, 4000);
 }
-$('#translate-btn').onclick = startTranslate;
+const _tb = $('#translate-btn'); if (_tb) _tb.onclick = startTranslate;   // 按钮已移除，兼容空值
 function switchView(v, s) {
   // v ∈ read|meta|assets|json；兼容 orig/bilingual/zh → read+子视图；qa → 聚焦问答框
   if (['orig', 'bilingual', 'zh'].includes(v)) { s = v; v = 'read'; }
