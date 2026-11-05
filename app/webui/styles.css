@@ -331,6 +331,16 @@ table.list th { color: var(--muted); font-weight: 500; }
 .qa-pick-head { display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-sm);
                 font-weight: 600; padding-bottom: 6px; border-bottom: 1px solid var(--line-soft); margin-bottom: 6px; }
 .qa-pick-head .muted { font-weight: 400; font-size: var(--fs-xs); }
+
+.qa-sess-panel { padding: 8px 16px; border-bottom: 1px solid var(--line-soft); background: var(--panel-soft); }
+.qa-sess-head { font-size: var(--fs-sm); font-weight: 600; padding-bottom: 4px; }
+.qa-sess-item { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-radius: var(--r-sm);
+                cursor: pointer; font-size: var(--fs-sm); }
+.qa-sess-item:hover { background: var(--hover); }
+.qa-sess-item.on { background: var(--tint-primary); }
+.qa-sess-title { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qa-sess-item .btn { padding: 2px 5px; }
+.qa-load-more { text-align: center; padding: 8px; }
 .qa-pick-panel input { margin-bottom: 6px; }
 #qa-pick-list { max-height: 240px; overflow-y: auto; }
 .qa-pick-item { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--r-xs);

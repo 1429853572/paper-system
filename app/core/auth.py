@@ -19,7 +19,7 @@ _signer = URLSafeTimedSerializer(SECRET_KEY, salt="paper-system-session")
 _fernet = Fernet(FERNET_KEY.encode())
 
 SESSION_MAX_AGE = 30 * 24 * 3600  # 30 天
-# 登录限速：每 IP 10 分钟内最多 8 次失败
+# 登录限速：每 IP+用户名 10 分钟内最多 8 次失败（内存态；重启清零可接受）
 _fail_log: dict[str, list[float]] = {}
 
 
@@ -69,16 +69,25 @@ def check_token_ver(session_user: dict[str, Any]) -> bool:
 
 
 # ---- 登录限速 ----
-def check_login_rate(ip: str) -> None:
+def check_login_rate(ip: str, username: str = "") -> None:
     now = time.time()
-    fails = [t for t in _fail_log.get(ip, []) if now - t < 600]
-    _fail_log[ip] = fails
+    key = f"{ip}|{username}"
+    fails = [t for t in _fail_log.get(key, []) if now - t < 600]
+    _fail_log[key] = fails
     if len(fails) >= 8:
         raise AuthError("失败次数过多，请 10 分钟后再试")
 
 
-def record_login_fail(ip: str) -> None:
-    _fail_log.setdefault(ip, []).append(time.time())
+def record_login_fail(ip: str, username: str = "") -> None:
+    now = time.time()
+    key = f"{ip}|{username}"
+    fails = [t for t in _fail_log.get(key, []) if now - t < 600]
+    fails.append(time.time())
+    _fail_log[key] = fails
+    # 防内存增长：键数过多时清掉最旧的一半
+    if len(_fail_log) > 500:
+        for k in sorted(_fail_log, key=lambda k: min(_fail_log[k], default=0))[:250]:
+            _fail_log.pop(k, None)
 
 
 # ---- 用户 ----

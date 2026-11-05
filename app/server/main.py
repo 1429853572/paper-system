@@ -152,13 +152,14 @@ def health():
 async def login(request: Request):
     body = await request.json()
     ip = request.client.host if request.client else "?"
+    uname = (body.get("username") or "").strip()
     try:
-        auth.check_login_rate(ip)
+        auth.check_login_rate(ip, uname)
     except auth.AuthError as e:
         raise HTTPException(429, str(e))
-    user = auth.authenticate(body.get("username", ""), body.get("password", ""))
+    user = auth.authenticate(uname, body.get("password", ""))
     if user is None:
-        auth.record_login_fail(ip)
+        auth.record_login_fail(ip, uname)
         raise HTTPException(401, "用户名或密码错误")
     token = auth.make_session(user["id"], user["role"], user.get("token_ver", 0))
     resp = JSONResponse({"id": user["id"], "username": user["username"], "role": user["role"]})
@@ -374,7 +375,7 @@ async def upload_papers(request: Request, files: list[UploadFile]):
 
 @app.get("/api/papers")
 def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
-                collection_id: str = ""):
+                collection_id: str = "", page: int = 0, page_size: int = 0):
     u = require(request)
     is_admin = u["role"] == "admin"
     vis = "" if is_admin else " AND (visibility='shared' OR owner_id=?)"
@@ -392,8 +393,11 @@ def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
         vis += f" AND collection_id IN ({','.join('?' * len(ids))})"
         args.extend(ids)
     cond = "deleted_at IS NULL" if not trash else "deleted_at IS NOT NULL"
-    rows = db.all(f"SELECT * FROM papers WHERE {cond}{vis} ORDER BY created_at DESC LIMIT 500", tuple(args))
-    return {"papers": [dict(r) for r in rows]}
+    limit = max(1, min(500, page_size or 500))
+    offset = max(0, (page - 1)) * limit if page else 0
+    rows = db.all(f"SELECT * FROM papers WHERE {cond}{vis} ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}",
+                  tuple(args))
+    return {"papers": [dict(r) for r in rows], "page": page, "has_more": len(rows) == limit}
 
 
 @app.get("/api/papers/{paper_id}")
@@ -496,6 +500,7 @@ def delete_paper(paper_id: str, request: Request):
     with db.write() as c:
         c.execute("UPDATE papers SET deleted_at=datetime('now') WHERE id=?", (paper_id,))
         c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (paper_id,))
+    audit(u["id"], "delete-paper", p["title"])
     return {"ok": True}
 
 
@@ -663,6 +668,62 @@ def admin_reset_password(user_id: int, request: Request):
                   (auth.hash_password(temp), user_id))
     audit(admin["id"], "reset-password", f"{row['username']}(id={user_id})")
     return {"ok": True, "temp_password": temp, "username": row["username"]}
+
+
+@app.post("/api/admin/users/{user_id}/disable")
+def admin_disable_user(user_id: int, request: Request):
+    """禁用用户：无法登录，已有会话全部吊销。不能禁用自己。"""
+    admin = require_admin(request)
+    if user_id == admin["id"]:
+        raise HTTPException(400, "不能禁用自己")
+    row = db.one("SELECT username, role FROM users WHERE id=?", (user_id,))
+    if row is None:
+        raise HTTPException(404, "用户不存在")
+    if row["role"] == "admin":
+        raise HTTPException(400, "不能禁用管理员账号")
+    with db.write() as c:
+        c.execute("UPDATE users SET disabled=1, token_ver=token_ver+1 WHERE id=?", (user_id,))
+    audit(admin["id"], "disable-user", row["username"])
+    return {"ok": True}
+
+
+@app.post("/api/admin/users/{user_id}/enable")
+def admin_enable_user(user_id: int, request: Request):
+    admin = require_admin(request)
+    row = db.one("SELECT username FROM users WHERE id=?", (user_id,))
+    if row is None:
+        raise HTTPException(404, "用户不存在")
+    with db.write() as c:
+        c.execute("UPDATE users SET disabled=0 WHERE id=?", (user_id,))
+    audit(admin["id"], "enable-user", row["username"])
+    return {"ok": True}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, request: Request):
+    """软删除用户：禁用 + 匿名化用户名（保留其论文归属与统计，可随时恢复 disabled=0）。"""
+    admin = require_admin(request)
+    if user_id == admin["id"]:
+        raise HTTPException(400, "不能删除自己")
+    row = db.one("SELECT username, role FROM users WHERE id=?", (user_id,))
+    if row is None:
+        raise HTTPException(404, "用户不存在")
+    if row["role"] == "admin":
+        raise HTTPException(400, "不能删除管理员账号")
+    with db.write() as c:
+        c.execute("UPDATE users SET disabled=2, username=? WHERE id=?",
+                  (f"[已注销]{row['username']}#{user_id}", user_id))
+    audit(admin["id"], "delete-user", row["username"])
+    return {"ok": True}
+
+
+@app.get("/api/admin/audit")
+def admin_audit(request: Request, limit: int = 100):
+    require_admin(request)
+    rows = db.all("SELECT a.id, a.action, a.detail, a.created_at, u.username "
+                  "FROM audit_log a LEFT JOIN users u ON u.id=a.user_id "
+                  "ORDER BY a.id DESC LIMIT ?", (max(1, min(500, limit)),))
+    return {"rows": [dict(r) for r in rows]}
 
 
 @app.put("/api/admin/users/{user_id}/quota")
@@ -1499,6 +1560,33 @@ def chat_sessions(request: Request, paper_id: str = ""):
     rows = db.all(f"SELECT * FROM chat_sessions WHERE {cond} ORDER BY updated_at DESC LIMIT 50",
                   tuple(args))
     return {"sessions": [dict(r) for r in rows]}
+
+
+@app.delete("/api/chat/sessions/{session_id}")
+def delete_chat_session(session_id: str, request: Request):
+    u = require(request)
+    row = db.one("SELECT user_id FROM chat_sessions WHERE id=?", (session_id,))
+    if row is None or (row["user_id"] != u["id"] and u["role"] != "admin"):
+        raise HTTPException(404, "会话不存在")
+    with db.write() as c:
+        c.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
+        c.execute("DELETE FROM chat_sessions WHERE id=?", (session_id,))
+    return {"ok": True}
+
+
+@app.patch("/api/chat/sessions/{session_id}")
+async def rename_chat_session(session_id: str, request: Request):
+    u = require(request)
+    row = db.one("SELECT user_id FROM chat_sessions WHERE id=?", (session_id,))
+    if row is None or (row["user_id"] != u["id"] and u["role"] != "admin"):
+        raise HTTPException(404, "会话不存在")
+    body = await request.json()
+    title = (body.get("title") or "").strip()[:60]
+    if not title:
+        raise HTTPException(400, "标题不能为空")
+    with db.write() as c:
+        c.execute("UPDATE chat_sessions SET title=? WHERE id=?", (title, session_id))
+    return {"ok": True}
 
 
 @app.get("/api/chat/sessions/{session_id}/messages")

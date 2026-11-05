@@ -227,12 +227,17 @@ async function renderContentSearch() {
     });
   } catch (e) { el.innerHTML = `<p class="muted" style="padding:14px">检索失败: ${esc(e.message)}</p>`; }
 }
-async function loadPapers() {
+async function loadPapers(append = false) {
   const scope = state.currentCollection
     ? [state.currentCollection, ...colDescendants(state.currentCollection)].join(',') : '';
-  const params = new URLSearchParams({q: state.q.trim(), collection_id: scope, status: state.filter === 'private' ? '' : state.filter});
+  const page = append ? (state.papersPage || 1) + 1 : 1;
+  const params = new URLSearchParams({q: state.q.trim(), collection_id: scope,
+    status: state.filter === 'private' ? '' : state.filter, page, page_size: 200});
   const d = await api('/api/papers?' + params);
-  state.papers = state.filter === 'private' ? d.papers.filter(p => p.visibility === 'private') : d.papers;
+  const papers = state.filter === 'private' ? d.papers.filter(p => p.visibility === 'private') : d.papers;
+  state.papers = append ? [...state.papers, ...papers] : papers;
+  state.papersPage = page;
+  state.papersHasMore = !!d.has_more;
   renderPapers();
 }
 function statusBadge(p) {  if (p.deleted_at) return '<span class="badge err">回收站</span>';
@@ -246,7 +251,7 @@ function renderPapers() {
   const el = $('#paper-list');
   if (state.q && state.q.trim().length >= 2) { renderContentSearch(); return; }
   if (!state.papers.length) { el.innerHTML = '<p class="muted" style="padding:20px">暂无论文，上传 PDF 开始</p>'; return; }
-  el.innerHTML = sortPapers(state.papers).map(p => `
+  const listHtml = sortPapers(state.papers).map(p => `
     <div class="paper-item ${state.current?.id === p.id ? 'sel' : ''}" data-id="${p.id}">
       ${state.selectMode ? `<input type="checkbox" ${state.selected.has(p.id) ? 'checked' : ''}>` : ''}
       <div class="info">
@@ -258,6 +263,10 @@ function renderPapers() {
       </div>
       <button class="pi-del" title="移入回收站">${icon('trash')}</button>
     </div>`).join('');
+  el.innerHTML = listHtml + (state.papersHasMore
+    ? '<button class="qa-load-more" id="load-more">加载更多…</button>' : '');
+  const lm = $('#load-more');
+  if (lm) lm.onclick = () => loadPapers(true);
   $$('.paper-item', el).forEach(item => {
     const id = item.dataset.id;
     item.onclick = e => {
@@ -1213,6 +1222,10 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       </div>
     </div>
     <div class="qa-parse-hint" id="qa-parse-hint" hidden></div>
+    <div class="qa-sess-panel" id="qa-sess-panel" hidden>
+      <div class="qa-sess-head">本范围历史会话 <span class="muted" id="qa-sess-count"></span></div>
+      <div id="qa-sess-list"></div>
+    </div>
     <div class="qa-msgs" id="qa-msgs">
       <div class="qa-no-paper" id="qa-no-paper" hidden>${icon('plus')} 点「＋ 添加论文」或在左侧打开一篇，即可提问<br><span style="font-size:var(--fs-xs)">添加 2 篇以上自动进入对比</span></div>
       <div id="qa-sum-bubble"></div>
@@ -1249,6 +1262,13 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
   };
   const pickFilter = $('#qa-pick-filter');
   if (pickFilter) pickFilter.oninput = e => renderPickList(e.target.value.toLowerCase());
+  // 历史会话面板（当前范围）
+  const sessToggle = $('#qa-sess-toggle');
+  if (sessToggle) sessToggle.onclick = () => {
+    const panel = $('#qa-sess-panel');
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) renderSessList();
+  };
   $('#qa-send').onclick = sendQa;
   $('#qa-quote-clear').onclick = clearQuote;
   $('#qa-text').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) sendQa(); };
@@ -1369,6 +1389,45 @@ window.openQaDock = () => {
     if (dragging) { dragging = false; localStorage.setItem('ps-rpane-top', String(state.rpane.top)); }
   });
 })();
+async function renderSessList() {
+  const list = $('#qa-sess-list'), count = $('#qa-sess-count');
+  if (!list) return;
+  const d = await api('/api/chat/sessions').catch(() => ({sessions: []}));
+  const scope = [...state.qaPapers];
+  const rows = d.sessions.filter(x => (x.paper_scope || '').split(',').some(p => scope.includes(p)));
+  if (count) count.textContent = `${rows.length} 条`;
+  list.innerHTML = rows.length ? rows.map(x => `
+    <div class="qa-sess-item ${x.id === state.qaSession ? 'on' : ''}" onclick="switchSess('${x.id}')">
+      <div style="flex:1;min-width:0">
+        <div class="qa-sess-title">${esc(x.title || '未命名会话')}</div>
+        <div class="muted" style="font-size:var(--fs-xs)">${(x.updated_at || '').slice(5, 16)}</div>
+      </div>
+      <button class="btn small" onclick="event.stopPropagation();renameSess('${x.id}', '${esc((x.title || '').replace(/'/g, "\'"))}')" title="重命名">${icon('edit', 12)}</button>
+      <button class="btn small danger" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>
+    </div>`).join('') : '<p class="muted" style="padding:8px">当前范围还没有会话</p>';
+}
+window.switchSess = async sid => {
+  state.qaSession = sid;
+  $('#qa-sess-panel').hidden = true;
+  await loadSession(sid);
+  updateExportBtn?.();
+};
+window.delSess = async sid => {
+  if (!confirm('删除该会话及其全部消息？')) return;
+  await api(`/api/chat/sessions/${sid}`, {method: 'DELETE'});
+  if (state.qaSession === sid) state.qaSession = '';
+  $('#qa-sess-panel').hidden = true;
+  renderQaTab();
+  toast('会话已删除');
+};
+window.renameSess = async (sid, old) => {
+  const t = prompt('新标题：', old);
+  if (!t || t === old) return;
+  await api(`/api/chat/sessions/${sid}`, {method: 'PATCH', body: JSON.stringify({title: t})});
+  renderSessList();
+  renderQaTab();
+};
+
 function renderQaScope() {
   const el = $('#qa-scope');
   if (!el) return;
@@ -1738,6 +1797,7 @@ async function renderAdminZone() {
   if (!el) return;
   const users = await api('/api/admin/users');
   const pool = await api('/api/admin/pool');
+  const audit = await api('/api/admin/audit?limit=50').catch(() => ({rows: []}));
   el.innerHTML = `
     <h2 class="page-h">${icon('crown')} 管理（仅管理员可见）</h2>
     <div class="set-card">
@@ -1752,9 +1812,21 @@ async function renderAdminZone() {
         <td>${u.papers} 篇</td>
         <td style="width:40%"><input style="font-size:11px" id="q-${u.id}" value='${esc(u.overrides || '{}')}'></td>
         <td class="row-actions">
+          ${u.disabled === 2 ? '<span class="badge priv">已注销</span>' : ''}
           <button class="btn small" onclick="saveQuota(${u.id})" title="保存限额">${icon('save')}</button>
           <button class="btn small danger" onclick="resetUserPw(${u.id}, '${esc(u.username)}')" title="重置为临时密码">${icon('key')}</button>
+          ${u.id !== state.me.id && !u.disabled ? `<button class="btn small danger" onclick="toggleUser(${u.id}, '${esc(u.username)}', true)" title="禁用登录">${icon('stop')}</button>` : ''}
+          ${u.disabled === 1 ? `<button class="btn small" onclick="toggleUser(${u.id}, '${esc(u.username)}', false)" title="重新启用">${icon('play')}</button>` : ''}
         </td></tr>`).join('')}</table>
+      <div class="set-head" style="margin-top:14px">${icon('clock')} 审计日志 <span class="muted" style="font-weight:400">最近操作</span></div>
+      <div id="audit-list" style="max-height:220px;overflow-y:auto;font-size:var(--fs-xs)">
+        ${audit.rows.length ? audit.rows.map(r =>
+          `<div style="padding:3px 0;border-bottom:1px solid var(--line-soft)">
+             <span class="muted">${(r.created_at || '').slice(5, 16)}</span>
+             <b>${esc(r.username || '系统')}</b> ${esc(r.action)}
+             <span class="muted">${esc(r.detail || '').slice(0, 40)}</span>
+           </div>`).join('') : '<p class="muted">暂无记录</p>'}
+      </div>
     </div>
     <div class="set-card">
       <div class="set-head">公共额度池 <span class="muted" style="font-size:11px">未配置 key 的成员将使用你的 POOL key</span></div>
@@ -1771,6 +1843,14 @@ window.logoutAll = async () => {
   if (!confirm('登出所有设备？其他已登录的会话将全部失效。')) return;
   await api('/api/logout-all', {method: 'POST'});
   toast('已登出所有设备');
+};
+window.toggleUser = async (uid, uname, disable) => {
+  const act = disable ? '禁用' : '重新启用';
+  if (!confirm(`${act}用户 ${uname}？${disable ? '该用户将无法登录，已有会话全部失效。' : ''}`)) return;
+  try {
+    await api(`/api/admin/users/${uid}/${disable ? 'disable' : 'enable'}`, {method: 'POST'});
+    toast(`已${act}`); renderAdminZone();
+  } catch (e) { toast('操作失败: ' + e.message); }
 };
 window.resetUserPw = async (uid, uname) => {
   if (!confirm(`重置 ${uname} 的密码？将生成一次性临时密码，且该用户所有会话立即失效。`)) return;

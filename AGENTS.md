@@ -80,6 +80,8 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - **登录限速**：每 IP 10 分钟最多 8 次失败（`auth.check_login_rate`）。
 - **备份**：每日 janitor 同时备份 DB 快照与 papers/ 目录 tar（backups/ 各保留 backup_keep 份，含审计快照）——DB 与文件必须配套才有完整备份。
 - **会话吊销**：users.token_ver（v12）——改密/登出所有设备时 +1，current_user 逐请求比对（auth.check_token_ver）。**给 current_user 增加鉴权语义时记得 ver 校验在 auth 层**。
+- **用户管理**：users.disabled（0=正常 1=禁用 2=已注销匿名化）；禁用/注销时 token_ver+1；登录校验 disabled；管理员不能禁用/删除自己与 admin 账号。audit_log 已启用（登录/改密/删论文/改配额/禁用等，管理区可查）。
+- **登录限速**：按 IP+用户名计数（auth.py _fail_log，内存态），上限 500 键自动清理。
 - **错误处理**：全局 exception_handler 统一 JSON 500（勿在前端假设 500 是纯文本）；SSE 收尾已包 try（error 事件而非断流）。
 - **安全头**：中间件统一 nosniff/DENY/CSP（CSP 允许 inline style 与 blob——KaTeX/pdf.js 依赖；改前端加载方式时同步 CSP）。
 - **回收站**：软删除 30 天，janitor 每小时清理；"清空回收站"按用户隔离（admin 才全量）。
