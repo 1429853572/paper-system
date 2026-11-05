@@ -526,8 +526,7 @@ function renderContentView() {
       const zhBody = p.type === 'table' ? renderBlockBody(p)
         : p.zh ? esc(p.zh) : (p.type === 'image' ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
       return `<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
-              <div class="pair zh blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${zhBody}
-                <button class="bn-btn" title="段落批注" onclick="event.stopPropagation();editBlockNote('${state.current.id}','${p.block_id}')">📝</button></div>`;
+              <div class="pair zh blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${p.block_id}')">${zhBody}</div>`;
     }).join('') + '</div>';
   } else if (state.view === 'zh') {
     const zh = state.pairs.filter(p => p.zh);
@@ -537,10 +536,9 @@ function renderContentView() {
   } else {  // orig
     el.innerHTML = state.blocks.map(b => {
       const note = state._bnotes?.[b.block_id];
-      return `<div class="blk" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}'>
-        <button class="bn-btn" title="段落批注" onclick="event.stopPropagation();editBlockNote('${state.current.id}','${b.block_id}')">📝</button>
+      return `<div class="blk" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${b.block_id}')">
         ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
-        ${note ? `<div class="bnote">📌 ${esc(note)}</div>` : ''}
+        ${note ? `<div class="bnote" title="双击段落编辑批注">📌 ${esc(note)}</div>` : ''}
       </div>`;}).join('');
   }
   // 🔗 联动：右侧滚动 → PDF 跟页 + 当前块高亮（节流：仅页变化时重渲染）
@@ -1684,7 +1682,7 @@ const linkifyRefs = html => html.replace(/\[(\d{1,3})\]/g,
 /* ---- ③ 段落笔记 ---- */
 window.editBlockNote = async (pid, bid) => {
   const cur = (state._bnotes || {})[bid] || '';
-  const note = prompt('段落批注（留空删除）：', cur);
+  const note = prompt('段落批注（留空删除；入口=双击段落）：', cur);
   if (note === null) return;
   await api(`/api/papers/${pid}/block-notes`, {method: 'PUT',
     body: JSON.stringify({block_id: bid, note})});
