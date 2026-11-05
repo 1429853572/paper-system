@@ -1215,11 +1215,12 @@ async function renderAssets() {
   }
   $('#content-view').innerHTML =
     (figures.length ? `<div class="card"><h2>🖼 图 (${figures.length})</h2>` +
-      figures.map(f => `<div class="asset" onclick="jumpEvidence(${f.page_index})">
-        ${f.label ? `<span class="asset-badge">${esc(f.label)}</span>` : ''}
-        <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}">
-        ${f.extra_images?.length ? `<p class="muted" style="font-size:11px">（含 ${f.extra_images.length} 张子图，点击查看本页）</p>` : ''}
-        <p class="muted" style="font-size:12px">📄 第${f.page_index + 1}页 · ${esc(f.caption || '（无题注）')}</p>
+      figures.map(f => `<div class="asset">
+        ${f.label ? `<span class="asset-badge" onclick="jumpEvidence(${f.page_index})" title="跳到 PDF 该页">${esc(f.label)}</span>` : ''}
+        <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}"
+             onclick="lightbox(this.src, '${esc(f.caption || '').replace(/'/g, "\\'")}')">
+        ${f.extra_images?.length ? `<p class="muted" style="font-size:11px">（含 ${f.extra_images.length} 张子图，<a href="#" onclick="jumpEvidence(${f.page_index});return false">查看本页</a>）</p>` : ''}
+        <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${f.page_index});return false">📄 第${f.page_index + 1}页</a> · ${esc(f.caption || '（无题注）')}</p>
       </div>`).join('') + '</div>' : '') +
     (tables.length ? `<div class="card"><h2>📋 表 (${tables.length})</h2>` +
       tables.map(t => `<div class="asset" onclick="jumpEvidence(${t.page_index})">
@@ -1322,3 +1323,20 @@ window.delPaperFromLib = async pid => {
   toast('已移入回收站'); loadPapers(); renderCollectionsPage();
 };
 window.viewPaper = pid => { switchPage('reader'); openPaper(pid); };
+
+/* 图片灯箱预览 */
+window.lightbox = (src, caption) => {
+  let lb = $('#ps-lightbox');
+  if (!lb) {
+    lb = document.createElement('div');
+    lb.id = 'ps-lightbox';
+    lb.className = 'lightbox';
+    lb.innerHTML = `<img><p class="lb-cap"></p><button class="lb-close">✕</button>`;
+    document.body.appendChild(lb);
+    lb.onclick = e => { if (e.target === lb || e.target.classList.contains('lb-close')) lb.classList.remove('open'); };
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') lb.classList.remove('open'); });
+  }
+  lb.querySelector('img').src = src;
+  lb.querySelector('.lb-cap').textContent = caption || '';
+  lb.classList.add('open');
+};
