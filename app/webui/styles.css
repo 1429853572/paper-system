@@ -500,3 +500,10 @@ table.list input[type=checkbox] { width: auto; }
 
 .tbl-crop .fig-holder .tbl { overflow-x: auto; }
 .fig-crop .fig-holder { min-height: 20px; }
+
+/* 图片按 MinerU 网页版方式：行宽满幅展示 */
+.inline-fig .fig-holder img { max-width: 100%; width: auto; }
+.fig-group .fig-holder { display: flex; flex-wrap: wrap; gap: 6px; }
+.fig-group .fig-holder img { max-width: 49%; flex: 1 1 44%; min-width: 40%; }
+.pane-right.narrow .fig-group .fig-holder img { max-width: 100%; flex-basis: 100%; }
+.inline-fig { margin: 12px 0; }

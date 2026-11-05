@@ -1953,7 +1953,7 @@ window.figCropPass = async () => {
       const rw = (ub[2] - ub[0]) * base.width, rh = (ub[3] - ub[1]) * base.height;
       const holder = fig.querySelector('.fig-holder');
       const targetW = Math.min(holder.clientWidth || 640, 1200);
-      const scale = Math.max(1.5, targetW / rw);
+      const scale = Math.max(2, targetW / rw);
       const vp = page.getViewport({scale});
       const full = document.createElement('canvas');
       full.width = vp.width; full.height = vp.height;
