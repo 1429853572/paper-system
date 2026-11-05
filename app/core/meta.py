@@ -231,3 +231,20 @@ def verify_meta_online(paper_id: str) -> dict:
              candidate["doi"], candidate["source"], paper_id),
         )
     return {"verified": True, "candidate": candidate}
+
+
+def canonical_name(paper) -> str:
+    """规范文件名：首作者姓+年份+标题（导出/PDF下载统一使用；元数据更新自动跟随）."""
+    import re as _re
+
+    title = (paper["title"] or "").strip() or paper["id"]
+    authors = (paper["authors"] or "").strip()
+    year = (paper["year"] or "").strip()
+    surname = ""
+    if authors:
+        first = authors.split(",")[0].strip()
+        tokens = first.split()
+        surname = tokens[-1] if tokens else first
+    name = f"{surname}{year} {title}" if surname or year else title
+    name = _re.sub(r'[\\/:*?"<>|\n\r\t]+', " ", name)
+    return _re.sub(r"\s+", " ", name).strip()[:180]

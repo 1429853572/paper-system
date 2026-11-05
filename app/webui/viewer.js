@@ -597,7 +597,7 @@ async function renderMeta() {
         <button class="btn small" onclick="extractMeta('${pid}')">🤖 AI 提取</button>
         <button class="btn small" onclick="verifyMeta('${pid}')">🌐 联网校准</button>
         <button class="btn small" onclick="copyCite('${pid}')">✂ 引用</button>
-        <a class="btn small" href="/api/papers/${pid}/pdf" download="原始.pdf">⬇ PDF</a>
+        <a class="btn small" href="/api/papers/${pid}/pdf" download="${canonicalName(paper)}.pdf">⬇ PDF</a>
         <button class="btn small" onclick="parseCtrl()">↻ 重新解析</button>
       </div>
     </div>
@@ -658,6 +658,18 @@ window.editMeta = (pid) => {
   api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({title, authors, journal, year, doi})})
     .then(() => { toast('已保存'); openPaper(pid); });
 };
+function canonicalName(p) {
+  const title = (p.title || p.id || '').trim();
+  const authors = (p.authors || '').trim();
+  const year = (p.year || '').trim();
+  let surname = '';
+  if (authors) {
+    const first = authors.split(',')[0].trim();
+    const tokens = first.split(/\s+/);
+    surname = tokens[tokens.length - 1] || first;
+  }
+  return ((surname || '') + year + ' ' + title).replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+}
 window.reindexPaper = async (pid) => {
   if (!confirm('重建该论文的检索索引？（不影响解析/翻译结果）')) return;
   await api(`/api/papers/${pid}/reindex`, {method: 'POST'});

@@ -351,7 +351,12 @@ def paper_pdf(paper_id: str, request: Request):
     path = ingest.PAPERS_DIR / paper_id / "original.pdf"
     if not path.exists():
         raise HTTPException(404, "PDF 文件缺失")
-    return FileResponse(path, media_type="application/pdf")
+    from urllib.parse import quote
+    from core.meta import canonical_name
+    name = canonical_name(p)
+    return FileResponse(path, media_type="application/pdf",
+                        headers={"Content-Disposition":
+                                 'attachment; filename="paper.pdf"; filename*=UTF-8\'\'' + quote(name + ".pdf")})
 
 
 @app.get("/api/papers/{paper_id}/markdown")
@@ -370,7 +375,12 @@ def paper_markdown(paper_id: str, request: Request, run: str = ""):
     path = ingest.PAPERS_DIR / paper_id / "parse" / run / "markdown.md"
     if not path.exists():
         raise HTTPException(404, "markdown 不存在")
-    return FileResponse(path, media_type="text/markdown")
+    from urllib.parse import quote
+    from core.meta import canonical_name
+    name = canonical_name(p)
+    return FileResponse(path, media_type="text/markdown",
+                        headers={"Content-Disposition":
+                                 'attachment; filename="paper.md"; filename*=UTF-8\'\'' + quote(name + ".md")})
 
 
 @app.get("/api/papers/{paper_id}/images/{name}")
@@ -879,8 +889,9 @@ def export_translation(paper_id: str, request: Request, lang: str = "both", cach
         else:
             lines += [x["zh"], ""]
     md = "\n".join(lines)
+    from core.meta import canonical_name
     suffix = "双语对照" if lang == "both" else "中文翻译"
-    return _md_response(md, f"{title}-{suffix}.md")
+    return _md_response(md, f"{canonical_name(p)}-{suffix}.md")
 
 
 @app.get("/api/chat/sessions/{session_id}/export")
