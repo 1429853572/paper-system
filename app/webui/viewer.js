@@ -628,17 +628,20 @@ function renderContentView() {
           : '尚未完成翻译。点击右上「🌐 翻译全文」开始/继续。'}</p></div>`;
       return;
     }
-    const SKIP = new Set(['equation', 'image', 'chart', 'ref_text', 'page_number', 'aside_text']);
-    el.innerHTML = '<div class="pairs">' + state.pairs.map(p => {
-      const zh = p.zh ? esc(p.zh)
-        : (SKIP.has(p.type) ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
-      const zhBody = p.type === 'table' ? renderBlockBody(p)
-        : p.zh ? katexify(esc(p.zh))
-        : (p.type === 'image' || p.type === 'equation' ? '' : '');
+    // 双语渲染：图表/公式只出一份（在 en 行）；无译文的行整行跳过——不留空壳占位
+    const rows = [];
+    for (const p of state.pairs) {
+      const enHtml = renderBlockBody(p);
+      if (p.type === 'image' || p.type === 'equation') {
+        if (enHtml) rows.push(`<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${enHtml}</div>`);
+        continue;   // 图/公式无对应译文行
+      }
+      if (!p.zh) continue;   // 未翻译段：不渲染空壳
       const isTitle = p.type === 'title';
-      return `<div class="pair en blk ${isTitle ? 'blk-title' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
-              <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${p.block_id}')">${zhBody}</div>`;
-    }).join('') + '</div>';
+      rows.push(`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
+        <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${p.block_id}')">${katexify(esc(p.zh))}</div>`);
+    }
+    el.innerHTML = '<div class="pairs">' + rows.join('') + '</div>';
   } else if (state.view === 'zh') {
     const zh = state.pairs.filter(p => p.zh);
     el.innerHTML = zh.length ? zh.map(p =>
