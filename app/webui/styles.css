@@ -435,3 +435,14 @@ table.list input[type=checkbox] { width: auto; }
 .toc-item { padding: 7px 14px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #f4f5f9;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toc-item:hover { background: #eef1ff; color: var(--primary); }
+
+/* PDF 页容器 + 文字层兜底样式 */
+.pdf-page { position: relative; margin: 8px auto; width: fit-content; }
+.pdf-host { --scale-factor: 1; }
+.textLayer { position: absolute; inset: 0; overflow: hidden; opacity: 1; z-index: 2;
+             line-height: 1; text-align: initial; forced-color-adjust: none; transform-origin: 0 0; }
+.textLayer span, .textLayer br { color: transparent; position: absolute; white-space: pre; cursor: text;
+                                 transform-origin: 0% 0%; }
+.textLayer ::selection { background: rgba(74, 108, 247, .35); }
+.textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: -1; cursor: default; user-select: none; }
+.hl-rect { z-index: 3; }

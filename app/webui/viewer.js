@@ -278,12 +278,25 @@ async function renderPage(opts = {}) {
   $('#zoom-label').textContent = Math.round(state.scale * 100) + '%';
   const host = $('#pdf-host');
   $$('.hl-rect', host).forEach(x => x.remove());
-  $$('.pdf-host canvas').forEach(x => x.remove());
+  $$('.pdf-host .pdf-page').forEach(x => x.remove());
   const vp = page.getViewport({scale: state.scale});
+  const wrap = document.createElement('div');
+  wrap.className = 'pdf-page';
   const canvas = document.createElement('canvas');
   canvas.width = vp.width; canvas.height = vp.height;
-  host.appendChild(canvas);
+  wrap.appendChild(canvas);
+  host.appendChild(wrap);
   await page.render({canvasContext: canvas.getContext('2d'), viewport: vp}).promise;
+  // 文字层：透明可选中（划词/复制）
+  host.style.setProperty('--scale-factor', state.scale);
+  try {
+    const tc = await page.getTextContent();
+    const tl = document.createElement('div');
+    tl.className = 'textLayer';
+    tl.style.width = vp.width + 'px'; tl.style.height = vp.height + 'px';
+    wrap.appendChild(tl);
+    await new pdfjsLib.TextLayer({textContentSource: tc, container: tl, viewport: vp}).render();
+  } catch (e) { console.warn('textLayer 跳过:', e); }
   state._lastVP = vp; state._lastPage = page;
   drawHighlights(page, vp);
   // 🔗 左→右：翻页/跳页时右侧滚到本页首块
@@ -1578,7 +1591,7 @@ function followupButtons(sections) {
   document.addEventListener('mouseup', e => {
     const sel = window.getSelection();
     const text = sel ? sel.toString().trim() : '';
-    const inContent = e.target.closest && (e.target.closest('#content-view') || e.target.closest('.qa-msgs'));
+    const inContent = e.target.closest && (e.target.closest('#content-view') || e.target.closest('.qa-msgs') || e.target.closest('#pdf-host'));
     if (!text || text.length < 2 || !inContent) { hideBar(); return; }
     const blk = e.target.closest('.blk');
     lastSel = {text, page: blk ? +blk.dataset.page : (state.pageNum - 1)};
