@@ -336,7 +336,7 @@ async function renderPage(opts = {}) {
       const r = document.createElement('div');
       r.className = 'layout-rect';
       r.style.left = (bb[0] * vp.width) + 'px';
-      r.style.top = ((1 - bb[3]) * vp.height) + 'px';
+      r.style.top = (bb[1] * vp.height) + 'px';
       r.style.width = ((bb[2] - bb[0]) * vp.width) + 'px';
       r.style.height = ((bb[3] - bb[1]) * vp.height) + 'px';
       r.style.borderColor = colors[b.type] || '#9aa3bd';
@@ -369,7 +369,7 @@ function drawHighlights(page, vp) {
     const rect = document.createElement('div');
     rect.className = 'hl-rect';
     rect.style.left = (x0 * vp.width) + 'px';
-    rect.style.top = ((1 - y1) * vp.height) + 'px';
+    rect.style.top = (y0 * vp.height) + 'px';   // MinerU bbox 为左上原点，不翻转
     rect.style.width = ((x1 - x0) * vp.width) + 'px';
     rect.style.height = ((y1 - y0) * vp.height) + 'px';
     host.appendChild(rect);
@@ -1846,7 +1846,7 @@ const renderBlockBody = b => {
     const r = document.createElement('div');
     r.className = 'hl-rect hl-hover';
     r.style.left = (b[0] * vp.width) + 'px';
-    r.style.top = ((1 - b[3]) * vp.height) + 'px';
+    r.style.top = (b[1] * vp.height) + 'px';
     r.style.width = ((b[2] - b[0]) * vp.width) + 'px';
     r.style.height = ((b[3] - b[1]) * vp.height) + 'px';
     $('#pdf-host .pdf-page').appendChild(r);
@@ -1974,7 +1974,7 @@ window.figCropPass = async () => {
       const ub = JSON.parse(fig.dataset.ub);
       const page = await state.pdfDoc.getPage(pageIdx + 1);
       const base = page.getViewport({scale: 1});
-      const rx = ub[0] * base.width, ry = (1 - ub[3]) * base.height;
+      const rx = ub[0] * base.width, ry = ub[1] * base.height;   // 左上原点
       const rw = (ub[2] - ub[0]) * base.width, rh = (ub[3] - ub[1]) * base.height;
       const holder = fig.querySelector('.fig-holder');
       const targetW = Math.min(holder.clientWidth || 640, 1200);
