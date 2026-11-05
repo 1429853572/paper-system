@@ -865,7 +865,7 @@ def _md_response(md: str, filename: str) -> Response:
 def export_translation(paper_id: str, request: Request, lang: str = "both", cache_key: str = ""):
     """译文导出：lang=both 双语对照 | zh 纯中文。"""
     u = require(request)
-    p = db.one("SELECT id, title, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    p = db.one("SELECT id, title, authors, year, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
