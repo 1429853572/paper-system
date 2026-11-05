@@ -1346,12 +1346,32 @@ async def chat_stream(request: Request):
     evidence = prepared["evidence"]
     quote = (body.get("quote") or "").strip()[:800]
     q_full = f"{question}\n\n用户引用的原文：\n{quote}" if quote else question
-    messages = [
-        {"role": "system", "content": prepared["system"]},
+    # 多轮上下文：注入最近 2 轮问答（每则截断 400 字，总预算 1600），支持追问。
+    # 当前问题已在上面入库 → 排除最后一条 user。
+    hist_rows = db.all(
+        "SELECT role, content FROM chat_messages WHERE session_id=? AND role IN ('user','assistant') "
+        "ORDER BY id DESC LIMIT 8", (session_id,))
+    rows = list(reversed(hist_rows))
+    if rows and rows[-1]["role"] == "user":
+        rows = rows[:-1]
+    turns = []
+    for r in rows:
+        if r["role"] == "user":
+            turns.append({"role": "user", "content": r["content"][:400]})
+        elif turns and turns[-1]["role"] == "user":
+            turns.append({"role": "assistant", "content": r["content"][:400]})
+        elif turns:
+            turns[-1] = {"role": "assistant", "content": r["content"][:400]}   # 连续 assistant 取最后
+    turns = turns[-4:]                                   # 最多 2 轮
+    if sum(len(m["content"]) for m in turns) > 1600:     # 超预算 → 只保留最后一轮
+        turns = turns[-2:]
+    messages = [{"role": "system", "content": prepared["system"]}]
+    if len(turns) >= 2:                                  # 至少一轮完整问答才注入
+        messages += turns
+    messages.append(
         {"role": "user", "content": (
             f"证据材料：\n\n{prepared['context']}\n\n问题：{q_full}\n\n请回答（标注 [n] 证据编号）："
-        )},
-    ]
+        )})
 
     def gen() -> Iterator[str]:
         full: list[str] = []
