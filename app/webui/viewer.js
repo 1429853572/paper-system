@@ -1353,11 +1353,14 @@ async function renderAssets() {
         <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${f.page_index});return false">📄 第${f.page_index + 1}页</a> · ${esc(f.caption || '（无题注）')}</p>
       </div>`).join('') + '</div>' : '') +
     (tables.length ? `<div class="card"><h2>📋 表 (${tables.length})</h2>` +
-      tables.map(t => `<div class="asset" onclick="jumpEvidence(${t.page_index})">
-        ${t.label ? `<span class="asset-badge">${esc(t.label)}</span>` : ''}
-        ${t.html ? `<div class="tbl">${t.html}</div>` : ''}
-        <p class="muted" style="font-size:12px">📄 第${t.page_index + 1}页 · ${esc(t.caption || '（无题注）')}</p>
+      tables.map(t => `<div class="asset">
+        ${t.label ? `<span class="asset-badge" onclick="jumpEvidence(${t.page_index})">${esc(t.label)}</span>` : ''}
+        ${t.bbox ? `<figure class="fig-crop" data-page="${t.page_index}" data-ub='${JSON.stringify(t.bbox)}'>
+          <div class="fig-holder">${t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : ''}</div>
+        </figure>` : (t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : '')}
+        <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${t.page_index});return false">📄 第${t.page_index + 1}页</a> · ${esc(t.caption || '（无题注）')}</p>
       </div>`).join('') + '</div>' : '');
+  figCropPass();
 }
 
 /* ---- 导读绘制（气泡/整栏两用） ---- */
@@ -1788,7 +1791,12 @@ const renderBlockBody = b => {
   }
   if (b.type === 'table') {
     const html = b.en !== undefined ? b.en : b.text;   // pairs 用 en，blocks 用 text
-    return html && html.includes('<') ? `<div class="tbl">${sanitizeTbl(html)}</div>` : '';
+    const fallback = html && html.includes('<') ? `<div class="tbl">${sanitizeTbl(html)}</div>` : '';
+    const ub = b.bbox ? JSON.parse(b.bbox) : null;
+    if (!ub) return fallback;
+    return `<figure class="fig-crop tbl-crop" data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'>
+      <div class="fig-holder">${fallback}</div>
+    </figure>`;
   }
   return katexify(linkifyRefs(esc(b.en !== undefined ? b.en : b.text)));
 };

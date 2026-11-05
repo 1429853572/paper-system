@@ -497,3 +497,6 @@ table.list input[type=checkbox] { width: auto; }
 
 .fig-crop .fig-holder img { max-width: 100%; display: block; margin: 0 auto; cursor: zoom-in; }
 .fig-crop.from-pdf .fig-holder { background: #fff; }
+
+.tbl-crop .fig-holder .tbl { overflow-x: auto; }
+.fig-crop .fig-holder { min-height: 20px; }
