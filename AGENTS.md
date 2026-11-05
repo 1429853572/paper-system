@@ -54,6 +54,8 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - **图标一律走 `icon('name')` / `ICONS`**（viewer.js，线条 SVG、currentColor）：新 UI 不再引入 emoji 图标；toast 消息文本里可保留 emoji。给 `textContent` 赋含 icon 的 HTML 会转义显示——用 `innerHTML`。
 - **内联 onclick 的函数必须挂到 window**：`viewer.js` 是 `type="module"`，模块顶层函数不在全局作用域，而内联 `onclick="fn()"` 在全局求值 → 引用模块函数会抛 ReferenceError，按钮表现为"点了没反应"。写法：`window.fn = fn;`。改完跑 `node scripts/check-inline-handlers.mjs` 复查（这坑已出现 4 次）。
 - **问答交互**：统一无模式——范围 = 已添加的文档 chips（`renderQaScope`，恒含虚线「＋添加论文」chip 即面板入口）；打开论文时自动挂载（size≤1 → 替换为新论文），≥2 篇后端自动检索取证对比 + `COMPARE_ADDENDUM` 附加对比提示词，上限 6 篇。多轮上下文：chat_stream 注入最近 2 轮问答（每则 400 字、总预算 1600）；≥2 篇的库级对比工作台是规划中的独立功能。
+- **材料注入策略**（对齐 ChatGPT/DeepSeek 的文件问答做法）：全文直读优先（整体理解最好），`fulltext_max_tokens`（默认 200000，config.yaml）为总预算——多篇总量超预算才降级检索；`_build_context` 的 fulltext 构建预算 = 该值 ×3.5 字符。**注意两处预算联动**：模式判定与构建都看它，改一个要改全。
+- **证据引用规则**：`_CITE` 支持 1-4 位编号（全文模式证据数百条）；evidence 的 `text` 保留全文（数字接地/补引需要），UI 只渲染被引用项；`renderCites` 按 `evidence_id` 匹配（数组下标 ≠ 编号，校验过滤后会错位）。
 - **冒烟测试**：部署后跑 `bash scripts/smoke-test.sh`（只读，15 项：health/静态/登录/关键端点/401 保护）。
 - **按钮巡检**：`node scripts/audit-buttons.mjs` —— 浏览器逐页点击（跳过改数据/花钱的按钮），抓「onclick 函数缺失」「点击抛异常」「接口 4xx/5xx」。静态审计（check-inline-handlers）查不到 `addEventListener` 绑的按钮，巡检能查到。跑之前会自动备份数据库。
 - **上传入口**：没有独立大拖放框——直接把文件拖到**论文列表区**（`.paper-list`）即上传；工具条右侧的 📄 弹层里是「选择文件 / URL 导入」，🔓 图标切换上传可见性（仅自己可见）。

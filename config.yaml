@@ -29,7 +29,7 @@ rag:
   fts_top_k: 15
 
 qa:
-  fulltext_max_tokens: 60000   # 单篇全文直读的 token 预算
+  fulltext_max_tokens: 200000   # 单篇全文直读的 token 预算
   multi_paper_max: 10          # 跨论文对比上限
   context_char_budget: 90000   # 多篇拼接的字符预算（约1:1.5 token）
 

@@ -1624,7 +1624,8 @@ function mdLite(text) {
 }
 function renderCites(text, evidence) {
   return mdLite(text).replace(/\[(\d{1,3})\]/g, (m, n) => {
-    const ev = evidence && evidence[n - 1];
+    // 按 evidence_id 匹配（校验后的 evidence 数组只剩被引用项，下标 ≠ 编号）
+    const ev = evidence && evidence.find(x => String(x.evidence_id) === n);
     const tip = ev ? `${ev.title || ev.paper_id} · 第${ev.page_index + 1}页` : '';
     return `<span class="cite" data-n="${n}"${tip ? ` title="${esc(tip)}"` : ''}>[${n}]</span>`;
   });
@@ -1632,7 +1633,7 @@ function renderCites(text, evidence) {
 function wireCites(container, evidence) {
   $$('.cite', container).forEach(el => el.onclick = () => {
     const n = +(el.dataset.n || (el.textContent.match(/\d+/) || [0])[0]);
-    const ev = evidence && evidence[n - 1];
+    const ev = evidence && evidence.find(x => String(x.evidence_id) === n);
     if (ev) jumpToEvidence(ev);
   });
 }

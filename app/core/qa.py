@@ -16,7 +16,7 @@ from .config import config
 from .db import db
 from .retrieval import search
 
-_CITE = re.compile(r"\[(\d{1,2})\]")
+_CITE = re.compile(r"\[(\d{1,4})\]")   # 全文直读模式证据可达数百条
 
 PRESET_QUESTIONS = [
     "这篇论文的核心贡献是什么？",
@@ -50,6 +50,10 @@ def _build_context(mode: str, papers: list[dict], question: str,
     evidence: [{evidence_id, paper_id, title, page_index, block_id, text}]
     """
     budget = int(config.get("qa", "context_char_budget"))
+    if mode == "fulltext":
+        # 全文直读预算跟随 fulltext_max_tokens（token→字符 ≈ ×3.5）；
+        # 小上下文模型把 fulltext_max_tokens 调小即可整体降级，无需另配
+        budget = int(int(config.get("qa", "fulltext_max_tokens")) * 3.5)
     evidence: list[dict] = []
     parts: list[str] = []
     used = 0
@@ -71,7 +75,8 @@ def _build_context(mode: str, papers: list[dict], question: str,
                 eid = len(evidence) + 1
                 evidence.append({
                     "evidence_id": eid, "paper_id": p["id"], "title": p["title"],
-                    "page_index": b["page_index"], "block_id": b["block_id"], "text": t[:300],
+                    "page_index": b["page_index"], "block_id": b["block_id"],
+                    "text": t,   # 全文保留（done 事件只下发被引用项；数字接地需要全文）
                 })
                 paper_parts.append(line)
                 paper_used += len(line)
@@ -97,7 +102,7 @@ def _build_context(mode: str, papers: list[dict], question: str,
                     "evidence_id": eid, "paper_id": p["id"], "title": p["title"],
                     "page_index": h["page_index"],
                     "block_id": json.loads(h["block_ids"])[0],
-                    "text": h["text"][:300],
+                    "text": h["text"],
                 })
                 paper_parts.append(line)
                 used += len(line)
@@ -164,9 +169,11 @@ def answer(user: dict, question: str, paper_ids: list[str], mode: str = "auto") 
         papers.append(dict(p))
 
     if mode == "auto":
-        mode = "fulltext" if len(papers) == 1 else "retrieval"
-    if mode == "fulltext" and len(papers) == 1:
-        total = sum(len(b["text"]) for b in _paper_blocks(papers[0]["id"]))
+        mode = "fulltext"
+    # 全文直读优先（整体理解最好，对齐 ChatGPT/DeepSeek 的文件问答做法）；
+    # 论文总量超出预算（如小上下文模型）才自动降级为检索取证
+    if mode == "fulltext":
+        total = sum(len(b["text"]) for p2 in papers for b in _paper_blocks(p2["id"]))
         if _estimate_tokens(total) > int(config.get("qa", "fulltext_max_tokens")):
             mode = "retrieval"
 

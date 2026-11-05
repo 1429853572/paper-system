@@ -37,7 +37,7 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "fts_top_k": 15,
     },
     "qa": {
-        "fulltext_max_tokens": 60000,
+        "fulltext_max_tokens": 200000,
         "multi_paper_max": 10,
         "context_char_budget": 90000,
     },
