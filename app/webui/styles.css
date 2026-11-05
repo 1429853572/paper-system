@@ -473,3 +473,7 @@ table.list input[type=checkbox] { width: auto; }
 .qa-quote-text { flex: 1; font-size: 12px; color: #444; max-height: 54px; overflow-y: auto;
                  line-height: 1.5; }
 .qa-input textarea { max-height: 150px; min-height: 44px; resize: none; }
+
+.ord-badge { position: absolute; left: -34px; top: 2px; font-size: 10px; color: #fff;
+            background: #8a93b0; border-radius: 9px; padding: 1px 7px; }
+#ord-btn.on { background: #e3e9ff; color: var(--primary); font-weight: 600; }

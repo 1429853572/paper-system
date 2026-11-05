@@ -524,7 +524,9 @@ function renderContentView() {
       const zh = p.zh ? esc(p.zh)
         : (SKIP.has(p.type) ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
       const zhBody = p.type === 'table' ? renderBlockBody(p)
-        : p.zh ? esc(p.zh) : (p.type === 'image' ? '' : '<span class="muted">（未翻译段落——点「翻译全文」补齐）</span>');
+        : p.zh ? esc(p.zh)
+        : (p.type === 'image' ? '' :
+           `<button class="btn small" onclick="fillBlock('${p.block_id}', this)">⬇ 补译此段</button>`);
       return `<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
               <div class="pair zh blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${p.block_id}')">${zhBody}</div>`;
     }).join('') + '</div>';
@@ -536,8 +538,9 @@ function renderContentView() {
   } else {  // orig
     el.innerHTML = state.blocks.map(b => {
       const note = state._bnotes?.[b.block_id];
+      const ord = state.showOrder ? `<span class="ord-badge" title="语义阅读顺序">${state.blocks.indexOf(b) + 1}</span>` : '';
       return `<div class="blk" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' ondblclick="editBlockNote('${state.current.id}','${b.block_id}')">
-        ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
+        ${ord}${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
         ${note ? `<div class="bnote" title="双击段落编辑批注">📌 ${esc(note)}</div>` : ''}
       </div>`;}).join('');
   }
@@ -1858,4 +1861,20 @@ window.clearQuote = () => {
   if (box) box.hidden = true;
   const t = $('#qa-text');
   if (t) t.placeholder = '对着左侧文章提问…（Ctrl+Enter 发送）';
+};
+
+/* 单段补译（模块翻译） */
+window.fillBlock = async (bid, btn) => {
+  btn.disabled = true; btn.textContent = '翻译中…';
+  try {
+    const r = await api(`/api/papers/${state.current.id}/translate-block`, {method: 'POST',
+      body: JSON.stringify({block_id: bid})});
+    const pair = state.pairs.find(x => x.block_id === bid);
+    if (pair) pair.zh = r.zh;
+    renderContentView();
+    toast('已补译');
+  } catch (e) {
+    btn.disabled = false; btn.textContent = '⬇ 补译此段（重试）';
+    toast('补译失败: ' + e.message);
+  }
 };

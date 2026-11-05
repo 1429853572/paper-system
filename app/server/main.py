@@ -1044,6 +1044,49 @@ async def set_block_note(paper_id: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/papers/{paper_id}/translate-block")
+async def translate_block(paper_id: str, request: Request):
+    """单段补译（模块翻译）：只翻缺失的这一个块，写入与整篇相同的缓存版本."""
+    u = require(request)
+    body = await request.json()
+    bid = body.get("block_id") or ""
+    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    if p is None:
+        raise HTTPException(404, "论文不存在")
+    _require_visible(u, p)
+    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
+                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    if run is None:
+        raise HTTPException(400, "尚未解析完成")
+    blk = db.one("SELECT block_id, text, source_hash FROM blocks WHERE parse_run_id=? AND block_id=?",
+                 (run["id"], bid))
+    if blk is None:
+        raise HTTPException(404, "段落不存在")
+    try:
+        from core.translator import (_translate_batch, compute_cache_key,
+                                     _translatable_blocks, glossary_block, glossary_version)
+        from core.llm import resolve_llm
+        cfg = resolve_llm(u["id"], "translate")
+        hashes = "|".join(b["source_hash"] for b in _translatable_blocks(paper_id, run["id"]))
+        cache_key = compute_cache_key(hashes, cfg.model, glossary_version())
+        got = _translate_batch(cfg, [dict(blk)], glossary_block())
+        zh = got.get(bid, "")
+        if not zh:
+            raise RuntimeError("该段翻译失败，请重试")
+        with db.write() as c:
+            # 同键幂等：覆盖旧值（同 cache_key 同 block）
+            c.execute("DELETE FROM translations WHERE paper_id=? AND cache_key=? AND block_id=?",
+                      (paper_id, cache_key, bid))
+            c.execute("INSERT INTO translations(paper_id,parse_run_id,cache_key,block_id,text_zh,"
+                      "model,created_by) VALUES(?,?,?,?,?,?,?)",
+                      (paper_id, run["id"], cache_key, bid, zh, cfg.model, u["id"]))
+        return {"zh": zh}
+    except NoKeyError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
 def reindex_paper(paper_id: str, request: Request):

@@ -199,9 +199,9 @@ def build_blocks(paper_id: str, run_id: str, middle_json: dict) -> int:
                     if isinstance(sub, dict) and sub.get("type") in ("image_body", "table_body"):
                         asset = sub.get("image_path") or None
                         break
-            # MinerU 的 index 每页独立编号 → block_id 必须含页号
+            # MinerU 的 index 每页独立编号 → block_id 含页号；不含 run → 重解析后译文/批注仍匹配
             rows.append((
-                paper_id, run_id, f"{paper_id}-{run_id}-p{page_idx:03d}-b{idx:05d}",
+                paper_id, run_id, f"{paper_id}-p{page_idx:03d}-b{idx:05d}",
                 normalized, current_section(), page_idx, idx,
                 json.dumps(bbox) if bbox else None, text,
                 sha256_bytes(text.encode())[:16], asset,
