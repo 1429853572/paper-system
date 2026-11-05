@@ -1065,11 +1065,12 @@ window.openQaDock = () => {
 };
 (() => {
   const top = $('#rpane-top');
-  const apply = applyRef;
+  const apply = () => {
+    if (state.qaOpen) { top.style.flex = 'none'; top.style.height = state.rpane.top + '%'; }
+  };
   applyQaLayout();
   $('#qa-dock-close').onclick = closeQa;
   $('#qa-reopen').onclick = openQaDock;
-  const applyRef = apply;
   const handle = $('#rpane-handle');
   let dragging = false;
   handle.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
