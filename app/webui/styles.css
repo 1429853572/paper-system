@@ -568,3 +568,8 @@ table.list input[type=checkbox] { width: auto; }
 /* PDF 点击联动命中反馈 */
 #pdf-host .pdf-page { cursor: crosshair; }
 #pdf-host .pdf-page ::selection { background: rgba(74,108,247,.35); }
+
+/* 右侧激活块：按类型同色高亮（--hlc 由 JS 注入，与 PDF 框同色） */
+.blk.active { background: color-mix(in srgb, var(--hlc, #f0d878) 14%, transparent) !important;
+              box-shadow: inset 3px 0 0 var(--hlc, #e6a23c), inset 0 0 0 1px color-mix(in srgb, var(--hlc, #ccc) 45%, transparent);
+              border-radius: 4px; }

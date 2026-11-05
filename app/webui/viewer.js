@@ -389,10 +389,14 @@ function drawOverlays(wrap) {
   const active = $('.blk.active');
   $$('.hl-rect', wrap).forEach(x => x.remove());
   if (active && +active.dataset.page === idx && active.dataset.bbox && active.dataset.bbox !== '') {
+    const ab = state.blocks.find(x => x.block_id === active.dataset.bid);
+    const hc = typeColor(ab ? ab.type : 'text');
     try { JSON.parse(active.dataset.bbox).forEach(b => {
       if (!b || b.length < 4) return;
       const r = document.createElement('div');
       r.className = 'hl-rect';
+      r.style.borderColor = hc;
+      r.style.background = hc + '2e';
       r.style.left = (b[0]*vp.width)+'px'; r.style.top = (b[1]*vp.height)+'px';
       r.style.width = ((b[2]-b[0])*vp.width)+'px'; r.style.height = ((b[3]-b[1])*vp.height)+'px';
       wrap.appendChild(r);
@@ -652,8 +656,8 @@ function renderContentView() {
         .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
       if (!vis) return;
       const blk = vis.target;
-      $$('.blk.active', $('#content-view')).forEach(x => x.classList.remove('active'));
-      blk.classList.add('active');
+      $$('.blk.active', $('#content-view')).forEach(x => { x.classList.remove('active'); x.style.removeProperty('--hlc'); });
+      applyActiveStyle(blk);
       const pg = +blk.dataset.page;
       if (state.pdfDoc && pg >= 0 && pg + 1 !== state.pageNum) {
         state.pageNum = pg + 1;
@@ -671,8 +675,8 @@ function renderContentView() {
   figCropPass();   // PDF 原图裁剪（异步，pdfDoc 未就绪则跳过）
   // 段落点击 → 跳页 + 高亮
   $$('.blk', el).forEach(x => x.onclick = () => {
-    $$('.blk').forEach(y => y.classList.remove('active'));
-    x.classList.add('active');
+    $$('.blk.active').forEach(y => { y.classList.remove('active'); y.style.removeProperty('--hlc'); });
+    applyActiveStyle(x);
     const page = parseInt(x.dataset.page ?? '0') + 1;
     if (state.pdfDoc && page >= 1 && page <= state.pdfDoc.numPages) {
       state.pageNum = page; renderPage();  // renderPage 会依据 data-bbox 画高亮
@@ -2118,8 +2122,8 @@ window.figCropPass = async () => {
     if (!hit) return;
     const blkEl = $(`#content-view .blk[data-bid="${hit.block_id}"]`);
     if (!blkEl) return;
-    $$('.blk.active', $('#content-view')).forEach(x => x.classList.remove('active'));
-    blkEl.classList.add('active');
+    $$('.blk.active', $('#content-view')).forEach(x => { x.classList.remove('active'); x.style.removeProperty('--hlc'); });
+    applyActiveStyle(blkEl);
     blkEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
     redrawHl();
     savePos();
@@ -2131,4 +2135,17 @@ window.retranslatePaper = async pid => {
   await api('/api/papers/translate', {method: 'POST',
     body: JSON.stringify({paper_ids: [pid], force_new_version: true})});
   toast('重译已入队（完成后自动展示最新版）');
+};
+
+/* 统一联动色板（按块类型）——PDF 框与右侧高亮同色 */
+const TYPE_COLORS = {text: '#4a6cf7', title: '#8a5cf6', paragraph_title: '#8a5cf6', doc_title: '#8a5cf6',
+  equation: '#e6a23c', table: '#2eaa6e', image: '#e0528f', chart: '#e0528f',
+  ref_text: '#8a93b0', list: '#4a8cf7', index: '#4a8cf7'};
+window.typeColor = t => TYPE_COLORS[t] || '#4a6cf7';
+window.applyActiveStyle = blkEl => {
+  if (!blkEl) return;
+  const b = state.blocks.find(x => x.block_id === blkEl.dataset.bid);
+  const c = typeColor(b ? b.type : 'text');
+  blkEl.style.setProperty('--hlc', c);
+  blkEl.classList.add('active');
 };
