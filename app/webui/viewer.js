@@ -1432,7 +1432,7 @@ async function renderAdminZone() {
       <button class="btn small ${pool.enabled ? 'danger' : 'primary'}" onclick="togglePool(${!pool.enabled})">${pool.enabled ? '关闭' : '开启'}</button>
     </div>`;
 }
- = async fid => {
+window.testLlm = async fid => {
   const f = new FormData($('#' + fid));
   if (!f.get('api_key')) { toast('请先输入 key'); return; }
   const r = await api('/api/settings/llm/test', {method: 'POST', body: JSON.stringify({
