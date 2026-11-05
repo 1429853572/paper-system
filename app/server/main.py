@@ -779,7 +779,7 @@ def paper_assets(paper_id: str, request: Request):
             if b.get("type") == "image":
                 body = next((x for x in b.get("content", []) if x.get("type") == "image_body"), None)
                 cap = next((x for x in b.get("content", []) if x.get("type") == "image_caption"), None)
-                if body and body.get("image_path"):
+                if body and body.get("image_path") and Path(body["image_path"]).name:
                     figures_raw.append({
                         "page_index": pg, "image_path": body["image_path"],
                         "caption": _flat_text(cap.get("content")) if cap else "",
@@ -788,12 +788,15 @@ def paper_assets(paper_id: str, request: Request):
             elif b.get("type") == "table":
                 body = next((x for x in b.get("content", []) if x.get("type") == "table_body"), None)
                 cap = next((x for x in b.get("content", []) if x.get("type") == "table_caption"), None)
-                tables.append({
-                    "page_index": pg,
-                    "caption": _flat_text(cap.get("content")) if cap else "",
-                    "html": body.get("content", "") if body else "",
-                    "bbox": b.get("bbox"),
-                })
+                _html = body.get("content", "") if body else ""
+                _bbox = b.get("bbox")
+                if _html.strip() or _bbox:
+                    tables.append({
+                        "page_index": pg,
+                        "caption": _flat_text(cap.get("content")) if cap else "",
+                        "html": _html,
+                        "bbox": _bbox,
+                    })
 
     # 编号解析：Figure N / Table N → 徽标；无编号子图归并到同页主图
     import re as _re

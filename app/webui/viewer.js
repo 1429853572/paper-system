@@ -1441,6 +1441,17 @@ async function renderAssets() {
   if (!figures.length && !tables.length) {
     $('#content-view').innerHTML = '<p class="muted">未提取到图表</p>'; return;
   }
+  // 空条目过滤：图必须可显示，表必须有内容或坐标
+  const F = figures.filter(f => f.image_path);
+  const T = tables.filter(t => (t.html && t.html.trim()) || t.bbox);
+  figures = F; tables = T;
+  setTimeout(() => {   // 兜底：裁剪失败且无兜底内容的卡片隐藏
+    $$('.asset', $('#content-view')).forEach(a => {
+      const hasImg = [...a.querySelectorAll('img')].some(i => i.naturalWidth > 0);
+      const hasTbl = a.querySelector('.tbl') && a.querySelector('.tbl').innerHTML.trim().length > 20;
+      if (!hasImg && !hasTbl) a.style.display = 'none';
+    });
+  }, 1200);
   $('#content-view').innerHTML =
     (figures.length ? `<div class="card"><h2>🖼 图 (${figures.length})</h2>` +
       figures.map(f => `<div class="asset">
