@@ -373,13 +373,15 @@ applySidebarCollapse();
 
 $('#sel-toggle').onclick = () => {
   state.selectMode = !state.selectMode;
-  $('#sel-toggle').classList.toggle('primary', state.selectMode);
+  const b = $('#sel-toggle');
+  b.classList.toggle('has-val', state.selectMode);
+  b.title = state.selectMode ? '退出批量选择' : '批量选择';
   if (!state.selectMode) { state.selected.clear(); $('#batch-bar').classList.remove('show'); }
   renderPapers();
 };
 $('#batch-cancel').onclick = () => {
   state.selected.clear(); $('#batch-bar').classList.remove('show');
-  state.selectMode = false; $('#sel-toggle').classList.remove('primary');
+  state.selectMode = false; const sb = $('#sel-toggle'); sb.classList.remove('has-val'); sb.title = '批量选择';
   renderPapers();
 };
 $('#batch-translate').onclick = async () => {

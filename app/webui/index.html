@@ -23,7 +23,11 @@
     <div class="collections" id="collections"></div>
     <div class="search"><input id="lib-search" placeholder="搜索标题/全文…"></div>
     <div class="lib-tools">
-      <button class="tool-arrow" id="filter-arrow" title="筛选与排序">▾</button>
+      <button class="tool-arrow" id="filter-arrow" title="筛选与排序">
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M1.8 2.6h12.4a.5.5 0 0 1 .39.81L9.9 9.4v4.1a.6.6 0 0 1-.87.54l-2.4-1.2a.6.6 0 0 1-.33-.54V9.4L1.41 3.41A.5.5 0 0 1 1.8 2.6z" fill="currentColor"/>
+        </svg>
+      </button>
       <div class="tool-pop" id="filter-pop" hidden>
         <div class="tp-label">筛选</div>
         <div class="tp-item" data-f="">全部</div>
@@ -38,8 +42,13 @@
         <div class="tp-item" data-s="pages">页数</div>
         <div class="tp-item" data-s="size">文件大小</div>
       </div>
-      <button class="tool-arrow" id="sel-toggle" title="批量选择">☑</button>
-      <button class="tool-arrow" id="newlib-arrow" title="新建文献库">＋</button>
+      <button class="tool-arrow" id="sel-toggle" title="批量选择">
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none">
+          <path d="M2.2 4.3l1.5 1.5 2.7-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2.2 11.3l1.5 1.5 2.7-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M9.2 4.4h4.6M9.2 11.6h4.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      </button>
       <span class="spacer"></span>
       <button class="tool-arrow" id="vis-toggle" title="上传可见性：当前为共享（点击改为仅自己可见）">🔓</button>
       <button class="tool-arrow" id="upload-arrow" title="上传文献（也可直接把文件拖到下方列表区）">📄</button>
