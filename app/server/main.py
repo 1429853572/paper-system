@@ -1090,14 +1090,21 @@ def empty_trash(request: Request):
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
 def reindex_paper(paper_id: str, request: Request):
-    """embedding/FTS 索引重建（后台任务）。换向量模型或索引异常时使用。"""
+    """重建块结构与检索索引：从已存的 middle.json 重新入库（不占 GPU）+ embedding 回填。
+
+    解析产物结构修复后使用（如跨栏续文合并）；也用于换向量模型或索引异常。
+    """
     u = require(request)
     p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
+    try:
+        n_blocks, n_chunks = ingest.rebuild_from_stored(paper_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"重建失败：{e}")
     scheduler.enqueue(u["id"], "embed_backfill", paper_id, {}, priority="background")
-    return {"ok": True}
+    return {"ok": True, "blocks": n_blocks, "chunks": n_chunks}
 
 
 # ---------------- 解析/翻译控制 ----------------

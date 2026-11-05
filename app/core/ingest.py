@@ -173,8 +173,13 @@ def build_blocks(paper_id: str, run_id: str, middle_json: dict) -> int:
     - pages[].page_idx 0 基物理页序
     - 顶层 block.index 唯一严格递增；PDF 块带归一化 bbox [0,1]
     - 标题层级 doc_title=1, paragraph_title=2..6 → 维护 section_path
+
+    跨栏续文合并：MinerU 用 block.continues_prev 标记「本块是上一段的续文」
+    （双栏排版时同一段落被栏边界切开）。官网 markdown 渲染层据此把续文并回前一段，
+    我们同样在入库时合并，否则同一段会显示成两段。
+    合并后 bbox 变成多框列表 [[框1],[框2]]，前端 parseBoxes() 兼容。
     """
-    rows = []
+    rows: list[dict] = []
     section_stack: list[tuple[int, str]] = []  # (level, title)
 
     def current_section() -> str:
@@ -203,21 +208,93 @@ def build_blocks(paper_id: str, run_id: str, middle_json: dict) -> int:
                     if isinstance(sub, dict) and sub.get("type") in ("image_body", "table_body"):
                         asset = sub.get("image_path") or None
                         break
-            # MinerU 的 index 每页独立编号 → block_id 含页号；不含 run → 重解析后译文/批注仍匹配
-            rows.append((
-                paper_id, run_id, f"{paper_id}-p{page_idx:03d}-b{idx:05d}",
-                normalized, current_section(), page_idx, idx,
-                json.dumps(bbox) if bbox else None, text,
-                sha256_bytes(text.encode())[:16], asset,
-            ))
 
+            # ---- 跨栏续文 → 并入前一个正文块 ----
+            anchored = bool((block.get("anchor") or "").strip())
+            prev = rows[-1] if rows else None
+            if (block.get("continues_prev") is True and not anchored
+                    and btype == "text" and prev is not None
+                    and prev["type"] == "text" and prev["page"] == page_idx):
+                prev["text"] = (prev["text"] + " " + text).strip() if text else prev["text"]
+                prev["source_hash"] = sha256_bytes(prev["text"].encode())[:16]
+                if bbox:
+                    prev["boxes"] = prev["boxes"] + [list(bbox)]
+                continue
+
+            # MinerU 的 index 每页独立编号 → block_id 含页号；不含 run → 重解析后译文/批注仍匹配
+            rows.append({
+                "paper_id": paper_id, "run_id": run_id,
+                "block_id": f"{paper_id}-p{page_idx:03d}-b{idx:05d}",
+                "type": normalized, "section": current_section(),
+                "page": page_idx, "index": idx,
+                "boxes": [list(bbox)] if bbox else [],
+                "text": text, "source_hash": sha256_bytes(text.encode())[:16],
+                "asset": asset,
+            })
+
+    db_rows = [
+        (r["paper_id"], r["run_id"], r["block_id"], r["type"], r["section"],
+         r["page"], r["index"],
+         json.dumps(r["boxes"][0] if len(r["boxes"]) == 1 else r["boxes"]) if r["boxes"] else None,
+         r["text"], r["source_hash"], r["asset"])
+        for r in rows
+    ]
     with db.write() as c:
         c.executemany(
             "INSERT OR REPLACE INTO blocks(paper_id,parse_run_id,block_id,type,section_path,"
             "page_index,block_index,bbox,text,source_hash,asset_path) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            rows,
+            db_rows,
         )
-    return len(rows)
+    return len(db_rows)
+
+
+def rebuild_from_stored(paper_id: str) -> tuple[int, int]:
+    """用已存的 middle.json 重建 blocks + chunks（不占 GPU、不重新解析）。
+
+    用于解析产物结构的修复（如跨栏续文合并）。embedding 由 embed_backfill 任务回填。
+    返回 (块数, 分块数)；无可用产物时返回 (0, 0)。
+    """
+    from .retrieval import build_chunks
+
+    run = db.one(
+        "SELECT id FROM parse_runs WHERE paper_id=? AND status='done' ORDER BY created_at DESC LIMIT 1",
+        (paper_id,),
+    )
+    if run is None:
+        return (0, 0)
+    run_id = run["id"]
+    mj_path = PAPERS_DIR / paper_id / "parse" / run_id / "middle_json.json"
+    if not mj_path.is_file():
+        return (0, 0)
+    middle = json.loads(mj_path.read_text(encoding="utf-8"))
+    old_hash = {
+        r["block_id"]: r["source_hash"]
+        for r in db.all("SELECT block_id, source_hash FROM blocks WHERE parse_run_id=?", (run_id,))
+    }
+    with db.write() as c:
+        c.execute("DELETE FROM blocks WHERE parse_run_id=?", (run_id,))
+        c.execute("DELETE FROM chunks WHERE parse_run_id=?", (run_id,))
+        c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (paper_id,))
+    n_blocks = build_blocks(paper_id, run_id, middle)
+    blocks = db.all(
+        "SELECT block_id, text, page_index FROM blocks WHERE parse_run_id=? "
+        "ORDER BY page_index, block_index", (run_id,),
+    )
+    n_chunks = build_chunks(paper_id, run_id, blocks)
+    # 块结构变了（合并/拆分）→ 旧译文与新正文不再对应，删掉以免双语视图半段译文
+    new_hash = {
+        r["block_id"]: r["source_hash"]
+        for r in db.all("SELECT block_id, source_hash FROM blocks WHERE parse_run_id=?", (run_id,))
+    }
+    stale = [bid for bid, h in new_hash.items() if old_hash.get(bid) != h]
+    stale += [bid for bid in old_hash if bid not in new_hash]
+    if stale:
+        with db.write() as c:
+            c.executemany(
+                "DELETE FROM translations WHERE paper_id=? AND block_id=?",
+                [(paper_id, bid) for bid in stale],
+            )
+    return (n_blocks, n_chunks)
 
 
 def finish_parse_run(paper_id: str, run_id: str, ok: bool, error: str = "") -> None:
