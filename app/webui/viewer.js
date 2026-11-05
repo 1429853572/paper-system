@@ -783,6 +783,12 @@ async function renderSumBubble() {
   if (!el) return;
   const pid = [...state.qaPapers][0] || state.current?.id;
   if (!pid) { el.innerHTML = ''; return; }
+  const paper = (state.qaAllPapers || state.papers).find(x => x.id === pid) || state.current || {};
+  const title = paper.title || pid;
+  const multi = state.qaPapers.size > 1;
+  const head = `<div class="muted" style="font-size:12px;margin-bottom:6px">📋 导读针对：<b>${esc(title.slice(0, 46))}</b>` +
+    (multi ? `　<span class="badge run">已选 ${state.qaPapers.size} 篇，导读仅第一篇；如需他篇请调整范围✕</span>` : '') + `</div>`;
+  state._sumHead = head;
   const cached = state._sumCache?.[pid];
   if (cached) { drawSummary(cached.summary, pid, '#qa-sum-bubble', true); return; }
   const d = await api(`/api/papers/${pid}/summary`).catch(() => null);
@@ -791,15 +797,15 @@ async function renderSumBubble() {
     state._sumCache[pid] = d;
     drawSummary(d.summary, pid, '#qa-sum-bubble', true);
   } else {
-    el.innerHTML = `<div class="msg assistant"><div class="bubble">
-      <b>📋 导读</b>　<span class="muted">开始提问前，可先生成本篇的结构化导读：</span><br>
+    el.innerHTML = head + `<div class="msg assistant"><div class="bubble">
+      <span class="muted">开始提问前，可先生成该篇的结构化导读：</span><br>
       <button class="btn small primary" style="margin-top:6px" onclick="genSumBubble('${pid}')">✨ 生成导读</button>
     </div></div>`;
   }
 }
 window.genSumBubble = async pid => {
   const el = $('#qa-sum-bubble');
-  el.innerHTML = '<div class="msg assistant"><div class="bubble">📋 导读生成中…（全文直读，约 20-60 秒）</div></div>';
+  el.innerHTML = (state._sumHead || '') + '<div class="msg assistant"><div class="bubble">📋 导读生成中…（全文直读，约 20-60 秒）</div></div>';
   try {
     const d = await api(`/api/papers/${pid}/summary`, {method: 'POST', body: JSON.stringify({session_id: state.qaSession})});
     if (d.session_id) state.qaSession = d.session_id;
@@ -1259,8 +1265,8 @@ async function renderAssets() {
 function drawSummary(s, pid, target = '#content-view', asBubble = false) {
   const t = $(target);
   const sec = Object.entries(s.sections || {});
-  t.innerHTML = (asBubble ? '<div class="msg assistant"><div class="bubble" style="width:100%">' : '<div class="card">') +
-    (asBubble ? '<b>📋 导读</b>' : '<h2>科研导读</h2>') +
+  t.innerHTML = (asBubble ? (state._sumHead || '') + '<div class="msg assistant"><div class="bubble" style="width:100%">' : '<div class="card">') +
+    (asBubble ? '' : '<h2>科研导读</h2>') +
     (sec.length ? sec.map(([k, v]) =>
       `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><p>${renderCites(v, s.evidence)}</p></div>`).join('')
       : '<p class="muted">导读内容为空，请重新生成。</p>') +
