@@ -902,7 +902,8 @@ async def patch_paper(paper_id: str, request: Request):
             raise HTTPException(400, "目标文献库不存在")
         sets.append("collection_id=?")
         args.append(cid)
-    for field in ("title", "authors", "journal", "year", "doi", "keywords", "abstract"):
+    for field in ("title", "authors", "journal", "year", "doi", "keywords", "abstract",
+                  "volume", "issue", "pages"):
         if field in body:
             sets.append(f"{field}=?")
             args.append(str(body[field])[:3000])
@@ -1225,15 +1226,8 @@ async def export_bibtex(request: Request):
         if p is None:
             continue
         _require_visible(u, p)
-        key = re.sub(r"\W+", "", (p["title"] or pid)[:24]) + (p["year"] or "")
-        authors = " and ".join(a.strip() for a in (p["authors"] or "").replace(";", ",").split(",") if a.strip())
-        entries.append(
-            f"@article{{{key},\n"
-            f"  title = {{{p['title'] or ''}}},\n"
-            f"  author = {{{authors}}},\n"
-            f"  journal = {{{p['journal'] or ''}}},\n"
-            f"  year = {{{p['year'] or ''}}},\n"
-            f"  doi = {{{p['doi'] or ''}}}\n}}")
+        from core.cite import format_citation
+        entries.append(format_citation(dict(p), "bibtex") + "\n")
     if not entries:
         raise HTTPException(404, "没有可导出的论文")
     from core.meta import canonical_name as _cn
@@ -1506,6 +1500,25 @@ async def translate_papers(request: Request):
                           priority="background" if batch else "interactive")
         queued.append(pid)
     return {"queued": queued, "skipped_in_flight": skipped}
+
+
+@app.get("/api/papers/{paper_id}/cite")
+def paper_cite(paper_id: str, request: Request):
+    """引用文本：一次给出全部样式（GB/T 7714 / APA / MLA / BibTeX）。
+
+    前端拿到后本地切换样式、即时预览，不弹窗、不逐次请求。
+    """
+    u = require(request)
+    p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    if p is None:
+        raise HTTPException(404, "论文不存在")
+    _require_visible(u, p)
+    from core.cite import STYLES, DEFAULT_STYLE, all_styles
+    return {
+        "styles": all_styles(dict(p)),
+        "labels": {k: v for k, v in STYLES},
+        "default": DEFAULT_STYLE,
+    }
 
 
 @app.get("/api/papers/{paper_id}/bilingual")

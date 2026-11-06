@@ -538,6 +538,9 @@ async function openPaper(id) {
     if (['orig', 'bilingual', 'zh'].includes(state.view)) renderContentView();   // 聚合就绪→升级原图裁剪
   }).catch(() => {});
   state._refs = null;   // 引用缓存随论文重置
+  state._cite = null;   // 引用文本缓存（{styles, labels, default}）
+  state.citeStyle = localStorage.getItem('ps-cite-style') || 'gbt7714';
+  state._metaEdit = false;   // 文献信息卡的内联编辑态
   state.showLayout = false; $('#layout-btn')?.classList.remove('on');   // 布局框不跨篇残留
   refreshJobState();   // 先取完整标志
   loadBilingual(id).then(() => {   // 翻译完成才默认双语；未完成/未开始停在原文
@@ -1127,26 +1130,43 @@ async function renderMeta() {
   const p = state.current;
   if (!p) { $('#content-view').innerHTML = '<p class="muted">选择论文后查看文献信息</p>'; return; }
   const pid = p.id;
-  const [d, notes, refs] = await Promise.all([
-    api('/api/papers/' + pid), api(`/api/papers/${pid}/notes`), api(`/api/papers/${pid}/references`)
+  const [d, notes, refs, cite] = await Promise.all([
+    api('/api/papers/' + pid), api(`/api/papers/${pid}/notes`), api(`/api/papers/${pid}/references`),
+    api(`/api/papers/${pid}/cite`)
   ]);
+  state._cite = {...cite, paper_id: pid};
   const paper = d.paper;
   state._refs = refs.references;
   const kw = (() => { try { return JSON.parse(paper.keywords || '[]'); } catch { return []; } })();
 
-  $('#content-view').innerHTML = `
-    <div class="meta-head card">
+  const editing = state._metaEdit;
+  const metaBody = editing ? `
+      <input id="m-f-title" class="m-f-wide" value="${esc(paper.title || '')}" placeholder="标题">
+      <div class="meta-line">${icon('user')} <input id="m-f-authors" class="m-f-wide" value="${esc(paper.authors || '')}" placeholder="作者（逗号分隔）"></div>
+      <div class="meta-line">${icon('library')}
+        <input id="m-f-journal" value="${esc(paper.journal || '')}" placeholder="期刊/会议">
+        <input id="m-f-year" value="${esc(paper.year || '')}" placeholder="年" style="width:72px">
+        <input id="m-f-volume" value="${esc(paper.volume || '')}" placeholder="卷" style="width:64px">
+        <input id="m-f-issue" value="${esc(paper.issue || '')}" placeholder="期" style="width:64px">
+        <input id="m-f-pages" value="${esc(paper.pages || '')}" placeholder="页码" style="width:96px">
+        <input id="m-f-doi" value="${esc(paper.doi || '')}" placeholder="DOI" style="width:180px"></div>`
+    : `
       <h2 id="m-title" style="margin-bottom:8px">${esc(paper.title || paper.id)}</h2>
       <div class="meta-line">${icon('user')} <span id="m-authors">${esc(paper.authors || '—')}</span></div>
       <div class="meta-line" id="m-rank"><span class="muted">期刊分区：加载中…</span></div>
       <div class="meta-line">${icon('library')} <span id="m-src">${esc([paper.journal, paper.year, paper.doi ? 'DOI: ' + paper.doi : ''].filter(Boolean).join(' · ') || '—')}</span>
-        ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">${icon('check')} 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>
+        ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">${icon('check')} 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>`;
+
+  $('#content-view').innerHTML = `
+    <div class="meta-head card">
+      ${metaBody}
       <div class="meta-line"><span id="m-stars">${[1,2,3,4,5].map(i => `<span class="star ${i <= (notes.importance||0) ? 'on' : ''}" data-i="${i}">${icon('star')}</span>`).join('')}</span>
         ${icon('tag')} <span id="m-tags">${esc(notes.tags || '') || '<i class=muted>点击右侧添加</i>'}</span></div>
       <div class="meta-actions">
-        <button class="btn small" onclick="editMeta('${pid}')">${icon('edit')} 编辑</button>
+        ${editing ? `<button class="btn small primary" onclick="saveMeta('${pid}')">${icon('check')} 保存</button>
+        <button class="btn small" onclick="cancelMeta()">取消</button>`
+        : `<button class="btn small" onclick="editMeta('${pid}')">${icon('edit')} 编辑</button>`}
         <button class="btn small" onclick="extractMeta('${pid}')" title="用 AI 补全缺失字段（作者/摘要/关键词）">${icon('bolt')} AI 补全</button>
-        <button class="btn small" onclick="copyCite('${pid}')">${icon('copy')} 引用</button>
         <div class="exp-dd" onmouseover="this.classList.add('open')" onmouseout="this.classList.remove('open')">
           <button class="btn small" onclick="void(0)">${icon('download')} 导出</button>
           <div class="exp-menu">
@@ -1160,6 +1180,15 @@ async function renderMeta() {
         <button class="btn small" onclick="retranslatePaper('${pid}')" title="换模型/术语表后生成新译文版本">${icon('retry')} 强制重译</button>
       </div>
     </div>
+    <div class="card cite-card">
+      <h3>${icon('quote')} 引用</h3>
+      <div class="cite-preview" id="cite-preview"></div>
+      <div class="cite-bar">
+        <label for="cite-style">样式</label>
+        <select id="cite-style"></select>
+        <button class="btn small" onclick="copyCite('${pid}')">${icon('copy')} 复制</button>
+      </div>
+    </div>
     <div class="card" style="cursor:pointer" onclick="flashAbstract('${pid}')" title="点击在 PDF 中定位摘要">
       <h3>摘要 <span class="muted" style="font-weight:400;font-size:12px">${icon('pin')}点击定位</span> ${kw.length ? '<span class="muted" style="font-weight:400;font-size:12px">· 关键词: ' + esc(kw.join(' · ')) + '</span>' : ''}</h3>
       <p style="font-size:13px; line-height:1.7">${esc(paper.abstract || '（无——可点 AI 提取）')}</p></div>
@@ -1169,6 +1198,8 @@ async function renderMeta() {
       <div class="ref-list" id="ref-list"></div></div>
     <div class="card"><h3>${icon('folder')} 分库</h3>
       <select id="m-collection" style="max-width:240px"><option value="">未分库</option></select></div>`;
+
+  renderCiteCard();
 
   // 分库下拉
   const colSel = $('#m-collection');
@@ -1211,17 +1242,24 @@ async function renderMeta() {
   loadRank(pid);   // 分区自动加载（按期刊缓存，同期刊只查一次）
 }
 
-window.editMeta = (pid) => {
-  const p = state.current;
-  const f = (label, key, val) => prompt(label, val || '');
-  const title = f('标题', 'title', p.title);
-  if (title === null) return;
-  const authors = f('作者（逗号分隔）', 'authors', p.authors);
-  const journal = f('期刊/会议', 'journal', p.journal);
-  const year = f('年份', 'year', p.year);
-  const doi = f('DOI', 'doi', p.doi);
-  api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({title, authors, journal, year, doi})})
-    .then(() => { toast('已保存'); openPaper(pid); });
+/* 元数据编辑：内联输入框，不弹 prompt 链（原来一次要弹 6 个框）。
+   卷/期/页是引用格式需要的字段，一并在这里补。 */
+window.editMeta = (pid) => { state._metaEdit = true; renderMeta(); };
+window.cancelMeta = () => { state._metaEdit = false; renderMeta(); };
+window.saveMeta = async (pid) => {
+  const g = id => ($('#' + id)?.value ?? '').trim();
+  const body = {
+    title: g('m-f-title'), authors: g('m-f-authors'), journal: g('m-f-journal'),
+    year: g('m-f-year'), volume: g('m-f-volume'), issue: g('m-f-issue'),
+    pages: g('m-f-pages'), doi: g('m-f-doi'),
+  };
+  try {
+    await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify(body)});
+    state._metaEdit = false;
+    toast('已保存');
+    await openPaper(pid);
+    renderMeta();
+  } catch (e) { toast('保存失败: ' + e.message); }
 };
 function canonicalName(p) {
   const title = (p.title || p.id || '').trim();
@@ -1251,6 +1289,7 @@ window.verifyMeta = async (pid) => {
 };
 window.loadRank = async (pid) => {
   const el = $('#m-rank');
+  if (!el) return;          // 编辑态没有分区行（分区与引用无关）
   el.innerHTML = '<span class="muted">期刊分区：查询中…</span>';
   try {
     const r = await api(`/api/papers/${pid}/journal-rank`);
@@ -1273,15 +1312,30 @@ window.extractMeta = async (pid) => {
     toast('提取完成'); openPaper(pid); renderMeta();
   } catch (e) { toast('提取失败: ' + e.message); }
 };
+/* 引用：卡片里选样式 + 即时预览 + 复制。不再弹 prompt 输入序号。 */
+function renderCiteCard() {
+  const box = $('#cite-preview'), sel = $('#cite-style');
+  if (!box || !sel) return;
+  const c = state._cite;
+  if (!c) { box.textContent = '（引用加载失败）'; return; }
+  if (!c.styles[state.citeStyle]) state.citeStyle = c.default || 'gbt7714';
+  sel.innerHTML = Object.entries(c.labels || {})
+    .map(([k, v]) => `<option value="${k}"${k === state.citeStyle ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  box.innerHTML = c.styles[state.citeStyle]?.html || '';
+  sel.onchange = () => {
+    state.citeStyle = sel.value;
+    localStorage.setItem('ps-cite-style', sel.value);
+    box.innerHTML = c.styles[sel.value]?.html || '';
+  };
+}
 window.copyCite = async (pid) => {
-  const d = await api('/api/papers/' + pid);
-  const p = d.paper;
-  const authors = (p.authors || '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
-  const citeGB = `${authors.map(a => a.split(' ').slice(-1)[0]).join(', ')}等. ${p.title}[J]. ${p.journal || ''}, ${p.year || ''}.`;
-  const citeBib = `@article{${(p.title || 'paper').slice(0, 20).replace(/\W+/g, '')}${p.year || ''},\n  title = {${p.title}},\n  author = {${p.authors}},\n  journal = {${p.journal || ''}},\n  year = {${p.year || ''}},\n  doi = {${p.doi || ''}}\n}`;
-  const pick = prompt('1 = GB/T 7714\n2 = BibTeX\n输入序号复制：', '1');
-  if (pick === '1') { navigator.clipboard.writeText(citeGB); toast('GB/T 7714 已复制'); }
-  if (pick === '2') { navigator.clipboard.writeText(citeBib); toast('BibTeX 已复制'); }
+  const c = state._cite && state._cite.paper_id === pid ? state._cite
+            : await api(`/api/papers/${pid}/cite`);
+  const st = state.citeStyle || c.default || 'gbt7714';
+  const txt = c.styles[st]?.text || '';
+  if (!txt) { toast('引用为空'); return; }
+  try { await navigator.clipboard.writeText(txt); toast(`${c.labels?.[st] || st} 已复制`); }
+  catch { toast('复制失败，请手动选中复制'); }
 };
 
 /* ---------------- 右栏页签：问答 / 导读（与文章并排） ---------------- */

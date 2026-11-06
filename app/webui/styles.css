@@ -170,6 +170,21 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
 .msg.user .bubble { background: var(--primary); color: #fff; }
 .msg .bubble { display: inline-block; text-align: left; background: var(--hover); border-radius: var(--r-lg); padding: 10px 14px; max-width: 92%; line-height: 1.65; white-space: pre-wrap; }
 .cite { color: var(--primary); cursor: pointer; font-size: var(--fs-sm); vertical-align: super; }
+/* 引用卡：预览块 + 样式选择 + 复制（不弹窗） */
+.cite-card .cite-preview {
+  background: var(--panel-soft); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+  padding: 10px 12px; font-size: 13px; line-height: 1.75; color: var(--text);
+  user-select: text; cursor: text; white-space: pre-wrap; word-break: break-word;
+  min-height: 44px;
+}
+.cite-card .cite-preview i { font-style: italic; }
+.cite-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.cite-bar label { color: var(--muted); font-size: var(--fs-sm); flex: none; }
+.cite-bar select { width: auto; min-width: 150px; padding: 5px 8px; font-size: var(--fs-sm); }
+.cite-bar .btn { margin-left: auto; }
+/* 元数据内联编辑输入框 */
+.meta-head .m-f-wide { width: 100%; max-width: 560px; }
+.meta-head input { padding: 5px 8px; font-size: 13px; }
 /* 导读引文小标：悬停看原文、点击跳页 */
 .cite[data-gid] {
   display: inline-block; padding: 0 4px; margin: 0 1px; border-radius: var(--r-xs);

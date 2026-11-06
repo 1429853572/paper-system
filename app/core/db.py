@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -280,6 +280,13 @@ class Database:
             c.execute("PRAGMA journal_mode=WAL")
 
     def _migrate(self, c: sqlite3.Connection, from_v: int) -> None:
+        if from_v < 14:
+            # 引用格式需要卷/期/页（APA: Journal, 25(12), 3626）
+            for col in ("volume", "issue", "pages"):
+                try:
+                    c.execute(f"ALTER TABLE papers ADD COLUMN {col} TEXT")
+                except Exception:
+                    pass
         if from_v < 13:
             # 跨页段落：一个逻辑段落可能横跨两页 → bbox 变成多框列表，
             # bbox_pages 记录每个框各自所在的页（与 bbox 列表一一对应）。

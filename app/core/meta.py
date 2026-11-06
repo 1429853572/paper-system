@@ -148,7 +148,8 @@ def _verify_arxiv(arxiv_id: str, title: str) -> dict | None:
     authors = [e.findtext("a:name", "", ns) for e in entry.findall("a:author", ns)]
     year = (entry.findtext("a:published", "", ns) or "")[:4]
     return {"authors": ", ".join(a for a in authors if a), "year": year,
-            "journal": "arXiv preprint", "doi": f"10.48550/arXiv.{arxiv_id}",
+            "journal": "arXiv preprint", "volume": "", "issue": "", "pages": "",
+            "doi": f"10.48550/arXiv.{arxiv_id}",
             "source": "arXiv", "title": t, "match": round(_title_ratio(t, title), 2)}
 
 
@@ -157,7 +158,7 @@ def _verify_s2(title: str) -> dict | None:
     from .config import S2_API_KEY
     r = httpx.get(
         "https://api.semanticscholar.org/graph/v1/paper/search/match",
-        params={"query": title, "fields": "title,year,venue,authors,externalIds"},
+        params={"query": title, "fields": "title,year,venue,authors,externalIds,journal"},
         headers={"x-api-key": S2_API_KEY} if S2_API_KEY else {}, timeout=15)
     if r.status_code == 404:
         return None
@@ -169,8 +170,11 @@ def _verify_s2(title: str) -> dict | None:
         return None
     ext = p.get("externalIds") or {}
     doi = ext.get("DOI") or (f"10.48550/arXiv.{ext['ArXiv']}" if ext.get("ArXiv") else "")
+    j = p.get("journal") or {}
+    pages = str(j.get("pages") or "")
     return {"authors": ", ".join(a.get("name", "") for a in (p.get("authors") or [])),
-            "year": str(p.get("year") or ""), "journal": p.get("venue") or "",
+            "year": str(p.get("year") or ""), "journal": j.get("name") or p.get("venue") or "",
+            "volume": str(j.get("volume") or ""), "issue": "", "pages": pages,
             "doi": doi, "source": "Semantic Scholar",
             "title": p.get("title", ""), "match": round(_title_ratio(p.get("title", ""), title), 2)}
 
@@ -198,6 +202,8 @@ def _verify_crossref(title: str) -> dict | None:
             year = str(parts[0][0]); break
     return {"authors": authors[:400], "year": year,
             "journal": (it.get("container-title") or [""])[0],
+            "volume": str(it.get("volume") or ""), "issue": str(it.get("issue") or ""),
+            "pages": str(it.get("page") or ""),
             "doi": it.get("DOI", ""), "source": "CrossRef",
             "title": cand_title, "match": round(ratio, 2)}
 
@@ -234,9 +240,13 @@ def verify_meta_online(paper_id: str) -> dict:
     with db.write() as c:
         c.execute(
             "UPDATE papers SET authors=?, journal=?, year=?, doi=?, "
+            "volume=COALESCE(NULLIF(?,''), volume), "
+            "issue=COALESCE(NULLIF(?,''), issue), "
+            "pages=COALESCE(NULLIF(?,''), pages), "
             "meta_source=?, meta_verified_at=datetime('now') WHERE id=?",
             (candidate["authors"], candidate["journal"], candidate["year"],
-             candidate["doi"], candidate["source"], paper_id),
+             candidate["doi"], candidate.get("volume", ""), candidate.get("issue", ""),
+             candidate.get("pages", ""), candidate["source"], paper_id),
         )
     return {"verified": True, "candidate": candidate}
 
