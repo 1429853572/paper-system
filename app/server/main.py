@@ -419,14 +419,22 @@ def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
 
 
 @app.get("/api/papers/{paper_id}")
-def paper_detail(paper_id: str, request: Request):
+def paper_detail(paper_id: str, request: Request, offset: int = 0, limit: int = 0):
+    """论文详情 + 解析块（分页：大论文首屏只取需要的量，滚动再拉）。
+
+    limit=0 表示不分页（兼容旧调用）；前端用 limit 做首屏 + 增量加载。
+    """
     u = require(request)
     p = db.one("SELECT * FROM papers WHERE id=?", (paper_id,))
     if p is None or p["deleted_at"]:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
     blocks = ingest.latest_blocks(paper_id)
-    return {"paper": dict(p), "blocks": [dict(b) for b in blocks]}
+    total = len(blocks)
+    if limit:
+        blocks = blocks[offset:offset + limit]
+    return {"paper": dict(p), "blocks": [dict(b) for b in blocks],
+            "total": total, "offset": offset, "limit": limit}
 
 
 def _require_visible(u: dict, paper) -> None:
@@ -1601,7 +1609,8 @@ def paper_cite(paper_id: str, request: Request):
 
 
 @app.get("/api/papers/{paper_id}/bilingual")
-def get_bilingual(paper_id: str, request: Request, cache_key: str = ""):
+def get_bilingual(paper_id: str, request: Request, cache_key: str = "",
+                  offset: int = 0, limit: int = 0):
     u = require(request)
     p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
     if p is None:
@@ -1613,7 +1622,11 @@ def get_bilingual(paper_id: str, request: Request, cache_key: str = ""):
     if run is None:
         return {"pairs": [], "versions": []}
     pairs = bilingual_pairs(paper_id, run["id"], cache_key or None)
-    return {"run_id": run["id"], "pairs": pairs, "versions": translation_versions(paper_id)}
+    total = len(pairs)
+    if limit:
+        pairs = pairs[offset:offset + limit]
+    return {"run_id": run["id"], "pairs": pairs, "versions": translation_versions(paper_id),
+            "total": total, "offset": offset, "limit": limit}
 
 
 # ---------------- 术语表 ----------------

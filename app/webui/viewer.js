@@ -513,8 +513,12 @@ function dprFor(cssW, cssH, budget) {
 }
 
 async function openPaper(id) {
-  const d = await api('/api/papers/' + id);
+  const PAGE = 40;
+  const d = await api(`/api/papers/${id}?offset=0&limit=${PAGE}`);
   state.current = d.paper; state.blocks = d.blocks;
+  state._blkTotal = d.total ?? d.blocks.length;
+  state._blkOffset = d.blocks.length;
+  state._blkPage = PAGE;
   renderPapers();
   $('#page-title').textContent = d.paper.title || d.paper.id;
   // PDF
@@ -533,6 +537,7 @@ async function openPaper(id) {
   }
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）
   state.pairs = []; state.versions = []; state.assets = null;
+  state._biTotal = 0; state._biOffset = 0;
   api(`/api/papers/${id}/assets`).then(d => {
     state.assets = d;
     if (['orig', 'bilingual', 'zh'].includes(state.view)) renderContentView();   // 聚合就绪→升级原图裁剪
@@ -995,7 +1000,9 @@ function renderContentView() {
       rows.push(`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${renderBlockBody(p)}</div>
         <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${katexify(esc(p.zh))}</div>`);
     }
-    el.innerHTML = '<div class="pairs">' + rows.join('') + '</div>';
+    el.innerHTML = '<div class="pairs">' + rows.join('') + '</div>' +
+      (state._biOffset < (state._biTotal || 0)
+        ? `<p class="muted" style="text-align:center;padding:10px">继续下滑加载更多…（已加载 ${state._biOffset}/${state._biTotal}）</p>` : '');
   } else if (state.view === 'zh') {
     if (!state.translatedComplete) {
       el.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px">
@@ -1015,10 +1022,19 @@ function renderContentView() {
       const aux = ['aside_text', 'page_footnote'].includes(b.type) ? ' blk-aux' : '';
       return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' data-bbox-pages='${esc(b.bbox_pages ?? '')}'>
         ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
-      </div>`;}).join('');
+      </div>`;}).join('') +
+      (state._blkOffset < (state._blkTotal || 0)
+        ? `<p class="muted" style="text-align:center;padding:10px">继续下滑加载更多…（已加载 ${state._blkOffset}/${state._blkTotal}）</p>` : '');
   }
 
   figCropPass();   // PDF 原图裁剪（异步，pdfDoc 未就绪则跳过）
+  // 滚动到底 → 续拉解析块（分页加载）
+  el.onscroll = () => {
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
+      if (state.view === 'bilingual' || state.view === 'zh') loadMorePairs();
+      else loadMoreBlocks();
+    }
+  };
   // 段落点击 → 跳页 + 高亮
   $$('.blk', el).forEach(x => x.onclick = e => {
     $$('.blk.active').forEach(y => { y.classList.remove('active'); y.style.removeProperty('--hlc'); });
@@ -3069,4 +3085,24 @@ window.emptyTrash = async () => {
 window.exportBibtex = () => {
   location.href = '/api/export/bibtex';
   toast('开始下载 BibTeX（Zotero/EndNote 可直接导入）');
+};
+
+/* 增量加载解析块（滚动到底自动续拉） */
+window.loadMoreBlocks = async () => {
+  if (!state.current || state._blkOffset >= (state._blkTotal || 0)) return;
+  const id = state.current.id;
+  const d = await api(`/api/papers/${id}?offset=${state._blkOffset}&limit=${state._blkPage}`);
+  if (!d.blocks.length) { state._blkTotal = state._blkOffset; return; }
+  state.blocks = state.blocks.concat(d.blocks);
+  state._blkOffset += d.blocks.length;
+  renderContentView();
+};
+window.loadMorePairs = async () => {
+  if (!state.current || !(state._biTotal > state._biOffset)) return;
+  const id = state.current.id;
+  const d = await api(`/api/papers/${id}/bilingual?offset=${state._biOffset}&limit=40`);
+  if (!d.pairs.length) { state._biTotal = state._biOffset; return; }
+  state.pairs = state.pairs.concat(d.pairs);
+  state._biOffset += d.pairs.length;
+  renderContentView();
 };
