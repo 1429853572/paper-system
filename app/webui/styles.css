@@ -771,3 +771,16 @@ table.list input[type=checkbox] { width: auto; }
 .lib-card-l1:hover .lc1-ops { opacity: 1; }
 .lib-row { cursor: pointer; }
 .lib-row:hover { background: #f4f6fc; }
+
+/* L1 卡片：子库嵌套 */
+.lib-card-l1.child { margin-left: 18px; border-style: dashed; background: var(--bg); }
+.lc1-subs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.lc1-sub { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
+           background: #eef1ff; color: var(--primary); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.lc1-sub:hover { background: #dfe6ff; }
+.lc1-sub b { font-weight: 600; opacity: .75; }
+/* L2 子库条 */
+.lib-subbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;
+              padding: 8px 10px; background: #f8f9fc; border: 1px solid var(--border); border-radius: 8px; }
+.lib-subbar .chip { cursor: pointer; }
+.lib-subbar .chip:hover { background: #dfe6ff; }

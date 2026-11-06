@@ -2268,6 +2268,7 @@ async function renderCollectionsPage(preset = null) {
   const sel = state.libSel;
   const scopeIds = sel ? libDescendants(sel, d.collections) : [];
   const scopeKey = sel || 'all';
+  const subLibs = sel ? (d.collections.filter(c => c.parent_id === sel)) : [];
   const scopeName = sel ? (d.collections.find(c => c.id === sel)?.name || '文献库') : '全部文献';
   const papers = (await api('/api/papers' + (scopeIds.length
       ? '?collection_id=' + scopeIds.join(',') : ''))).papers;
@@ -2381,6 +2382,10 @@ async function renderCollectionsPage(preset = null) {
           <button class="btn small" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
           <button class="btn small danger" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
         </div>
+        ${subLibs.length ? `<div class="lib-subbar">
+          <span class="muted" style="font-size:12px">子库：</span>
+          ${subLibs.map(k => `<span class="chip" onclick="libOpenLib('${k.id}')" style="cursor:pointer">${icon('folder')} ${esc(k.name)} · ${k.papers ?? 0} 篇</span>`).join('')}
+        </div>` : ''}
         <div class="lib-batch" id="lb-${scopeKey}" hidden>
           <span id="lb-count-${scopeKey}">0</span> 篇选中
           <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 批量翻译</button>
@@ -3169,16 +3174,19 @@ function libLevel1Html(d) {
   const st = state._statuses || {};
   const children = {};
   d.collections.forEach(c => (children[c.parent_id || 'root'] ||= []).push(c));
-  const cards = d.collections.map(c => {
-    const papers = (st[c.id]?.papers) ?? c.papers ?? 0;
-    const kids = (children[c.id] || []).length;
+  // 卡片：父库大卡 + 子库缩进嵌套其内（层级一眼可见）
+  const cardOf = (c, isChild) => {
+    const papers = c.papers ?? 0;
+    const kids = children[c.id] || [];
     const depth = treeDepth(c.id);
     const doneTr = st[c.id]?.translated ?? 0;
-    return `<div class="lib-card-l1" onclick="libOpenLib('${c.id}')">
+    return `<div class="lib-card-l1 ${isChild ? 'child' : ''}" onclick="libOpenLib('${c.id}')">
       <div class="lc1-icon">${icon('folder')}</div>
       <div class="lc1-main">
-        <div class="lc1-name">${'　'.repeat(depth)}${esc(c.name)}</div>
-        <div class="lc1-meta">${papers} 篇${kids ? ` · ${kids} 个子库` : ''}${doneTr ? ` · 已译 ${doneTr}` : ''}</div>
+        <div class="lc1-name">${esc(c.name)}</div>
+        <div class="lc1-meta">${papers} 篇${kids.length ? ` · ${kids.length} 个子库` : ''}${doneTr ? ` · 已译 ${doneTr}` : ''}</div>
+        ${kids.length ? `<div class="lc1-subs">${kids.map(k =>
+          `<span class="lc1-sub" onclick="event.stopPropagation();libOpenLib('${k.id}')">${icon('folder')} ${esc(k.name)} <b>${k.papers ?? 0}</b></span>`).join('')}</div>` : ''}
       </div>
       <div class="lc1-ops" onclick="event.stopPropagation()">
         <button class="btn small" onclick="libUpload('${c.id}')" title="上传到此库">${icon('upload')}</button>
@@ -3187,7 +3195,8 @@ function libLevel1Html(d) {
         <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')" title="删除库">${icon('trash')}</button>
       </div>
     </div>`;
-  }).join('');
+  };
+  const cards = (children['root'] || []).map(c => cardOf(c, false)).join('');
   const total = d.total;
   return `<div class="card lib-l1-head">
       <h2 style="margin:0;flex:1">📚 全部文献库 <span class="muted" style="font-size:12px">${d.collections.length} 个库 · ${total} 篇论文</span></h2>
