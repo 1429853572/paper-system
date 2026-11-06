@@ -167,8 +167,14 @@ def translate_paper(user_id: int, paper_id: str, run_id: str,
         for b in missing:
             try:
                 got.update(_translate_batch(cfg, [b], gl_block))
-            except Exception:  # noqa: BLE001
-                pass  # 最终缺失的段落保留原文（双语文档该段落只显示英文）
+            except Exception as e:  # noqa: BLE001
+                import logging
+                logging.getLogger("translator").warning(
+                    "单段补译失败 %s: %s", b["block_id"], str(e)[:120])
+            if b["block_id"] not in got:
+                import logging
+                logging.getLogger("translator").warning(
+                    "段落未获得译文（保留原文）: %s", b["block_id"])
         for b in batch:
             zh = got.get(b["block_id"], "")
             rows.append((paper_id, run_id, cache_key, b["block_id"], zh,

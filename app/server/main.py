@@ -1655,17 +1655,20 @@ async def translate_papers(request: Request):
         if in_flight and not body.get("force_new_version"):
             skipped.append(pid)
             continue
-        # 已有完整译文且非强制重译 → 跳过（缓存零成本也没必要走队列）
+        # 已有完整译文且非强制重译 → 跳过（缓存零成本，没必要走队列）
         if not body.get("force_new_version"):
             from core.translator import translation_status
-            if translation_status(pid)["complete_any"]:
+            st = translation_status(pid)
+            if st["complete_any"]:
                 skipped.append(pid)
                 continue
+            # 有部分译文但未完整 → 续翻（翻译器会按块补齐）
         scheduler.enqueue(u["id"], "translate", pid,
                           {"force_new_version": bool(body.get("force_new_version"))},
                           priority="background" if batch else "interactive")
         queued.append(pid)
-    return {"queued": queued, "skipped_in_flight": skipped}
+    return {"queued": queued, "skipped_in_flight": skipped,
+            "skipped_already_done": len(skipped)}
 
 
 @app.get("/api/papers/{paper_id}/cite")
