@@ -2,7 +2,7 @@ data/
 models/
 .env
 offline-images/
+node_modules/
 build.log
-MinerU/
 __pycache__/
 *.pyc
