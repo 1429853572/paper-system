@@ -19,19 +19,21 @@ done
 
 launch() {  # name type path
   local name="$1" type="$2" path="$3"
+  # 本地已下载优先（models/xinference/<name>），否则用 ModelScope 仓库名
+  if [ -d "$MODELS_DIR/$name" ]; then path="$MODELS_DIR/$name"; fi
   if curl -sf "$API/v1/models/$name" >/dev/null 2>&1; then
     echo "  ✓ $name 已存在"; return 0
   fi
   echo "  → 启动 $name ($type, $path)…"
-  curl -sf -X POST "$API/v1/models/launch" \
+  curl -sf -X POST "$API/v1/models" \
     -H "Content-Type: application/json" \
     -d "{\"model_name\":\"$name\",\"model_type\":\"$type\",\"model_uid\":\"$name\",\"model_source\":\"modelscope\",\"model_path\":\"$path\",\"max_workers\":1,\"min_workers\":1}" \
     >/dev/null || { echo "  ✗ $name 启动失败"; return 1; }
 }
 
 echo "== 启动模型 =="
-launch bge-m3              embedding "BAAI/bge-m3"
-launch bge-reranker-v2-m3   rerank    "BAAI/bge-reranker-v2-m3"
+launch bge-m3              embedding "$MODELS_DIR/bge-m3"
+launch bge-reranker-v2-m3   rerank    "$MODELS_DIR/bge-reranker-v2-m3"
 
 echo "== 已加载模型 =="
 curl -sf "$API/v1/models" | python3 -c "

@@ -12,7 +12,7 @@ import time
 import httpx
 
 OLLAMA = "http://localhost:11434/v1/embeddings"
-XINF = "http://localhost:9997/v1/embeddings"
+XINF = "http://localhost:9998/v1/embeddings"
 
 TEXTS = [
     "The Transformer architecture relies entirely on self-attention mechanisms.",
@@ -71,7 +71,7 @@ def main():
     print("\n各服务自身检索 (query=TEXTS[0]) 排序:")
     for name, vecs in (("ollama", v_oll), ("xinference", v_xin)):
         ranked = sorted(
-            ((cos(vecs[0], v), TEXTS[i][:45]) for i in range(len(TEXTS)) if i != 0),
+            ((cos(vecs[0], vecs[i]), TEXTS[i][:45]) for i in range(len(TEXTS)) if i != 0),
             reverse=True)
         print(f"  [{name}]")
         for s, t in ranked[:3]:
