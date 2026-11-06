@@ -1191,9 +1191,20 @@ def export_summary(paper_id: str, request: Request):
     names = {"problem": "研究问题", "core_idea": "核心思想", "method": "方法",
              "datasets": "数据集", "baselines": "基线", "metrics": "评价指标",
              "ablation": "消融", "complexity": "复杂度", "limitations": "局限"}
+    ev_by_id = {e["evidence_id"]: e for e in (data.get("evidence") or [])}
+    cite_map = data.get("cite_map") or {}
     lines = [f"# 科研导读 · {p['title']}", "", f"- 模型: {s['model']}", ""]
     for k, v in (data.get("sections") or {}).items():
         lines += [f"## {names.get(k, k)}", "", v, ""]
+        # 证据脚注：编号在文件内自解释（此前导出只有裸 [n]，读者无从核对）
+        local = cite_map.get(k) or {}
+        for n, gid in sorted(local.items(), key=lambda kv: int(kv[0])):
+            ev = ev_by_id.get(gid)
+            if ev is None:
+                continue
+            lines.append(f"> [{n}] 第{ev['page_index'] + 1}页 · {(ev.get('text') or '').strip()[:300]}")
+        if local:
+            lines.append("")
     lines += ["", f"（由 paper-system 生成 · {s['created_at'][:16]}）"]
     from core.meta import canonical_name
     return _md_response("\n".join(lines), f"{canonical_name(p)}_reading-guide.md")
@@ -1737,9 +1748,12 @@ async def paper_summary(paper_id: str, request: Request):
                       (session_id, u["id"], paper_id, f"导读 · {(p['title'] or '')[:24]}"))
         c.execute("INSERT INTO chat_messages(session_id,role,content,evidence) VALUES(?,?,?,?)",
                   (session_id, "user", "请生成这篇论文的科研导读", "[]"))
+        # 聊天记录用全局编号（sections_global）：此处的证据数组是全局 evidence_id，
+        # 引用编号必须与之一致，否则点 [n] 会跳到不相干的段落。
+        chat_sections = payload.get("sections_global") or payload["sections"]
         c.execute("INSERT INTO chat_messages(session_id,role,content,evidence) VALUES(?,?,?,?)",
                   (session_id, "assistant",
-                   "\n\n".join(f"**{k}**：{v}" for k, v in payload["sections"].items()),
+                   "\n\n".join(f"**{k}**：{v}" for k, v in chat_sections.items()),
                    json.dumps(payload["evidence"], ensure_ascii=False)))
     return {"id": sid, "session_id": session_id, **payload}
 

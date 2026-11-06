@@ -167,6 +167,13 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
 .msg.user .bubble { background: var(--primary); color: #fff; }
 .msg .bubble { display: inline-block; text-align: left; background: var(--hover); border-radius: var(--r-lg); padding: 10px 14px; max-width: 92%; line-height: 1.65; white-space: pre-wrap; }
 .cite { color: var(--primary); cursor: pointer; font-size: var(--fs-sm); vertical-align: super; }
+/* 导读引文小标：悬停看原文、点击跳页 */
+.cite[data-gid] {
+  display: inline-block; padding: 0 4px; margin: 0 1px; border-radius: var(--r-xs);
+  background: var(--tint-primary); font-size: var(--fs-xs); line-height: 1.5;
+  vertical-align: baseline; font-weight: 600;
+}
+.cite[data-gid]:hover { background: var(--tint-primary-2); text-decoration: none; }
 .preset-qs { padding: 0 16px 8px; display: flex; flex-direction: column; gap: 6px; }
 .preset-qs button { text-align: left; border: 1px dashed var(--border); background: none; border-radius: var(--r-md); padding: 7px 10px; font-size: var(--fs-sm); color: var(--muted); }
 .chip-add { border: 1px dashed var(--border); background: none; color: var(--muted);

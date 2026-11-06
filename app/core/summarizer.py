@@ -104,7 +104,8 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
 
     # ---- 数字接地校验（防张冠李戴）：content 中每个 [n] 引用，检查其窗口内
     # 的数字是否真的出现在证据 n 的原文里；不在 → 自动改指到包含这些数字的
-    # 证据行；找不到 → 移除该引用（宁缺毋错）。 ----
+    # 证据行；找不到 → 移除该引用（宁缺毋错）。
+    # 死引用（编号不在证据集里）也一律移除——宁可少标，不可错标。 ----
     import re as _re
 
     # 实验数值形（带单位或两位以上小数）——章节号 "3.4" 之类不在此列
@@ -118,7 +119,7 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
             n = int(m.group(1))
             ev = ev_map.get(n)
             if ev is None:
-                return m.group(0)
+                return ""                                          # 死引用 → 移除
             win = content[max(0, m.start() - 80):m.end() + 20]
             nums = {x.strip() for x in _nums(win)}
             if not nums or nums <= _nums(ev["text"]):
@@ -131,24 +132,36 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
 
     ev_map = {e["evidence_id"]: e for e in evidence}
     by_key = {k: _ground_section(v, ev_map) for k, v in by_key.items()}
+    # 改写前（全局 evidence_id 编号）留一份：聊天记录里的导读用全局编号，
+    # 因为那里的证据数组也是全局编号，两边必须一致，否则引用会张冠李戴。
+    by_key_global = dict(by_key)
 
-    # ---- 自动补引：section 里的实验数值若没有 [n] 引用，找到来源行补上 ----
-    def _auto_cite(content, ev_map):
-        def add(m):
-            num = m.group(0).strip()
-            # 数字后 10 字符内已有引用 → 跳过
-            tail = content[m.end():m.end() + 10]
-            if _re.search(r"\[\d+\]", tail):
-                return m.group(0)
-            for eid2, e2 in ev_map.items():
-                if num in e2["text"]:
-                    return f"{m.group(0)} [{eid2}]"
-            return m.group(0)          # 材料里找不到 → 保留原样（不补引）
-        return NUM_RE.sub(add, content)
-    by_key = {k: _auto_cite(v, ev_map) for k, v in by_key.items()}
+    # ---- 每字段独立编号 ----
+    # 之前直接用证据集的全局序号（116、183、265…），读者无从对应，底部再铺
+    # 一长串"证据: [5] 第1页 [12] 第2页 …"更是噪音。改为：每个字段内按出现
+    # 顺序重新编号 1..N，cite_map 记录 字段 → 局部编号 → 全局 evidence_id，
+    # 前端据此把 [n] 渲染成可悬停/可跳转的小标。 ----
+    cite_map: dict[str, dict[str, int]] = {}
+    for k, v in by_key.items():
+        local: dict[str, int] = {}
+        counter = [0]
 
-    cited = {int(m.group(1)) for m in re.finditer(r"\[(\d+)\]", json.dumps(by_key, ensure_ascii=False))}
-    evidence_out = [e for e in evidence if e["evidence_id"] in cited]
+        def _renum(m):
+            gid = int(m.group(1))
+            if gid not in ev_map:
+                return ""                       # 死引用 → 去掉
+            for i, g in local.items():
+                if g == gid:
+                    return f"[{i}]"
+            counter[0] += 1
+            local[str(counter[0])] = gid
+            return f"[{counter[0]}]"
+
+        by_key[k] = _re.sub(r"\[(\d+)\]", _renum, v)
+        cite_map[k] = local
+
+    used_ids = {gid for local in cite_map.values() for gid in local.values()}
+    evidence_out = [e for e in evidence if e["evidence_id"] in used_ids]
 
     cache_key = compute_key(run["id"], cfg.model)
     # 证据一并落库：导读重新加载后引用仍可点击跳转（此前只存 sections，
@@ -157,8 +170,11 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
         cur = c.execute(
             "INSERT INTO summaries(paper_id,cache_key,content,model,created_by) VALUES(?,?,?,?,?)",
             (paper_id, cache_key,
-             json.dumps({"sections": by_key, "evidence": evidence_out}, ensure_ascii=False),
+             json.dumps({"sections": by_key, "evidence": evidence_out, "cite_map": cite_map},
+                        ensure_ascii=False),
              cfg.model, user["id"]),
         )
         sid = cur.lastrowid
-    return sid, {"sections": by_key, "evidence": evidence_out, "model": cfg.model}
+    return sid, {"sections": by_key, "sections_global": by_key_global,
+                 "evidence": evidence_out, "cite_map": cite_map,
+                 "model": cfg.model}

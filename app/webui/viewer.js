@@ -2011,24 +2011,33 @@ async function renderAssets() {
   figCropPass();
 }
 
-/* ---- 导读绘制（气泡/整栏两用） ---- */
+/* ---- 导读绘制（气泡/整栏两用） ----
+   引文编号按字段独立（[1][2][3]），悬停显示"第 X 页 · 原文片段"，点击跳页。
+   不再在底部铺一长串证据列表——那是各字段引用的并集，纯噪音。 */
 function drawSummary(s, pid, target = '#content-view', asBubble = false) {
   const t = $(target);
   const sec = Object.entries(s.sections || {});
+  const evById = new Map((s.evidence || []).map(e => [String(e.evidence_id), e]));
+  const citeMap = s.cite_map || {};
+  const secHtml = sec.map(([k, v]) => {
+    const local = citeMap[k] || {};
+    const html = mdLite(v).replace(/\[(\d{1,3})\]/g, (m, n) => {
+      const gid = local[n];
+      const ev = gid != null ? evById.get(String(gid)) : null;
+      if (!ev) return m;                                   // 无对应证据 → 留原文
+      const tip = `第${ev.page_index + 1}页 · ${(ev.text || '').slice(0, 120).replace(/\s+/g, ' ')}`;
+      return `<span class="cite" data-gid="${gid}" title="${esc(tip)}">[${n}]</span>`;
+    });
+    return `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><p>${html}</p></div>`;
+  }).join('');
   t.innerHTML = (asBubble ? (state._sumHead || '') + '<div class="msg assistant"><div class="bubble" style="width:100%">' : '<div class="card">') +
     (asBubble ? `<b title="${esc(state._sumTip || '')}">${icon('copy')} 导读</b>` : '<h2>科研导读</h2>') +
-    (sec.length ? sec.map(([k, v]) =>
-      `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><p>${renderCites(v, s.evidence)}</p></div>`).join('')
-      : '<p class="muted">导读内容为空，请重新生成。</p>') +
-    (s.evidence?.length ? `<p class="muted" style="font-size:12px">证据: ${s.evidence.map(e =>
-      `<span class="cite" data-eid="${e.evidence_id}">[${e.evidence_id}] 第${e.page_index + 1}页</span>`).join(' ')}</p>` : '') +
+    (sec.length ? secHtml : '<p class="muted">导读内容为空，请重新生成。</p>') +
     `</div>${asBubble ? '</div>' : ''}<button class="btn small" onclick="genSumBubble('${pid}')">${icon('retry')} 重新生成</button>`;
   if (asBubble) t.insertAdjacentHTML('beforeend', followupButtons(s.sections));
-  $$('.cite', t).forEach(el => {
-    if (el.dataset.eid) {
-      const ev = (s.evidence || []).find(x => String(x.evidence_id) === el.dataset.eid);
-      if (ev) el.onclick = () => jumpToEvidence(ev);
-    } else wireCites(t, s.evidence);
+  $$('.cite[data-gid]', t).forEach(el => {
+    const ev = evById.get(String(el.dataset.gid));
+    if (ev) el.onclick = () => jumpToEvidence(ev);
   });
 }
 
