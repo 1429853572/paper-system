@@ -110,8 +110,8 @@ setInterval(pollHealth, 20000);
 state.collections = [];
 state.currentCollection = '';
 
-async function loadCollections() {
-  const d = await api('/api/collections');
+async function loadCollections(preset = null) {
+  const d = preset || await api('/api/collections');
   state.collections = d.collections;
   state.totalPapers = d.total;
   renderCollections();
@@ -177,7 +177,7 @@ function renderCollections() {
     if (!confirm(`删除文献库「${name}」？子库与论文保留`)) return;
     await api('/api/collections/' + cid, {method: 'DELETE'});
     if (state.currentCollection === cid) state.currentCollection = '';
-    loadCollections(); loadPapers();
+    await refreshLib();
   });
   $('#col-new').onclick = () => {
     const form = $('#col-new-form');
@@ -193,7 +193,7 @@ function renderCollections() {
       $('#col-new-form').hidden = true;
       state.currentCollection = d.id;
       $('#dz-target').textContent = d.name;
-      loadCollections(); loadPapers();
+      await refreshLib();
     } catch (e) { toast('创建失败: ' + e.message); }
   };
   $('#col-new-ok').onclick = createCol;
@@ -208,6 +208,20 @@ function treeDepth(cid) {
   let d = 0, cur = state.collections.find(c => c.id === cid);
   while (cur && cur.parent_id) { cur = state.collections.find(c => c.id === cur.parent_id); d++; }
   return d;
+}
+
+/* 库状态变更后的统一刷新入口。
+   问题：改库的操作分散在多个页面，各刷各的 → 右侧「文库管理」更新了、
+   左侧文库树/论文列表还是旧的（要手动点一下才对）。
+   规则：凡是会改变"论文属于哪个库 / 库里有几篇 / 论文增删"的操作，
+   结束时一律走 refreshLib()，三处视图同时刷新。
+   collections 只拉一次，三处共用（refreshLib 传 preset 给 renderCollectionsPage）。 */
+async function refreshLib() {
+  const d = await api('/api/collections');
+  loadCollections(d);                       // 侧栏文库树（含各库计数）
+  await loadPapers();                      // 侧栏论文列表
+  const pg = $('#page-collections');
+  if (pg && pg.style.display !== 'none') await renderCollectionsPage(d);   // 文库管理页
 }
 
 /* ---------------- 文库 ---------------- */
@@ -328,7 +342,7 @@ $('#url-import-btn').onclick = async () => {
     toast(r.status === 'duplicate' ? '该 URL 已在库中' : '已加入解析队列');
     $('#url-import-input').value = '';
     upPop.hidden = true;
-    loadPapers();
+    await refreshLib();
   } catch (e) { toast('导入失败: ' + e.message); }
 };
 $('#url-import-input').onkeydown = e => { if (e.key === 'Enter') $('#url-import-btn').click(); };
@@ -362,10 +376,7 @@ async function uploadFiles(files, targetCid) {
   const dup = d.results.filter(x => x.status === 'duplicate').length;
   const rej = d.results.filter(x => x.status === 'rejected');
   toast(`已排队 ${ok} 篇${dup ? `，去重跳过 ${dup} 篇` : ''}${rej.length ? `，拒收 ${rej.length} 篇：${rej[0].reason}` : ''}`);
-  loadPapers(); loadCollections();
-  // 当前停在「文库管理」页时，库卡下方的论文表也要刷新，否则上传完看不到新文件
-  const libPage = $('#page-collections');
-  if (libPage && libPage.style.display !== 'none') renderCollectionsPage();
+  await refreshLib();
 }
 
 /* 多选模式与批量操作 */
@@ -464,7 +475,7 @@ $('#batch-delete').onclick = async () => {
   await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: [...state.selected]})});
   toast(`已移入回收站 ${state.selected.size} 篇`);
   state.selected.clear(); $('#batch-bar').classList.remove('show');
-  loadPapers(); loadCollections();
+  await refreshLib();
 };
 $('#batch-move').onchange = async e => {
   if (!state.selected.size) return;
@@ -473,7 +484,7 @@ $('#batch-move').onchange = async e => {
   const cid = v === '__none__' ? null : v;
   for (const id of state.selected) await api('/api/papers/' + id, {method: 'PATCH', body: JSON.stringify({collection_id: cid})});
   toast(`已移动 ${state.selected.size} 篇`);
-  e.target.value = ''; $('#batch-cancel').click(); loadPapers(); loadCollections();
+  e.target.value = ''; $('#batch-cancel').click(); await refreshLib();
 };
 
 /* 搜索 */
@@ -1163,7 +1174,10 @@ async function renderMeta() {
   const colSel = $('#m-collection');
   state.collections.forEach(c2 => colSel.insertAdjacentHTML('beforeend',
     `<option value="${c2.id}" ${paper.collection_id === c2.id ? 'selected' : ''}>${esc(c2.name)}</option>`));
-  colSel.onchange = () => api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: colSel.value || null})});
+  colSel.onchange = async () => {
+    await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: colSel.value || null})});
+    toast('已移动'); await refreshLib();
+  };
 
   // 星级
   $$('#m-stars .star').forEach(s => s.onclick = async () => {
@@ -1816,7 +1830,7 @@ async function renderTrash() {
       <td class="row-actions"><button class="btn small" onclick="restorePaper('${p.id}')">恢复</button>
       </td></tr>`).join('') || '<tr><td colspan="3" class="muted">回收站为空</td></tr>'}</table></div>`;
 }
-window.restorePaper = async id => { await api(`/api/papers/${id}/restore`, {method: 'POST'}); toast('已恢复'); renderTrash(); loadPapers(); };
+window.restorePaper = async id => { await api(`/api/papers/${id}/restore`, {method: 'POST'}); toast('已恢复'); renderTrash(); await refreshLib(); };
 
 /* ---- 设置（BYOK + 术语表 + 测试连接） ---- */
 async function renderSettings() {
@@ -2125,8 +2139,8 @@ window.selectLibPaper = pid => {
 };
 window.libSearch = q => { state.libQuery = q.trim(); renderCollectionsPage(); };
 
-async function renderCollectionsPage() {
-  const d = await api('/api/collections');
+async function renderCollectionsPage(preset = null) {
+  const d = preset || await api('/api/collections');
   state.collections = d.collections;
   state.totalPapers = d.total;
   state._statuses = (await api('/api/statuses')).statuses;
@@ -2308,19 +2322,19 @@ window.libCkAll = (cid, on) => {
 window.libBatchTranslate = async cid => {
   const ids = libSelected(cid);
   await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
-  toast(`已加入翻译队列 ${ids.length} 篇`); renderCollectionsPage();
+  toast(`已加入翻译队列 ${ids.length} 篇`); await refreshLib();
 };
 window.libBatchMove = async (cid, v, sel) => {
   if (!v) return;
   const target = v === '__none__' ? null : v;
   for (const pid of libSelected(cid)) await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: target})});
-  toast('已移动'); sel.value = ''; renderCollectionsPage();
+  toast('已移动'); sel.value = ''; await refreshLib();
 };
 window.libBatchDelete = async cid => {
   const ids = libSelected(cid);
   if (!confirm(`删除选中的 ${ids.length} 篇？（进回收站）`)) return;
   for (const pid of ids) await api('/api/papers/' + pid, {method: 'DELETE'});
-  toast('已移入回收站'); renderCollectionsPage();
+  toast('已移入回收站'); await refreshLib();
 };
 window.libUpload = cid => {
   const inp = document.createElement('input');
@@ -2332,30 +2346,30 @@ window.renameLib = async (cid, oldName) => {
   const name = prompt('重命名文献库：', oldName);
   if (!name?.trim() || name === oldName) return;
   await api('/api/collections/' + cid, {method: 'PATCH', body: JSON.stringify({name: name.trim()})});
-  toast('已重命名'); loadCollections(); renderCollectionsPage();
+  toast('已重命名'); await refreshLib();
 };
 window.delLib = async (cid, name) => {
   if (!confirm(`删除文献库「${name}」？库内论文保留（变为未分库）`)) return;
   await api('/api/collections/' + cid, {method: 'DELETE'});
-  toast('已删除'); loadCollections(); renderCollectionsPage();
+  toast('已删除'); await refreshLib();
 };
 window.createLibFromPage = async () => {
   const name = $('#newlib-name').value.trim();
   if (!name) { toast('请输入库名'); return; }
   await api('/api/collections', {method: 'POST', body: JSON.stringify({name})});
   $('#newlib-name').value = '';
-  toast('已创建'); loadCollections(); renderCollectionsPage();
+  toast('已创建'); await refreshLib();
 };
 window.movePaper = async (pid, v, sel) => {
   if (!v) return;
   const cid = v === '__none__' ? null : v;
   await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: cid})});
-  toast('已移动'); loadPapers(); renderCollectionsPage();
+  toast('已移动'); await refreshLib();
 };
 window.delPaperFromLib = async pid => {
   if (!confirm(`删除这篇论文？（进回收站，${state.health.trash_days || 30} 天内可恢复）`)) return;
   await api('/api/papers/' + pid, {method: 'DELETE'});
-  toast('已移入回收站'); loadPapers(); renderCollectionsPage();
+  toast('已移入回收站'); await refreshLib();
 };
 window.viewPaper = pid => { switchPage('reader'); openPaper(pid); };
 
@@ -2380,7 +2394,7 @@ window.lightbox = (src, caption) => {
 window.retryPaperJob = async pid => {
   await api(`/api/papers/${pid}/parse`, {method: 'POST'}).catch(() => {});
   await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [pid]})}).catch(() => {});
-  toast('已重新入队'); renderCollectionsPage();
+  toast('已重新入队'); await refreshLib();
 };
 
 window.quickDelete = async pid => {
@@ -2394,7 +2408,7 @@ window.quickDelete = async pid => {
     toast('已移入回收站');
     if (state.current?.id === pid) { state.current = null; state.blocks = []; renderContentView(); }
     state.qaPapers.delete(pid);
-    loadPapers();
+    await refreshLib();
   } catch (e) { toast(e.message); }
 };
 
@@ -2986,7 +3000,7 @@ window.addSubLib = async pid => {
   if (!name?.trim()) return;
   try {
     await api('/api/collections', {method: 'POST', body: JSON.stringify({name: name.trim(), parent_id: pid})});
-    toast('子库已创建'); loadCollections(); renderCollectionsPage();
+    toast('子库已创建'); await refreshLib();
   } catch (e) { toast('创建失败: ' + e.message); }
 };
 
@@ -2994,5 +3008,5 @@ window.emptyTrash = async () => {
   if (!confirm('彻底清空回收站？所有已删除论文（含译文/索引/会话）将永久移除，不可恢复。')) return;
   const r = await api('/api/trash/empty', {method: 'POST'});
   toast(`已彻底删除 ${r.purged} 篇`);
-  renderTrash(); loadPapers();
+  renderTrash(); await refreshLib();
 };
