@@ -68,15 +68,24 @@ CREATE TABLE IF NOT EXISTS papers (
     file_size   INTEGER NOT NULL DEFAULT 0,
     parse_status TEXT NOT NULL DEFAULT 'pending',    -- pending|parsing|parsed|failed
     collection_id TEXT,                              -- 所属文献库（NULL=未分库）
+    journal     TEXT,                                -- 元数据校准后期刊
+    abstract    TEXT,
+    keywords    TEXT,                                -- JSON 数组
+    doi         TEXT,
+    volume      TEXT,
+    issue       TEXT,
+    pages       TEXT,
+    meta_source TEXT,                                -- arxiv|s2|crossref|llm|manual
+    meta_verified_at TEXT,
     deleted_at  TEXT,                                -- 软删除（回收站）
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_hash ON papers(file_hash) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS collections (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
     owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    parent_id  TEXT,                                  -- 三级库：NULL=顶层库
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -101,6 +110,7 @@ CREATE TABLE IF NOT EXISTS blocks (
     block_index  INTEGER NOT NULL,
     bbox         TEXT,                               -- 归一化 [x0,y0,x1,y1] JSON，可 null；跨页/跨栏段落为 [[框],[框]]
     bbox_pages   TEXT,                               -- 与 bbox 框一一对应的页码 JSON 数组；null = 全在 page_index
+    asset_path   TEXT,                               -- 图/表裁剪文件相对路径（figures/...）
     text         TEXT NOT NULL DEFAULT '',
     source_hash  TEXT NOT NULL DEFAULT '',
     UNIQUE(parse_run_id, block_id)
@@ -220,6 +230,34 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS paper_notes (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    paper_id   TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    importance INTEGER NOT NULL DEFAULT 0,
+    tags       TEXT NOT NULL DEFAULT '',
+    notes      TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(user_id, paper_id)
+);
+
+CREATE TABLE IF NOT EXISTS journal_ranks (
+    journal    TEXT PRIMARY KEY,
+    data       TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT '',
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS section_summaries (
+    paper_id   TEXT NOT NULL,
+    run_id     TEXT NOT NULL,
+    section_path TEXT NOT NULL,
+    level      INTEGER NOT NULL DEFAULT 1,   -- 1=章 2=节
+    summary    TEXT NOT NULL,
+    embedding  BLOB,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(paper_id, run_id, section_path, level)
+);
 """
 
 
@@ -276,125 +314,41 @@ class Database:
                 c.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
             elif row["version"] < SCHEMA_VERSION:
                 self._migrate(c, row["version"])
+            self._ensure_columns(c)   # 幂等兜底：任何形态的库都补齐列（新装/老库/中途版本）
+            # 部分索引依赖 deleted_at，放在列补齐之后建（任意形态旧库都不炸）
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_hash "
+                      "ON papers(file_hash) WHERE deleted_at IS NULL")
             # WAL 常开
             c.execute("PRAGMA journal_mode=WAL")
 
+    @staticmethod
+    def _add_col(c: sqlite3.Connection, table: str, col: str, ddl: str) -> None:
+        cols = {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if col not in cols:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+
+    def _ensure_columns(self, c: sqlite3.Connection) -> None:
+        """列级兜底：全部走 _add_col 幂等判断，修复历史上『列只存在于迁移分支』的新装缺列问题。"""
+        for col in ("collection_id", "journal", "abstract", "keywords", "doi",
+                    "volume", "issue", "pages", "meta_source", "meta_verified_at", "deleted_at"):
+            self._add_col(c, "papers", col, "TEXT")
+        self._add_col(c, "collections", "parent_id", "TEXT")
+        self._add_col(c, "blocks", "asset_path", "TEXT")
+        self._add_col(c, "blocks", "bbox_pages", "TEXT")
+        self._add_col(c, "users", "token_ver", "INTEGER NOT NULL DEFAULT 0")
+        self._add_col(c, "users", "disabled", "INTEGER NOT NULL DEFAULT 0")
+
     def _migrate(self, c: sqlite3.Connection, from_v: int) -> None:
-        if from_v < 14:
-            # 引用格式需要卷/期/页（APA: Journal, 25(12), 3626）
-            for col in ("volume", "issue", "pages"):
-                try:
-                    c.execute(f"ALTER TABLE papers ADD COLUMN {col} TEXT")
-                except Exception:
-                    pass
-        if from_v < 13:
-            # 跨页段落：一个逻辑段落可能横跨两页 → bbox 变成多框列表，
-            # bbox_pages 记录每个框各自所在的页（与 bbox 列表一一对应）。
-            # 缺省为空 = 所有框都在 blocks.page_index 这一页（同页多框的旧数据）。
-            try:
-                c.execute("ALTER TABLE blocks ADD COLUMN bbox_pages TEXT")
-            except Exception:
-                pass
-        if from_v < 12:
-            # 会话吊销：token 版本号（改密/登出所有设备时 +1，旧 token 全失效）
-            c.execute("ALTER TABLE users ADD COLUMN token_ver INTEGER NOT NULL DEFAULT 0")
-            c.execute("ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0")
-            # 段落笔记功能已下线（残留半成品：表在但无 API/UI）
-            c.execute("DROP TABLE IF EXISTS block_notes")
-        if from_v < 11:
-            # 段落合并功能已下线（端点随 238e5c8 一并移除）→ 删掉空表
-            c.execute("DROP TABLE IF EXISTS block_merges")
-        if from_v < 4:
-            c.executescript("""
-                ALTER TABLE papers ADD COLUMN meta_source TEXT;
-                ALTER TABLE papers ADD COLUMN meta_verified_at TEXT;
-            """)
-        if from_v < 10:
-            try:
-                c.execute("ALTER TABLE collections ADD COLUMN parent_id TEXT")
-            except Exception:
-                pass
-        if from_v < 9:
-            c.executescript("""
-                CREATE TABLE IF NOT EXISTS block_merges (
-                    paper_id  TEXT NOT NULL,
-                    head_bid  TEXT NOT NULL,
-                    member_bids TEXT NOT NULL,      -- JSON 有序数组
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    PRIMARY KEY(paper_id, head_bid)
-                );
-            """)
+        # 列级变更统一由 _ensure_columns 幂等处理；这里只做数据迁移与死表清理。
+        # 已下线功能的残留表（block_notes 段落批注 / block_merges 段落合并）一律清除。
+        c.execute("DROP TABLE IF EXISTS block_notes")
+        c.execute("DROP TABLE IF EXISTS block_merges")
         if from_v < 8:
             # 译文幂等：同 paper+cache_key+block 唯一（部分翻译重跑不再产生重复行）
             c.execute("DELETE FROM translations WHERE rowid NOT IN ("
                       "SELECT MIN(rowid) FROM translations GROUP BY paper_id, cache_key, block_id)")
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_trans_unique "
                       "ON translations(paper_id, cache_key, block_id)")
-        if from_v < 7:
-            try:
-                c.execute("ALTER TABLE blocks ADD COLUMN asset_path TEXT")
-            except Exception:
-                pass
-        if from_v < 6:
-            c.executescript("""
-                CREATE TABLE IF NOT EXISTS block_notes (
-                    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    paper_id   TEXT NOT NULL,
-                    block_id   TEXT NOT NULL,
-                    note       TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    PRIMARY KEY(user_id, block_id)
-                );
-            """)
-        if from_v < 15:
-            c.executescript("""
-                CREATE TABLE IF NOT EXISTS section_summaries (
-                    paper_id   TEXT NOT NULL,
-                    run_id     TEXT NOT NULL,
-                    section_path TEXT NOT NULL,
-                    level      INTEGER NOT NULL DEFAULT 1,   -- 1=章 2=节
-                    summary    TEXT NOT NULL,
-                    embedding  BLOB,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    PRIMARY KEY(paper_id, run_id, section_path, level)
-                );
-            """)
-        if from_v < 5:
-            c.executescript("""
-                CREATE TABLE IF NOT EXISTS journal_ranks (
-                    journal    TEXT PRIMARY KEY,
-                    data       TEXT NOT NULL,
-                    source     TEXT NOT NULL DEFAULT '',
-                    fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-            """)
-        if from_v < 4:
-            c.executescript("""
-                ALTER TABLE papers ADD COLUMN journal TEXT;
-                ALTER TABLE papers ADD COLUMN abstract TEXT;
-                ALTER TABLE papers ADD COLUMN keywords TEXT;
-                ALTER TABLE papers ADD COLUMN doi TEXT;
-                CREATE TABLE IF NOT EXISTS paper_notes (
-                    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    paper_id   TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-                    importance INTEGER NOT NULL DEFAULT 0,
-                    tags       TEXT NOT NULL DEFAULT '',
-                    notes      TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    PRIMARY KEY(user_id, paper_id)
-                );
-            """)
-        if from_v < 2:
-            # v2: 文献库（collections）+ papers.collection_id
-            c.executescript("""
-                CREATE TABLE IF NOT EXISTS collections (
-                    id         TEXT PRIMARY KEY,
-                    name       TEXT NOT NULL,
-                    owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-                ALTER TABLE papers ADD COLUMN collection_id TEXT;
-            """)
         c.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
 
     # ---- 备份（在线一致性快照） ----

@@ -90,6 +90,7 @@ const ICONS = {
   moon: '<path d="M13.2 9.7A5.7 5.7 0 016.3 2.8a5.7 5.7 0 106.9 6.9z"/>',
   sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M15 8h-1.5M2.5 8H1M12.9 3.1l-1.1 1.1M4.2 11.8l-1.1 1.1M12.9 12.9l-1.1-1.1M4.2 4.2L3.1 3.1"/>',
   logout: '<path d="M6 13.5H3.5a1 1 0 01-1-1v-9a1 1 0 011-1H6M9.5 11L13.5 8l-4-3M13.5 8H6"/>',
+  warn: '<path d="M8 2.2L14 12.5H2L8 2.2z"/><path d="M8 6.4v3.1M8 11.7v.1"/>',
   quote: '<path d="M2.8 12.4c0-3.3 1.4-5.9 4-6.9l.7 1.5C6 7.8 5.2 9.2 5 10.6h2.4v3.6H2.8v-1.8zM8.8 12.4c0-3.3 1.4-5.9 4-6.9l.7 1.5c-1.5.8-2.3 2.2-2.5 3.6h2.4v3.6H8.8v-1.8z"/>',
 };
 window.icon = (name, size = 14) =>
@@ -194,7 +195,7 @@ function renderCollections() {
       $('#col-new-name').value = '';
       $('#col-new-form').hidden = true;
       state.currentCollection = d.id;
-      $('#dz-target').textContent = d.name;
+      updateUploadTarget();
       await refreshLib();
     } catch (e) { toast('创建失败: ' + e.message); }
   };
@@ -3125,6 +3126,12 @@ window.linkDiag = () => {
 };
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') { e.preventDefault(); linkDiag(); }
+  // 提问按钮 tooltip 承诺的快捷键：Ctrl+Q 开关问答框
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'q') {
+    e.preventDefault();
+    switchPage('reader');
+    openQaDock();
+  }
 });
 
 /* ---- 深色模式切换 ---- */

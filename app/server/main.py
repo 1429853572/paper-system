@@ -442,6 +442,12 @@ def _require_visible(u: dict, paper) -> None:
         raise HTTPException(403, "无权访问该论文")
 
 
+def _require_owner(u: dict, paper) -> None:
+    """写操作（重解析/取消任务/改元数据/重建索引）仅属主或 admin 可执行。"""
+    if paper["owner_id"] != u["id"] and u["role"] != "admin":
+        raise HTTPException(403, "仅论文所有者或管理员可执行此操作")
+
+
 @app.get("/api/papers/{paper_id}/pdf")
 def paper_pdf(paper_id: str, request: Request):
     u = require(request)
@@ -481,6 +487,8 @@ def paper_markdown(paper_id: str, request: Request, run: str = ""):
         if r is None:
             raise HTTPException(404, "尚未解析完成")
         run = r["id"]
+    elif db.one("SELECT id FROM parse_runs WHERE paper_id=? AND id=?", (paper_id, run)) is None:
+        raise HTTPException(404, "解析版本不存在")   # 防路径穿越：run 必须属于该论文
     path = ingest.PAPERS_DIR / paper_id / "parse" / run / "markdown.md"
     if not path.exists():
         raise HTTPException(404, "markdown 不存在")
@@ -1264,6 +1272,7 @@ def verify_meta(paper_id: str, request: Request):
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
+    _require_owner(u, p)   # 改写元数据属写操作
     try:
         from core.meta import verify_meta_online
         result = verify_meta_online(paper_id)
@@ -1522,6 +1531,7 @@ def reindex_paper(paper_id: str, request: Request):
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
+    _require_owner(u, p)   # 重建索引会重建 parse_run 结构
     try:
         n_blocks, n_chunks = ingest.rebuild_from_stored(paper_id)
     except Exception as e:  # noqa: BLE001
@@ -1554,6 +1564,7 @@ def cancel_parse(paper_id: str, request: Request):
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
+    _require_owner(u, p)   # 取消他人任务属写操作
     n = _cancel_paper_jobs(paper_id, "parse")
     has_done = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done'", (paper_id,))
     with db.write() as c:
@@ -1572,6 +1583,7 @@ def cancel_translate(paper_id: str, request: Request):
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
+    _require_owner(u, p)   # 取消他人任务属写操作
     return {"canceled": _cancel_paper_jobs(paper_id, "translate")}
 
 
@@ -1584,6 +1596,7 @@ def start_parse(paper_id: str, request: Request):
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
+    _require_owner(u, p)   # 重解析会作废旧译文对应关系，仅属主可操作
     overrides = _quota_overrides(u["id"])
     _check_daily_quota(u["id"], is_admin, overrides)
     _cancel_paper_jobs(paper_id, "parse")  # 重解析前清掉在途旧任务
@@ -1762,7 +1775,7 @@ async def chat_stream(request: Request):
     except NoKeyError as e:
         raise HTTPException(400, str(e))
 
-    # 会话管理
+    # 会话管理（传入 session_id 必须归属本人，防跨用户注入消息）
     with db.write() as c:
         if not session_id:
             session_id = "s" + secrets.token_hex(8)   # TEXT 主键，直接构造
@@ -1770,6 +1783,9 @@ async def chat_stream(request: Request):
                 "INSERT INTO chat_sessions(id,user_id,paper_scope,title) VALUES(?,?,?,?)",
                 (session_id, u["id"], ",".join(paper_ids), question[:30]),
             )
+        elif (srow := db.one("SELECT user_id FROM chat_sessions WHERE id=?", (session_id,))) is None \
+                or srow["user_id"] != u["id"]:
+            raise HTTPException(403, "会话不存在或无权访问")
         c.execute(
             "INSERT INTO chat_messages(session_id,role,content) VALUES(?,?,'')",
             (session_id, "user"),
@@ -1933,6 +1949,9 @@ async def paper_summary(paper_id: str, request: Request):
             session_id = "s" + secrets.token_hex(8)
             c.execute("INSERT INTO chat_sessions(id,user_id,paper_scope,title) VALUES(?,?,?,?)",
                       (session_id, u["id"], paper_id, f"导读 · {(p['title'] or '')[:24]}"))
+        elif (srow := db.one("SELECT user_id FROM chat_sessions WHERE id=?", (session_id,))) is None \
+                or srow["user_id"] != u["id"]:
+            raise HTTPException(403, "会话不存在或无权访问")
         c.execute("INSERT INTO chat_messages(session_id,role,content,evidence) VALUES(?,?,?,?)",
                   (session_id, "user", "请生成这篇论文的科研导读", "[]"))
         # 聊天记录用全局编号（sections_global）：此处的证据数组是全局 evidence_id，
