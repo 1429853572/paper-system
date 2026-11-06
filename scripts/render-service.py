@@ -4,11 +4,15 @@
 app 容器通过 HTTP 调用本服务渲染 PDF（容器内不装 Chrome，避免 1GB 镜像与慢构建）。
 启动: python3 scripts/render-service.py --port 8801
 接口: POST /render  {"html": "<...>"} → application/pdf
+鉴权: 设置了 PAPERSYS_RENDER_TOKEN（.env，经 systemd EnvironmentFile 注入）时，
+      POST /render 必须带同值 X-Render-Token 头——否则局域网内任何人可让宿主
+      Chrome 渲染任意 HTML（SSRF/内网探测跳板）。未设置时保持无鉴权（向后兼容）。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import tempfile
 import uuid
@@ -16,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 CHROME = "/usr/bin/google-chrome"
+RENDER_TOKEN = ""   # main() 里赋值
 
 
 def render_pdf(html: str, timeout: int = 90) -> bytes:
@@ -45,6 +50,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         if self.path != "/render":
             return self._send(404, b"not found", "text/plain")
+        if RENDER_TOKEN and self.headers.get("X-Render-Token") != RENDER_TOKEN:
+            return self._send(403, b"forbidden", "text/plain")
         try:
             n = int(self.headers.get("Content-Length", "0"))
             data = json.loads(self.rfile.read(n) or b"{}")
@@ -64,12 +71,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global RENDER_TOKEN
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8801)
     ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--token", default="")   # 缺省读 PAPERSYS_RENDER_TOKEN
     args = ap.parse_args()
+    RENDER_TOKEN = args.token or os.environ.get("PAPERSYS_RENDER_TOKEN", "")
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"render-service 监听 {args.host}:{args.port}（POST /render）", flush=True)
+    print(f"render-service 监听 {args.host}:{args.port}（POST /render，"
+          f"鉴权{'开' if RENDER_TOKEN else '关'}）", flush=True)
     srv.serve_forever()
 
 

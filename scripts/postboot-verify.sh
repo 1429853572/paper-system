@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 服务器重启后自动执行的收尾流程（由 systemd paper-system-postboot.service 调用）
-# 目标: 驱动修复后自动恢复服务 + 切换到 xinference + 验证 + 写报告
+# 目标: 驱动修复后自动恢复服务 + 加载模型 + 验证 + 写报告
 set -uo pipefail
-cd /home/root123/paper-system
+cd "$(dirname "$0")/.." || exit 1
 
 REPORT="data/verify-report.txt"
 LOG="data/postboot.log"

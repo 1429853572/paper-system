@@ -1,9 +1,14 @@
+x-logging: &default-logging
+  driver: json-file
+  options: {max-size: "50m", max-file: "3"}   # 无轮转会慢慢吃满磁盘（vLLM 日志尤其肥）
+
 services:
   mineru:
     image: mineru:4.1.6
     container_name: paper-system-mineru
     restart: unless-stopped
-    ports: ["8000:8000"]
+    logging: *default-logging
+    ports: ["127.0.0.1:8000:8000"]   # GPU API 无认证——只绑本机，外部经 caddy/app 访问
     environment:
       MINERU_MODEL_SOURCE: local
     entrypoint: ["mineru-kit"]
@@ -26,13 +31,14 @@ services:
               device_ids: ["0"]
               capabilities: [gpu]
 
-  # 统一本地 AI 服务：embedding(BGE-M3) + rerank(qwen3-reranker) 一个容器
+  # 统一本地 AI 服务：embedding(BGE-M3) + rerank(bge-reranker-v2-m3) 一个容器
   # 模型由 scripts/setup-xinference.sh 启动（server+worker，ModelScope 源）
   xinference:
-    image: docker.1ms.run/xprobe/xinference:latest-cu129
+    image: docker.1ms.run/xprobe/xinference@sha256:da75082f4531c855e75bf3cce14ddcd0b0c1ffe2ae876ad51202177a6637671f   # 锁 digest（latest-cu129 迁移即漂移；本机已拉取此版本）
     container_name: paper-system-xinference
     restart: unless-stopped
-    ports: ["9997:9997"]
+    logging: *default-logging
+    ports: ["127.0.0.1:9997:9997"]   # embedding/rerank 无认证——只绑本机
     volumes:
       - ./models/xinference:/root/.xinference/cache
     environment:
@@ -59,12 +65,13 @@ services:
     profiles: ["app"]
     container_name: paper-system-app
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       mineru:
         condition: service_healthy
       xinference:
         condition: service_healthy
-    ports: ["8001:8001"]
+    ports: ["127.0.0.1:8001:8001"]   # web 入口统一走 caddy:7861
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file: .env
@@ -90,6 +97,7 @@ services:
     profiles: ["app"]
     container_name: paper-system-caddy
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - app
     ports: ["7861:7861"]

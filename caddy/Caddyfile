@@ -1,4 +1,8 @@
 # paper-system 反代（局域网 http；公网 HTTPS 时在此改站点地址即可）
+{
+	admin off   # 全局选项：不暴露 Caddy 管理端点（:2019）
+}
+
 :7861 {
 	encode gzip
 	reverse_proxy app:8001 {

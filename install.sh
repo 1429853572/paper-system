@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # paper-system 一键安装（在线模式）
 # 用法: ./install.sh            # 在线安装（国内加速）
-#       ./install.sh --offline  # 离线安装（里程碑6实现：导入镜像tar，跳过一切外网）
+#       ./install.sh --offline  # 离线安装（导入镜像tar，跳过一切外网）
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -51,16 +51,30 @@ if [[ -f .env ]]; then
     warn ".env 已存在，跳过初始化（如需重新生成请备份后删除 .env）"
 else
     cp .env.example .env
-    # 生成随机密钥：SECRET_KEY(session签名) 与 FERNET_KEY(用户API key加密)
+    # 生成随机密钥：SECRET_KEY(session签名) / FERNET_KEY(用户API key加密) / CLI token
     SECRET_KEY=$(python3 -c "import secrets;print(secrets.token_hex(32))")
     FERNET_KEY=$(python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())" 2>/dev/null \
         || openssl rand -base64 32)
     ADMIN_PW=$(python3 -c "import secrets;print(secrets.token_urlsafe(9))")
+    CLI_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(16))")
+    RENDER_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(16))")
     sed -i "s|^SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|" .env
     sed -i "s|^FERNET_KEY=.*|FERNET_KEY=${FERNET_KEY}|" .env
     sed -i "s|^ADMIN_INITIAL_PASSWORD=.*|ADMIN_INITIAL_PASSWORD=${ADMIN_PW}|" .env
+    sed -i "s|^PAPERSYS_API_TOKEN=.*|PAPERSYS_API_TOKEN=${CLI_TOKEN}|" .env
+    grep -q "^PAPERSYS_RENDER_TOKEN=" .env || echo "PAPERSYS_RENDER_TOKEN=${RENDER_TOKEN}" >> .env
     chmod 600 .env
-    info ".env 已生成（SECRET/FERNET/初始admin密码 已随机化）"
+    info ".env 已生成（SECRET/FERNET/初始admin密码/CLI token/渲染服务token 已随机化）"
+fi
+# 旧 .env 补渲染服务 token（render-service 与 app 共享，防局域网匿名调用宿主 Chrome）
+if ! grep -q "^PAPERSYS_RENDER_TOKEN=" .env; then
+    echo "PAPERSYS_RENDER_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(16))")" >> .env
+    info ".env 补写 PAPERSYS_RENDER_TOKEN"
+fi
+# app/caddy 带 profiles: ["app"]——无 COMPOSE_PROFILES 时 `docker compose up -d` 不会启动它们
+if ! grep -q "^COMPOSE_PROFILES=" .env; then
+    echo "COMPOSE_PROFILES=app" >> .env
+    info ".env 补写 COMPOSE_PROFILES=app（app/caddy 随 compose up 启动）"
 fi
 
 # ---------- 3. 前端依赖（pdf.js / KaTeX） ----------
@@ -142,6 +156,9 @@ ensure_vendor() {
         info "前端依赖已就位（pdf.js ${PDFJS_VER} / KaTeX ${KATEX_VER}）"
         return 0
     fi
+    if (( OFFLINE )); then
+        fail "离线模式且前端依赖缺失 ${missing} 个文件——请从旧机打包 app/webui/vendor 一并迁移"
+    fi
     warn "前端依赖缺失 ${missing} 个文件 → 自动下载（pdf.js ${PDFJS_VER} / KaTeX ${KATEX_VER}）"
     local ok=1
     for spec in "${PDFJS_FILES[@]}"; do
@@ -168,29 +185,72 @@ ensure_vendor
 # ---------- 4. 构建镜像 ----------
 echo "== 镜像准备 =="
 if (( OFFLINE )); then
-    fail "离线模式在里程碑6实现（psys export-images / docker load）"
+    # 离线：导入 deploy/offline/*.tar（由旧机 psys export-images 生成）
+    if ls deploy/offline/*.tar >/dev/null 2>&1; then
+        for tar in deploy/offline/*.tar; do
+            info "导入镜像 $tar"
+            docker load -i "$tar"
+        done
+    else
+        fail "deploy/offline/ 下无镜像 tar——先在旧机执行镜像导出（见 DEPLOY.md 迁移章节）"
+    fi
 else
     docker image inspect mineru:4.1.6 >/dev/null 2>&1 \
         && info "mineru:4.1.6 已存在，跳过构建" \
         || { info "开始构建 mineru:4.1.6（1~3小时，含模型下载）；可另开终端 tail -f build.log"; \
              docker build -t mineru:4.1.6 -f docker/mineru.Dockerfile docker/ 2>&1 | tee build.log | tail -3; }
-    docker compose pull --ignore-pull-failures caddy ollama || true
+    docker compose pull --ignore-pull-failures caddy || true
 fi
 
-# ---------- 4.5 宿主 PDF 渲染服务（导出 PDF 依赖） ----------
-if ! curl -sf -m 3 http://127.0.0.1:8801/health >/dev/null 2>&1; then
-    if systemctl list-unit-files 2>/dev/null | grep -q papersystem-render; then
-        systemctl start papersystem-render 2>/dev/null || true
-        sleep 2
-    fi
-    if curl -sf -m 3 http://127.0.0.1:8801/health >/dev/null 2>&1; then
-        info "PDF 渲染服务已就绪（:8801）"
+# ---------- 4.5 systemd 单元（宿主渲染服务 + 重启自检） ----------
+echo "== systemd 单元 =="
+if command -v systemctl >/dev/null; then
+    SH=$PWD
+    mkdir -p deploy/systemd
+    cat > deploy/systemd/papersystem-render.service <<EOF
+[Unit]
+Description=paper-system host PDF render service (Chrome headless)
+After=network.target
+
+[Service]
+EnvironmentFile=${SH}/.env
+ExecStart=/usr/bin/python3 ${SH}/scripts/render-service.py --port 8801
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    cat > deploy/systemd/paper-system-postboot.service <<EOF
+[Unit]
+Description=paper-system postboot verify (driver/services/models self-check)
+After=docker.service nvidia-persistenced.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=${SH}/scripts/postboot-verify.sh
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    if [ -x /usr/bin/google-chrome ] || command -v google-chrome >/dev/null; then
+        cp -f deploy/systemd/papersystem-render.service /etc/systemd/system/
+        systemctl daemon-reload
+        systemctl enable --now papersystem-render 2>/dev/null || true
+        info "papersystem-render 已安装并启动（PDF 导出依赖）"
     else
-        warn "PDF 渲染服务未运行——导出 PDF 不可用（其余功能正常）"
-        warn "  启动: systemctl start papersystem-render"
+        cp -f deploy/systemd/papersystem-render.service /etc/systemd/system/ 2>/dev/null || true
+        systemctl daemon-reload
+        warn "宿主未装 google-chrome——PDF 导出不可用（其余正常）。安装 Chrome 后: systemctl enable --now papersystem-render"
     fi
+    cp -f deploy/systemd/paper-system-postboot.service /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable paper-system-postboot 2>/dev/null || true
+    info "paper-system-postboot 已注册（服务器重启后自动自检/拉起模型）"
 else
-    info "PDF 渲染服务已就绪（:8801）"
+    warn "无 systemd——渲染服务与重启自检需手动维护（见 DEPLOY.md）"
 fi
 
 # ---------- 5. 启动与健康检查 ----------
@@ -205,7 +265,24 @@ done
 [[ "${OK:-}" == "healthy" ]] || warn "app 未在 10 分钟内 healthy，请 docker compose logs app 排查"
 docker compose ps
 
-# ---------- 6. 完成提示 ----------
+# ---------- 6. xinference 模型加载 + 备份 crontab ----------
+# xinference 健康检查只探测 /v1/models 端点——零模型也 healthy，必须显式启动模型
+echo "== 加载 embedding/rerank 模型 =="
+if bash scripts/setup-xinference.sh; then
+    info "BGE-M3 / bge-reranker-v2-m3 已加载"
+else
+    warn "模型加载失败——问答检索不可用（docker compose logs xinference 排查后重跑 scripts/setup-xinference.sh）"
+fi
+
+echo "== 备份 crontab =="
+if ! crontab -l 2>/dev/null | grep -q "cron-backup.sh"; then
+    (crontab -l 2>/dev/null; echo "17 3 * * * /bin/bash $PWD/scripts/cron-backup.sh >> $PWD/data/backups/cron.log 2>&1") | crontab -
+    info "每日 03:17 自动备份已写入 crontab"
+else
+    info "备份 crontab 已存在"
+fi
+
+# ---------- 7. 完成提示 ----------
 echo
 info "安装完成！"
 echo -e "  访问地址:  ${G}http://$(hostname -I | awk '{print $1}'):7861${N}"

@@ -29,14 +29,16 @@ def render_math(maths: list[str]) -> list[str]:
 
 
 RENDER_URL = os.environ.get("RENDER_SERVICE_URL", "http://host.docker.internal:8801/render")
+RENDER_TOKEN = os.environ.get("PAPERSYS_RENDER_TOKEN", "")   # 与宿主 render-service 共享（.env）
 
 
 def html_to_pdf(html: str) -> bytes:
     """调用宿主渲染服务（chrome 在宿主，容器不装）。"""
     import httpx
     url = RENDER_URL
+    headers = {"X-Render-Token": RENDER_TOKEN} if RENDER_TOKEN else {}
     try:
-        r = httpx.post(url, json={"html": html}, timeout=180)
+        r = httpx.post(url, json={"html": html}, headers=headers, timeout=180)
         r.raise_for_status()
         return r.content
     except httpx.HTTPError as e:

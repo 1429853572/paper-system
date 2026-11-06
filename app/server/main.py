@@ -352,6 +352,15 @@ async def upload_papers(request: Request, files: list[UploadFile]):
     overrides = _quota_overrides(u["id"])
     _check_daily_quota(u["id"], is_admin, overrides)
 
+    # 体积预检：Content-Length 超限直接拒绝（避免整文件读进内存后才检查）；
+    # 多文件批量按上限 ×2 估算（multipart 开销 +20MB），只拦明显超限的请求
+    from core.config import config as _cfg
+    max_mb = (10_000 if is_admin
+              else int(overrides.get("max_file_mb") or _cfg.get("limits", "max_file_mb") or 100))
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > (max_mb * max(1, len(files)) + 20) * 1024 * 1024:
+        raise HTTPException(413, f"请求体超过上限（单文件 ≤{max_mb}MB）")
+
     visibility = request.query_params.get("visibility", "shared")
     if visibility not in ("shared", "private"):
         visibility = "shared"
@@ -789,6 +798,23 @@ async def admin_set_pool(request: Request):
     return {"ok": True}
 
 
+def _assert_public_url(url: str) -> None:
+    """拦 SSRF：MinerU 会服务端抓取该 URL——禁止内网/环回/链路本地地址。"""
+    import ipaddress
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        raise HTTPException(400, "无效 URL")
+    if host in ("localhost",) or host.endswith(".local") or host.endswith(".internal"):
+        raise HTTPException(400, "不允许内网地址")
+    try:
+        infos = ipaddress.ip_address(host)
+    except ValueError:
+        infos = None   # 域名：交由 DNS（公网域名才放行；DNS rebinding 在自建内网风险可接受）
+    if infos is not None and not infos.is_global:
+        raise HTTPException(400, "不允许内网/环回地址")
+
+
 @app.post("/api/papers/import-url")
 async def import_url(request: Request):
     """URL 直接导入（MinerU 服务端抓取；支持 pdf/arxiv 直链等）."""
@@ -797,6 +823,7 @@ async def import_url(request: Request):
     url = (body.get("url") or "").strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "无效 URL")
+    _assert_public_url(url)
     name = Path(url.split("?")[0]).name or "document.pdf"
     if "." not in name:
         name += ".pdf"

@@ -188,35 +188,39 @@ class Scheduler:
     # ================= 解析 worker（GPU 串行） =================
     def _parse_loop(self) -> None:
         while not self._stop.is_set():
-            self._wake.wait(timeout=int(config.get("scheduler", "poll_interval_sec")))
-            self._wake.clear()
-            if self._stop.is_set():
-                return
-            # health gate
-            if not mineru.healthy():
-                # 所有 queued parse 任务挂起提示（只改状态不改队）
+            try:
+                self._wake.wait(timeout=int(config.get("scheduler", "poll_interval_sec")))
+                self._wake.clear()
+                if self._stop.is_set():
+                    return
+                # health gate
+                if not mineru.healthy():
+                    # 所有 queued parse 任务挂起提示（只改状态不改队）
+                    with db.write() as c:
+                        c.execute(
+                            "UPDATE jobs SET status='pending_gate' "
+                            "WHERE job_type='parse' AND status='queued'"
+                        )
+                    time.sleep(15)
+                    continue
+                # gate 恢复：pending_gate 回 queued
                 with db.write() as c:
                     c.execute(
-                        "UPDATE jobs SET status='pending_gate' "
-                        "WHERE job_type='parse' AND status='queued'"
+                        "UPDATE jobs SET status='queued' WHERE job_type='parse' AND status='pending_gate'"
                     )
-                time.sleep(15)
-                continue
-            # gate 恢复：pending_gate 回 queued
-            with db.write() as c:
-                c.execute(
-                    "UPDATE jobs SET status='queued' WHERE job_type='parse' AND status='pending_gate'"
-                )
-            job = self._next_job("parse")
-            if job is None:
-                continue
-            if not self._claim(job["id"]):
-                continue
-            try:
-                self._run_parse(job)
-            except Exception as e:  # noqa: BLE001
-                log.exception("parse job %s 异常", job["id"])
-                self._fail_or_retry(job, str(e)[:500])
+                job = self._next_job("parse")
+                if job is None:
+                    continue
+                if not self._claim(job["id"]):
+                    continue
+                try:
+                    self._run_parse(job)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("parse job %s 异常", job["id"])
+                    self._fail_or_retry(job, str(e)[:500])
+            except Exception:  # noqa: BLE001 —— 瞬时锁错误/意外异常不能让 worker 静默死亡
+                log.exception("parse worker 循环异常（继续运行）")
+                time.sleep(5)
 
     def _run_parse(self, job: Any) -> None:
         payload = json.loads(job["payload"] or "{}")
@@ -338,90 +342,102 @@ class Scheduler:
     # ================= embedding 回填 worker =================
     def _embed_loop(self) -> None:
         while not self._stop.is_set():
-            job = self._next_job("embed_backfill")
-            if job is None:
-                time.sleep(5)
-                continue
-            if not self._claim(job["id"]):
-                continue
             try:
-                paper_id = job["paper_id"]
-                total_rows = db.one(
-                    "SELECT COUNT(*) AS n FROM chunks WHERE paper_id=? AND embedding IS NULL",
-                    (paper_id,),
-                )
-                total = total_rows["n"] if total_rows else 0
-                self._update(job["id"], progress_total=total)
+                job = self._next_job("embed_backfill")
+                if job is None:
+                    time.sleep(5)
+                    continue
+                if not self._claim(job["id"]):
+                    continue
+                try:
+                    paper_id = job["paper_id"]
+                    total_rows = db.one(
+                        "SELECT COUNT(*) AS n FROM chunks WHERE paper_id=? AND embedding IS NULL",
+                        (paper_id,),
+                    )
+                    total = total_rows["n"] if total_rows else 0
+                    self._update(job["id"], progress_total=total)
 
-                def cb(done: int, tot: int) -> None:
-                    self._update(job["id"], progress_done=done, progress_total=tot)
+                    def cb(done: int, tot: int) -> None:
+                        self._update(job["id"], progress_done=done, progress_total=tot)
 
-                retrieval.backfill_embeddings(paper_id, progress_cb=cb)
-                self._update(job["id"], status="done")
-            except Exception as e:  # noqa: BLE001
-                log.exception("embed job %s 异常", job["id"])
-                self._fail_or_retry(job, str(e)[:500])
+                    retrieval.backfill_embeddings(paper_id, progress_cb=cb)
+                    self._update(job["id"], status="done")
+                except Exception as e:  # noqa: BLE001
+                    log.exception("embed job %s 异常", job["id"])
+                    self._fail_or_retry(job, str(e)[:500])
+            except Exception:  # noqa: BLE001
+                log.exception("embed worker 循环异常（继续运行）")
+                time.sleep(5)
 
     # ================= 元数据 worker（校准→AI补空，不占GPU） =================
     def _meta_loop(self) -> None:
         while not self._stop.is_set():
-            job = self._next_job("meta")
-            if job is None:
-                time.sleep(8)
-                continue
-            if not self._claim(job["id"]):
-                continue
             try:
-                paper_id = job["paper_id"]
-                # ① 联网校准（arXiv→S2→CrossRef；无需 LLM key）
-                from .meta import verify_meta_online
+                job = self._next_job("meta")
+                if job is None:
+                    time.sleep(8)
+                    continue
+                if not self._claim(job["id"]):
+                    continue
                 try:
-                    verify_meta_online(paper_id)
+                    paper_id = job["paper_id"]
+                    # ① 联网校准（arXiv→S2→CrossRef；无需 LLM key）
+                    from .meta import verify_meta_online
+                    try:
+                        verify_meta_online(paper_id)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("meta verify %s: %s", paper_id, e)
+                    # ② AI 补全缺失字段（用发起人 chat key；无 key 静默跳过）
+                    row = db.one("SELECT authors, journal, year, abstract, keywords FROM papers WHERE id=?",
+                                 (paper_id,))
+                    missing = row and any(not (row[k] or "").strip() for k in row.keys())
+                    if missing:
+                        try:
+                            from .meta import extract_meta_llm
+                            extract_meta_llm(job["user_id"], paper_id)
+                        except Exception as e:  # noqa: BLE001
+                            log.info("meta AI补全 %s 跳过: %s", paper_id, str(e)[:120])
+                        # 章节摘要（两段式问答用；失败不影响其他功能）
+                        try:
+                            from .summarizer import generate_section_summaries
+                            n = generate_section_summaries(job["user_id"], paper_id)
+                            log.info("章节摘要 %s: %d 节", paper_id, n)
+                        except Exception as e:  # noqa: BLE001
+                            log.info("章节摘要 %s 跳过: %s", paper_id, str(e)[:120])
+                    self._update(job["id"], status="done")
                 except Exception as e:  # noqa: BLE001
-                    log.warning("meta verify %s: %s", paper_id, e)
-                # ② AI 补全缺失字段（用发起人 chat key；无 key 静默跳过）
-                row = db.one("SELECT authors, journal, year, abstract, keywords FROM papers WHERE id=?",
-                             (paper_id,))
-                missing = row and any(not (row[k] or "").strip() for k in row.keys())
-                if missing:
-                    try:
-                        from .meta import extract_meta_llm
-                        extract_meta_llm(job["user_id"], paper_id)
-                    except Exception as e:  # noqa: BLE001
-                        log.info("meta AI补全 %s 跳过: %s", paper_id, str(e)[:120])
-                    # 章节摘要（两段式问答用；失败不影响其他功能）
-                    try:
-                        from .summarizer import generate_section_summaries
-                        n = generate_section_summaries(job["user_id"], paper_id)
-                        log.info("章节摘要 %s: %d 节", paper_id, n)
-                    except Exception as e:  # noqa: BLE001
-                        log.info("章节摘要 %s 跳过: %s", paper_id, str(e)[:120])
-                self._update(job["id"], status="done")
-            except Exception as e:  # noqa: BLE001
-                log.exception("meta job %s 异常", job["id"])
-                self._update(job["id"], status="failed", error=str(e)[:300])
+                    log.exception("meta job %s 异常", job["id"])
+                    self._update(job["id"], status="failed", error=str(e)[:300])
+            except Exception:  # noqa: BLE001
+                log.exception("meta worker 循环异常（继续运行）")
+                time.sleep(5)
 
     # ================= 翻译池（里程碑3填充处理器） =================
     translate_handler: Callable[[Any], None] | None = None
 
     def _translate_loop(self) -> None:
         while not self._stop.is_set():
-            if self.translate_handler is None or "translate" in self._paused_types:
+            try:
+                if self.translate_handler is None or "translate" in self._paused_types:
+                    time.sleep(5)
+                    continue
+                job = self._next_job("translate")
+                if job is None:
+                    time.sleep(5)
+                    continue
+                per_user_limit = int(config.get("limits", "translate_concurrency"))
+                if self._translate_slots.get(job["user_id"], 0) >= per_user_limit:
+                    time.sleep(3)
+                    continue
+                if not self._claim(job["id"]):
+                    continue
+                self._translate_slots[job["user_id"]] = self._translate_slots.get(job["user_id"], 0) + 1
+                t = threading.Thread(target=self._run_translate, args=(job,), daemon=True)
+                t.start()
+            except Exception:  # noqa: BLE001
+                log.exception("translate worker 循环异常（继续运行）")
                 time.sleep(5)
-                continue
-            job = self._next_job("translate")
-            if job is None:
-                time.sleep(5)
-                continue
-            per_user_limit = int(config.get("limits", "translate_concurrency"))
-            if self._translate_slots.get(job["user_id"], 0) >= per_user_limit:
-                time.sleep(3)
-                continue
-            if not self._claim(job["id"]):
-                continue
-            self._translate_slots[job["user_id"]] = self._translate_slots.get(job["user_id"], 0) + 1
-            t = threading.Thread(target=self._run_translate, args=(job,), daemon=True)
-            t.start()
 
     def _run_translate(self, job: Any) -> None:
         try:
@@ -439,22 +455,26 @@ class Scheduler:
     # ================= 导读 worker（LLM 同步调用，单并发） =================
     def _summary_loop(self) -> None:
         while not self._stop.is_set():
-            job = self._next_job("summary")
-            if job is None:
-                time.sleep(3)
-                continue
-            if not self._claim(job["id"]):
-                continue
             try:
-                from . import summarizer
-                user = {"id": job["user_id"]}
-                sid, payload = summarizer.generate(user, job["paper_id"])
-                self._update(job["id"], status="done", progress_done=1, progress_total=1,
-                             payload=json.dumps({"summary_id": sid}, ensure_ascii=False))
-                log.info("导读生成完成 paper=%s", job["paper_id"])
-            except Exception as e:  # noqa: BLE001
-                log.exception("summary job %s 异常", job["id"])
-                self._update(job["id"], status="failed", error=str(e)[:300])
+                job = self._next_job("summary")
+                if job is None:
+                    time.sleep(3)
+                    continue
+                if not self._claim(job["id"]):
+                    continue
+                try:
+                    from . import summarizer
+                    user = {"id": job["user_id"]}
+                    sid, payload = summarizer.generate(user, job["paper_id"])
+                    self._update(job["id"], status="done", progress_done=1, progress_total=1,
+                                 payload=json.dumps({"summary_id": sid}, ensure_ascii=False))
+                    log.info("导读生成完成 paper=%s", job["paper_id"])
+                except Exception as e:  # noqa: BLE001
+                    log.exception("summary job %s 异常", job["id"])
+                    self._update(job["id"], status="failed", error=str(e)[:300])
+            except Exception:  # noqa: BLE001
+                log.exception("summary worker 循环异常（继续运行）")
+                time.sleep(5)
 
     # ================= 管家：回收站清理 + 每日备份 =================
     def _janitor_loop(self) -> None:
