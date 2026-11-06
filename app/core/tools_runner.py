@@ -28,6 +28,16 @@ def render_math(maths: list[str]) -> list[str]:
         return maths
 
 
+RENDER_URL = os.environ.get("RENDER_SERVICE_URL", "http://host.docker.internal:8801/render")
+
+
 def html_to_pdf(html: str) -> bytes:
-    from .tools.chrome_pdf import html_to_pdf as _impl
-    return _impl(html)
+    """调用宿主渲染服务（chrome 在宿主，容器不装）。"""
+    import httpx
+    url = RENDER_URL
+    try:
+        r = httpx.post(url, json={"html": html}, timeout=180)
+        r.raise_for_status()
+        return r.content
+    except httpx.HTTPError as e:
+        raise RuntimeError(f"PDF 渲染服务不可用（{url}）: {e}") from e

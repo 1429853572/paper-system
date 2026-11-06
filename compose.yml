@@ -65,12 +65,15 @@ services:
       xinference:
         condition: service_healthy
     ports: ["8001:8001"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file: .env
     environment:
       MINERU_BASE_URL: http://mineru:8000
       EMBED_BASE_URL: http://xinference:9997
       EMBED_MODEL_NAME: bge-m3
       RERANK_BASE_URL: http://xinference:9997
+      RENDER_SERVICE_URL: http://host.docker.internal:8801/render
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro

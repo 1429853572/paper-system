@@ -7,7 +7,10 @@ import re
 import zipfile
 from pathlib import Path
 
+from .config import DATA_DIR
 from .db import db
+
+PAPERS_DIR = DATA_DIR / "papers"
 
 # ---------------- Markdown 组装 ----------------
 
@@ -35,7 +38,7 @@ def original_md(paper_id: str) -> str:
     run = _run_id(paper_id)
     if not run:
         return ""
-    path = Path("/app/data/papers") / paper_id / "parse" / run / "markdown.md"
+    path = PAPERS_DIR / paper_id / "parse" / run / "markdown.md"
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
@@ -89,10 +92,31 @@ def en_md(paper_id: str) -> str:
 _MATH = re.compile(r"\$\$(.+?)\$\$|\$([^$\n]+?)\$", re.S)
 
 
-def _md_to_html(md: str, title: str) -> str:
+def _inline_images(md: str, base_dir: Path) -> str:
+    """把 markdown 里的相对图片路径内联为 data URI（PDF 自包含，不丢图）。"""
+    import base64
+    import mimetypes
+
+    def _repl(m):
+        src = m.group(2)
+        if src.startswith(("http://", "https://", "data:")):
+            return m.group(0)
+        p = (base_dir / src).resolve()
+        if not p.exists() or base_dir.resolve() not in p.parents:
+            return m.group(0)
+        mime = mimetypes.guess_type(p.name)[0] or "image/png"
+        data = base64.b64encode(p.read_bytes()).decode()
+        return f'{m.group(1)}data:{mime};base64,{data}"'
+
+    return re.sub(r'(!\[[^\]]*\]\()([^)]+)(\))', _repl, md)
+
+
+def _md_to_html(md: str, title: str, base_dir: Path | None = None) -> str:
     import markdown as md_lib
     from .tools_runner import render_math
 
+    if base_dir:
+        md = _inline_images(md, base_dir)
     maths: list[str] = []
     def _collect(m):
         body = m.group(1) if m.group(1) else m.group(2)
@@ -104,7 +128,10 @@ def _md_to_html(md: str, title: str) -> str:
         rendered = render_math(maths)
         for i, h in enumerate(rendered):
             html = html.replace(f"@@MATH{i}@@", h)
-    return f"""<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>
+    return _HTML_SHELL.replace("{{title}}", title).replace("{{body}}", html)
+
+
+_HTML_SHELL = """<!doctype html><html><head><meta charset="utf-8"><title>{{title}}</title>
 <style>
 @page {{ size: A4; margin: 16mm 14mm; }}
 body {{ font-family: "Noto Serif CJK SC","Noto Sans CJK SC",serif; font-size: 10.5pt; line-height: 1.75; color:#111; }}
@@ -113,18 +140,77 @@ h2 {{ font-size: 13pt; margin: 14px 0 6px; border-bottom:1px solid #ddd; padding
 h3 {{ font-size: 11.5pt; margin: 10px 0 4px; }}
 p {{ margin: 5px 0; text-align: justify; }}
 blockquote {{ margin: 3px 0 7px; padding: 5px 10px; background: #f2f6ff; border-left: 3px solid #4a6cf7; color:#223; }}
+/* 中英对照双栏 */
+table.bi {{ width:100%; border-collapse:separate; border-spacing:14px 0; margin:6px 0 12px; }}
+table.bi td {{ vertical-align: top; width:50%; border:0; }}
+table.bi td.en {{ color:#111; }}
+table.bi td.zh {{ color:#16305c; background:#f7f9ff; border-left:3px solid #4a6cf7; padding:6px 10px; }}
+table.bi tr > td:first-child {{ width:50%; }}
 table {{ border-collapse: collapse; font-size: 9pt; margin: 8px 0; }}
 th,td {{ border: 1px solid #bbb; padding: 3px 6px; }}
 pre {{ background:#f5f6f8; padding:7px; overflow-x:auto; font-size:8.5pt; }}
 code {{ font-family: "DejaVu Sans Mono", monospace; font-size:9pt; }}
 img {{ max-width: 100%; }}
 .katex-display {{ overflow-x: auto; }}
-</style></head><body>{html}</body></html>"""
+</style></head><body>{{body}}</body></html>"""
 
 
-def md_to_pdf(md: str, title: str) -> bytes:
+def _bilingual_html(pairs: list[dict], title: str, base_dir: Path | None = None) -> str:
+    """中英对照 HTML：每段一行，左英文右中文（PDF 双栏）。"""
+    import markdown as md_lib
+    from .tools_runner import render_math
+
+    maths: list[str] = []
+
+    def _md(text: str) -> str:
+        def _collect(m):
+            body = m.group(1) if m.group(1) else m.group(2)
+            maths.append(body)
+            return f"@@MATH{len(maths)-1}@@"
+        t = _MATH.sub(_collect, text or "")
+        return md_lib.markdown(t, extensions=["extra", "tables", "fenced_code"])
+
+    rows = []
+    section = ""
+    for p in pairs:
+        en = (p.get("en") or "").strip()
+        zh = (p.get("zh") or "").strip()
+        if not en and not zh:
+            continue
+        if p.get("section_path") and p["section_path"] != section:
+            section = p["section_path"]
+            rows.append(f'<tr><td colspan="2"><h2>{_md(section)}</h2></td></tr>')
+        rows.append(f'<tr><td class="en">{_md(en)}</td><td class="zh">{_md(zh)}</td></tr>')
+    body = "".join(rows)
+    if maths:
+        rendered = render_math(maths)
+        for i, h in enumerate(rendered):
+            body = body.replace(f"@@MATH{i}@@", h)
+    return _HTML_SHELL.replace("{{body}}", f'<table class="bi">{body}</table>').replace(
+        "{{title}}", title)
+
+
+def _parse_dir(paper_id: str) -> Path | None:
+    """解析产物目录（含 images/），用于内联图片."""
+    run = _run_id(paper_id)
+    if not run:
+        return None
+    d = PAPERS_DIR / paper_id / "parse" / run
+    return d if d.exists() else None
+
+
+def bilingual_pdf(paper_id: str, title: str) -> bytes:
+    """中英对照 PDF（双栏排版）。"""
     from .tools_runner import html_to_pdf
-    return html_to_pdf(_md_to_html(md, title))
+    pairs = _pairs(paper_id)
+    if not pairs:
+        raise RuntimeError("尚未翻译，无法导出中英对照 PDF")
+    return html_to_pdf(_bilingual_html(pairs, title))
+
+
+def md_to_pdf(md: str, title: str, base_dir: Path | None = None) -> bytes:
+    from .tools_runner import html_to_pdf
+    return html_to_pdf(_md_to_html(md, title, base_dir))
 
 
 # ---------------- ZIP 组合 ----------------
@@ -138,7 +224,7 @@ def build_zip(paper_id: str, items: list[str]) -> tuple[bytes, str]:
     base = _zip_base_name(p)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        paper_dir = Path("/app/data/papers") / paper_id
+        paper_dir = PAPERS_DIR / paper_id
         if "pdf" in items:
             src = paper_dir / "original.pdf"
             if src.exists():
@@ -147,12 +233,13 @@ def build_zip(paper_id: str, items: list[str]) -> tuple[bytes, str]:
             z.writestr(f"{base}.md", original_md(paper_id))
         if "bilingual_md" in items:
             z.writestr(f"{base}-双语对照.md", bilingual_md(paper_id))
+        base_dir = _parse_dir(paper_id)
         if "bilingual_pdf" in items:
-            z.writestr(f"{base}-中英对照.pdf", md_to_pdf(bilingual_md(paper_id), p.get("title") or base))
+            z.writestr(f"{base}-中英对照.pdf", bilingual_pdf(paper_id, p.get("title") or base))
         if "zh_pdf" in items:
-            z.writestr(f"{base}-中文版.pdf", md_to_pdf(zh_md(paper_id), p.get("title") or base))
+            z.writestr(f"{base}-中文版.pdf", md_to_pdf(zh_md(paper_id), p.get("title") or base, base_dir))
         if "en_pdf" in items:
-            z.writestr(f"{base}-English.pdf", md_to_pdf(en_md(paper_id), p.get("title") or base))
+            z.writestr(f"{base}-English.pdf", md_to_pdf(en_md(paper_id), p.get("title") or base, base_dir))
     return buf.getvalue(), f"{base}.zip"
 
 

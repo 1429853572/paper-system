@@ -1464,11 +1464,19 @@ def download_paper(paper_id: str, fmt: str, request: Request, items: str = ""):
             raise HTTPException(400, "尚未翻译，无法导出中英对照")
         return _resp(content.encode("utf-8"), f"{base}-双语对照.md", "text/markdown; charset=utf-8")
     if fmt in ("bilingual_pdf", "zh_pdf", "en_pdf"):
-        src = {"bilingual_pdf": bilingual_md, "zh_pdf": zh_md, "en_pdf": en_md}[fmt]
-        content = src(paper_id)
-        if not content.strip():
-            raise HTTPException(400, "尚未翻译，无法导出该 PDF")
-        pdf = md_to_pdf(content, title)
+        if fmt == "bilingual_pdf":
+            from core.exporter import bilingual_pdf as _bp
+            try:
+                pdf = _bp(paper_id, title)
+            except RuntimeError as e:
+                raise HTTPException(400, str(e))
+        else:
+            src = {"zh_pdf": zh_md, "en_pdf": en_md}[fmt]
+            content = src(paper_id)
+            if not content.strip():
+                raise HTTPException(400, "尚未翻译，无法导出该 PDF")
+            from core.exporter import _parse_dir
+            pdf = md_to_pdf(content, title, _parse_dir(paper_id))
         suffix = {"bilingual_pdf": "中英对照", "zh_pdf": "中文版", "en_pdf": "English"}[fmt]
         return _resp(pdf, f"{base}-{suffix}.pdf", "application/pdf")
     if fmt == "zip":
@@ -1487,7 +1495,7 @@ def download_paper(paper_id: str, fmt: str, request: Request, items: str = ""):
 def download_options(paper_id: str, request: Request):
     """可下载项（依据是否已翻译）。"""
     u = require(request)
-    p = db.one("SELECT id FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
