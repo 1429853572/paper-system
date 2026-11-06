@@ -737,3 +737,37 @@ table.list input[type=checkbox] { width: auto; }
 /* ===== 管理页：单列（去掉重复左树） ===== */
 .lib-mgr { display: block; }
 .lib-side { display: none; }
+
+/* 提问按钮开关态（高亮=问答框已显示） */
+#qa-open.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* ===== 文库管理页：面包屑 + 列表/详情两列 ===== */
+.lib-crumb { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 13px;
+             padding: 0 2px 12px; }
+.lib-crumb a { color: var(--primary); cursor: pointer; text-decoration: none; }
+.lib-crumb a:hover { text-decoration: underline; }
+.lib-crumb a.cur { font-weight: 600; color: var(--text); }
+.lib-split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+.lib-side-detail { position: sticky; top: 8px; background: var(--panel); border: 1px solid var(--border);
+                   border-radius: 10px; padding: 12px; max-height: 70vh; overflow-y: auto; }
+@media (max-width: 1100px) { .lib-split { grid-template-columns: 1fr; } }
+
+/* ===== 文库管理 第一层：库列表 ===== */
+.lib-l1-head { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg-btn { border: none; background: var(--panel); padding: 5px 14px; font-size: 13px; cursor: pointer; color: var(--muted); }
+.seg-btn.on { background: var(--primary); color: #fff; }
+.lib-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.lib-card-l1 { display: flex; align-items: center; gap: 12px; background: var(--panel);
+               border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; cursor: pointer;
+               transition: border-color .15s, box-shadow .15s; }
+.lib-card-l1:hover { border-color: var(--primary); box-shadow: 0 4px 16px rgba(74,108,247,.12); }
+.lc1-icon { width: 40px; height: 40px; border-radius: 10px; background: #eef1ff; color: var(--primary);
+             display: flex; align-items: center; justify-content: center; flex: none; }
+.lc1-main { flex: 1; min-width: 0; }
+.lc1-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc1-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.lc1-ops { display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
+.lib-card-l1:hover .lc1-ops { opacity: 1; }
+.lib-row { cursor: pointer; }
+.lib-row:hover { background: #f4f6fc; }

@@ -2215,6 +2215,8 @@ window.exportChat = exportChat;   // 兼容内联 onclick 调用
 state.libSel = localStorage.getItem('ps-lib-sel') || '';   // '' = 全部文献
 state.libPaper = '';                                        // 详情面板选中的论文
 state.libQuery = '';                                        // 管理页搜索词
+state.libLevel = 1;                                         // 管理页层级: 1=库列表 2=库内
+state.libView = 'card';                                     // 库列表视图: card | list
 state._libQTimer = 0;
 
 function libDescendants(cid, list) {   // 含自身 + 全部子孙
@@ -2226,7 +2228,16 @@ function libDescendants(cid, list) {   // 含自身 + 全部子孙
 window.selectLib = cid => {
   state.libSel = cid;
   state.libPaper = '';
+  state.libLevel = 2;                 // 进第二层：库内（子库+论文）
   localStorage.setItem('ps-lib-sel', cid);
+  renderCollectionsPage();
+};
+window.libGoL1 = () => {              // 返回第一层：库列表
+  state.libLevel = 1; state.libSel = ''; state.libPaper = '';
+  renderCollectionsPage();
+};
+window.libOpenLib = cid => {          // 第一层点库 → 进第二层
+  state.libSel = cid; state.libPaper = ''; state.libLevel = 2;
   renderCollectionsPage();
 };
 window.selectLibPaper = pid => {
@@ -2241,6 +2252,11 @@ async function renderCollectionsPage(preset = null) {
   state.totalPapers = d.total;
   state._statuses = (await api('/api/statuses')).statuses;
   const el = $('#page-collections');
+  if (state.libLevel === 1) {           // 第一层：库列表
+    el.innerHTML = libLevel1Html(d);
+    bindLibLevel1();
+    return;
+  }
   const colState = JSON.parse(localStorage.getItem('ps-col-open') || '{}');
   const children = {};
   d.collections.forEach(c => (children[c.parent_id || 'root'] ||= []).push(c));
@@ -2324,6 +2340,7 @@ async function renderCollectionsPage(preset = null) {
     ].filter(x => x[1]);
     return `<div class="lib-detail">
       <div class="ld-title">${esc(pd.title || pd.id)}</div>
+      <div class="muted" style="font-size:11px;margin-bottom:6px">当前选中</div>
       <div class="ld-kv">${kv.map(([k, v]) =>
         `<div><span class="ld-k">${k}</span><span class="ld-v">${esc(String(v))}</span></div>`).join('')}</div>
       ${pd.abstract ? `<div class="ld-sec">摘要</div><div class="ld-abs">${esc(pd.abstract)}</div>` : ''}
@@ -2338,11 +2355,22 @@ async function renderCollectionsPage(preset = null) {
   const selNameArg = selName.replace(/'/g, "\\'");   // 塞进内联 onclick 的单引号参数
   el.innerHTML = `
     <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <h2 style="margin:0;flex:1">文献库管理 <span class="muted" style="font-size:12px">左栏选库 · 右栏看论文与详情</span></h2>
-      <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:220px" value="${esc(state.libQuery)}">
-      <input id="newlib-name" placeholder="新库名称" style="max-width:160px">
-      <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 顶层库</button>
+      <h2 style="margin:0;flex:1">文献库管理</h2>
+      <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:200px" value="${esc(state.libQuery)}">
+      <input id="newlib-name" placeholder="新库名称" style="max-width:150px">
+      <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 新建库</button>
       <button class="btn" onclick="exportBibtex()" title="导出全库为 BibTeX（Zotero/EndNote 可直接导入）">⬇ BibTeX</button>
+    </div>
+    <div class="lib-crumb">
+      <span class="muted">位置：</span>
+      ${(() => {
+        const chain = [];
+        let cur = d.collections.find(c => c.id === sel);
+        while (cur) { chain.unshift(cur); cur = d.collections.find(c => c.id === cur.parent_id); }
+        return `<a href="#" onclick="selectLib('');return false">全部文献</a>` +
+          chain.map(c => ` <span class="muted">›</span> <a href="#" onclick="selectLib('${c.id}');return false" class="${c.id === sel ? 'cur' : ''}">${esc(c.name)}</a>`).join('');
+      })()}
+      <span class="muted" style="margin-left:8px">（在左侧库树点击可切换）</span>
     </div>
     <div class="lib-main" id="lib-main-drop">
         <div class="lib-head">
@@ -2359,11 +2387,16 @@ async function renderCollectionsPage(preset = null) {
           <select style="width:auto;font-size:12px" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
           <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">删除</button>
         </div>
-        <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
-          ${paperRows || `<tr><td colspan="6" class="muted">${q ? '没有匹配的论文' : '空库'}</td></tr>`}</table>
-        ${detail}
-      </div>
-    </div>`;
+        <div class="lib-split">
+          <div class="lib-list">
+            <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
+              ${paperRows || `<tr><td colspan="6" class="muted">${q ? '没有匹配的论文' : '空库'}</td></tr>`}</table>
+          </div>
+          <aside class="lib-side-detail">
+            ${detail || '<p class="muted" style="padding:12px">点击左侧论文行查看详情</p>'}
+          </aside>
+        </div>
+      </div>`;
 
   // 搜索框：输入去抖后重渲染，并恢复焦点与光标（否则每敲一个字就失焦）
   const qIn = $('#lib-mgr-q');
@@ -3130,3 +3163,60 @@ window.loadMorePairs = async () => {
   state._biOffset += d.pairs.length;
   renderContentView();
 };
+
+/* ================= 文库管理：第一层 = 库列表 ================= */
+function libLevel1Html(d) {
+  const st = state._statuses || {};
+  const children = {};
+  d.collections.forEach(c => (children[c.parent_id || 'root'] ||= []).push(c));
+  const cards = d.collections.map(c => {
+    const papers = (st[c.id]?.papers) ?? c.papers ?? 0;
+    const kids = (children[c.id] || []).length;
+    const depth = treeDepth(c.id);
+    const doneTr = st[c.id]?.translated ?? 0;
+    return `<div class="lib-card-l1" onclick="libOpenLib('${c.id}')">
+      <div class="lc1-icon">${icon('folder')}</div>
+      <div class="lc1-main">
+        <div class="lc1-name">${'　'.repeat(depth)}${esc(c.name)}</div>
+        <div class="lc1-meta">${papers} 篇${kids ? ` · ${kids} 个子库` : ''}${doneTr ? ` · 已译 ${doneTr}` : ''}</div>
+      </div>
+      <div class="lc1-ops" onclick="event.stopPropagation()">
+        <button class="btn small" onclick="libUpload('${c.id}')" title="上传到此库">${icon('upload')}</button>
+        <button class="btn small" onclick="addSubLib('${c.id}')" ${depth >= 2 ? 'disabled title="最多三级"' : ''} title="新建子库">${icon('plus')}</button>
+        <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')" title="重命名">${icon('edit')}</button>
+        <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')" title="删除库">${icon('trash')}</button>
+      </div>
+    </div>`;
+  }).join('');
+  const total = d.total;
+  return `<div class="card lib-l1-head">
+      <h2 style="margin:0;flex:1">📚 全部文献库 <span class="muted" style="font-size:12px">${d.collections.length} 个库 · ${total} 篇论文</span></h2>
+      <div class="seg">
+        <button class="seg-btn ${state.libView === 'card' ? 'on' : ''}" onclick="setLibView('card')">卡片</button>
+        <button class="seg-btn ${state.libView === 'list' ? 'on' : ''}" onclick="setLibView('list')">列表</button>
+      </div>
+    </div>
+    ${state.libView === 'card'
+      ? `<div class="lib-cards">${cards || '<p class="muted" style="padding:16px">还没有文献库——点上方「新建库」</p>'}</div>`
+      : `<div class="card"><table class="list">
+          <tr><th>库名</th><th>论文</th><th>子库</th><th></th></tr>
+          ${d.collections.map(c => `<tr class="lib-row" onclick="libOpenLib('${c.id}')">
+            <td>${'　'.repeat(treeDepth(c.id))}${icon('folder')} ${esc(c.name)}</td>
+            <td>${c.papers ?? 0}</td><td>${(children[c.id] || []).length}</td>
+            <td class="row-actions" onclick="event.stopPropagation()">
+              <button class="btn small" onclick="libUpload('${c.id}')">${icon('upload')}</button>
+              <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">${icon('edit')}</button>
+            </td></tr>`).join('') || '<tr><td colspan="4" class="muted">还没有库</td></tr>'}
+        </table></div>`}`;
+}
+
+function bindLibLevel1() {
+  // 视图切换
+  $$('.seg-btn').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    state.libView = b.textContent.trim() === '卡片' ? 'card' : 'list';
+    renderCollectionsPage();
+  });
+}
+
+window.setLibView = v => { state.libView = v; renderCollectionsPage(); };
