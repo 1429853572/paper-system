@@ -178,3 +178,114 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
     return sid, {"sections": by_key, "sections_global": by_key_global,
                  "evidence": evidence_out, "cite_map": cite_map,
                  "model": cfg.model}
+
+
+# ================= 分层摘要（两段式问答用） =================
+
+def _sections_of(blocks: list[dict]) -> dict[str, list[dict]]:
+    """按 section_path 分组（保持页面顺序）。"""
+    out: dict[str, list[dict]] = {}
+    for b in blocks:
+        d = dict(b)          # sqlite3.Row → dict（Row 无 .get）
+        path = (d.get("section_path") or "").strip()
+        if not path:
+            continue
+        out.setdefault(path, []).append(d)
+    return out
+
+
+def generate_section_summaries(user: dict, paper_id: str) -> int:
+    """为论文生成章节级摘要（每节一段，供提问定位用）。返回生成条数。"""
+    from .llm import LLMClient, resolve_llm
+
+    cfg = resolve_llm(user["id"], "chat")
+    run = db.one(
+        "SELECT id FROM parse_runs WHERE paper_id=? AND status='done' ORDER BY created_at DESC LIMIT 1",
+        (paper_id,))
+    if run is None:
+        raise ValueError("论文尚未解析完成")
+    blocks = db.all(
+        "SELECT block_id, section_path, page_index, text FROM blocks WHERE parse_run_id=? "
+        "ORDER BY page_index, block_index", (run["id"],))
+    groups = _sections_of(blocks)
+    if not groups:
+        return 0
+
+    client = LLMClient(cfg, user_id=user["id"], paper_id=paper_id)
+    rows = []
+    for path, bs in groups.items():
+        text = "\n".join(b["text"] for b in bs if (b["text"] or "").strip())
+        if len(text.strip()) < 200:      # 太短的段落不值得摘要
+            continue
+        if len(text) > 12000:
+            text = text[:12000]
+        try:
+            summary = client.complete([
+                {"role": "system", "content":
+                    "用中文概括这一节的核心内容：方法要点、关键结论、具体数字（如有）。"
+                    "3~6 句，不要空话，保留术语与数值。"},
+                {"role": "user", "content": f"章节：{path}\n\n{text}"},
+            ], max_tokens=600).strip()
+        except Exception:  # noqa: BLE001
+            continue
+        if summary:
+            rows.append((paper_id, run["id"], path, 1, summary))
+    if rows:
+        with db.write() as c:
+            c.executemany(
+                "INSERT OR REPLACE INTO section_summaries"
+                "(paper_id,run_id,section_path,level,summary,embedding) VALUES(?,?,?,?,?,NULL)",
+                rows)
+        _embed_section_summaries(paper_id, run["id"])
+    return len(rows)
+
+
+def _embed_section_summaries(paper_id: str, run_id: str) -> None:
+    """给章节摘要算向量（用于提问时快速定位相关章节）。"""
+    from .retrieval import embed_texts
+
+    rows = db.all(
+        "SELECT paper_id, section_path, summary FROM section_summaries "
+        "WHERE paper_id=? AND run_id=? AND embedding IS NULL", (paper_id, run_id))
+    if not rows:
+        return
+    try:
+        vecs = embed_texts([r["summary"] for r in rows], batch_size=16)
+    except Exception:  # noqa: BLE001
+        return
+    import struct
+    with db.write() as c:
+        for r, v in zip(rows, vecs):
+            c.execute(
+                "UPDATE section_summaries SET embedding=? WHERE paper_id=? AND run_id=? "
+                "AND section_path=? AND level=1",
+                (struct.pack(f"<{len(v)}f", *v), r["paper_id"], run_id, r["section_path"]))
+
+
+def pick_relevant_sections(paper_id: str, question: str, top_k: int = 2) -> list[dict]:
+    """按问题向量选最相关的章节（无摘要时返回空 → 调用方回退全文直读）。"""
+    import numpy as np
+
+    from .retrieval import embed_texts
+
+    rows = db.all(
+        "SELECT section_path, summary, embedding FROM section_summaries "
+        "WHERE paper_id=? AND level=1 AND embedding IS NOT NULL", (paper_id,))
+    if not rows:
+        return []
+    try:
+        qv = np.array(embed_texts([question])[0], dtype=np.float32)
+    except Exception:  # noqa: BLE001
+        return []
+    qn = qv / (np.linalg.norm(qv) + 1e-9)
+    mat = np.stack([np.array(_unpack(r["embedding"]), dtype=np.float32) for r in rows])
+    mat = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9)
+    sims = mat @ qn
+    order = np.argsort(-sims)[:top_k]
+    return [{"section_path": rows[i]["section_path"], "summary": rows[i]["summary"],
+             "score": float(sims[i])} for i in order]
+
+
+def _unpack(blob: bytes):
+    import struct
+    return struct.unpack(f"<{len(blob) // 4}f", blob)

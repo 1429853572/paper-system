@@ -114,7 +114,8 @@ def _build_context(mode: str, papers: list[dict], question: str,
              for e in evidence}
     def _renumber(m: re.Match) -> str:
         return f"[{remap.get(m.group(1), '?')}]"
-    context = re.sub(r"\[([a-z0-9]+\|p\d+\|[a-z0-9\-v]+)\]", _renumber, context)
+    # block_id 格式随版本变化（可能含下划线/连字符）→ 用宽松匹配，避免重编号失效
+    context = re.sub(r"\[([a-z0-9]+\|p\d+\|[^\]\s]+)\]", _renumber, context)
     return context, evidence, truncated
 
 
@@ -168,10 +169,12 @@ def answer(user: dict, question: str, paper_ids: list[str], mode: str = "auto") 
             raise ValueError(f"论文 {p['title']} 尚未解析完成")
         papers.append(dict(p))
 
+    from .summarizer import pick_relevant_sections
     if mode == "auto":
-        mode = "fulltext"
-    # 全文直读优先（整体理解最好，对齐 ChatGPT/DeepSeek 的文件问答做法）；
-    # 论文总量超出预算（如小上下文模型）才自动降级为检索取证
+        # 两段式优先（有章节摘要 → 只喂命中章节，省 60~80% token）；
+        # 无摘要则全文直读（整体理解最好）；总量超预算再降级为检索取证
+        has_sum = bool(pick_relevant_sections(papers[0]["id"], "warmup", top_k=1)) if papers else False
+        mode = "smart" if has_sum else "fulltext"
     if mode == "fulltext":
         total = sum(len(b["text"]) for p2 in papers for b in _paper_blocks(p2["id"]))
         if _estimate_tokens(total) > int(config.get("qa", "fulltext_max_tokens")):

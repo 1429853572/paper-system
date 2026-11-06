@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -344,6 +344,19 @@ class Database:
                     note       TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                     PRIMARY KEY(user_id, block_id)
+                );
+            """)
+        if from_v < 15:
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS section_summaries (
+                    paper_id   TEXT NOT NULL,
+                    run_id     TEXT NOT NULL,
+                    section_path TEXT NOT NULL,
+                    level      INTEGER NOT NULL DEFAULT 1,   -- 1=章 2=节
+                    summary    TEXT NOT NULL,
+                    embedding  BLOB,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY(paper_id, run_id, section_path, level)
                 );
             """)
         if from_v < 5:

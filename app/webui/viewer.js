@@ -2300,6 +2300,7 @@ async function renderCollectionsPage(preset = null) {
       <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:220px" value="${esc(state.libQuery)}">
       <input id="newlib-name" placeholder="新库名称" style="max-width:160px">
       <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 顶层库</button>
+      <button class="btn" onclick="exportBibtex()" title="导出全库为 BibTeX（Zotero/EndNote 可直接导入）">⬇ BibTeX</button>
     </div>
     <div class="lib-mgr">
       ${sideTree}
@@ -3063,4 +3064,9 @@ window.emptyTrash = async () => {
   const r = await api('/api/trash/empty', {method: 'POST'});
   toast(`已彻底删除 ${r.purged} 篇`);
   renderTrash(); await refreshLib();
+};
+
+window.exportBibtex = () => {
+  location.href = '/api/export/bibtex';
+  toast('开始下载 BibTeX（Zotero/EndNote 可直接导入）');
 };

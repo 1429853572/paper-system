@@ -5,6 +5,7 @@ import io
 import json
 import os
 import secrets
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -797,6 +798,8 @@ async def import_url(request: Request):
     return {"paper_id": paper_id, "status": "queued"}
 
 
+_status_cache: dict[str, tuple[float, Any]] = {}
+
 # ---------------- 文献库（collections） ----------------
 def get_or_create_default_collection(user_id: int) -> str:
     row = db.one("SELECT id FROM collections WHERE owner_id=? AND name='默认文献库'", (user_id,))
@@ -1275,11 +1278,28 @@ def paper_journal_rank(paper_id: str, request: Request, force: int = 0):
 
 
 @app.get("/api/statuses")
-def papers_statuses(request: Request):
-    """全部论文的 解析/翻译状态 + 每篇 token 用量（文库管理行内展示）."""
+def papers_statuses(request: Request, paper_ids: str = "", limit: int = 0):
+    """论文的 解析/翻译状态 + 每篇 token 用量。
+
+    优化: 支持 paper_ids 精确查询（前端按当前视图传）+ 结果缓存 30s
+    （库上千篇时全表扫描会拖慢文库页）.
+    """
     u = require(request)
+    # 缓存（状态变更频率低，30 秒足够）
+    cache_key = f"statuses:{u['role']}:{u['id']}:{paper_ids}:{limit}"
+    hit = _status_cache.get(cache_key)
+    if hit and time.time() - hit[0] < 30:
+        return hit[1]
     vis = "" if u["role"] == "admin" else " AND (visibility='shared' OR owner_id=?)"
     args = () if u["role"] == "admin" else (u["id"],)
+    if paper_ids:
+        ids = [x for x in paper_ids.split(",") if x]
+        if ids:
+            vis += f" AND id IN ({','.join('?' * len(ids))})"
+            args.extend(ids)
+    if limit:
+        vis += " LIMIT ?"
+        args = (*args, int(limit))
     papers = db.all(f"SELECT id, parse_status FROM papers WHERE deleted_at IS NULL{vis}", args)
     # 每篇最新 parse/translate 任务
     latest: dict[str, dict] = {}
@@ -1307,7 +1327,12 @@ def papers_statuses(request: Request):
                               "error": tj["error"]} if tj else None,
             "tokens": {"p": tk["p"], "c": tk["c"], "calls": tk["calls"]} if tk else None,
         }
-    return {"statuses": out}
+    result = {"statuses": out}
+    _status_cache[cache_key] = (time.time(), result)
+    if len(_status_cache) > 64:
+        for k in list(_status_cache)[:32]:
+            _status_cache.pop(k, None)
+    return result
 
 
 @app.post("/api/papers/batch-delete")
@@ -1348,6 +1373,54 @@ def empty_trash(request: Request):
     for r in rows:
         scheduler.hard_delete_paper(r["id"])
     return {"purged": len(rows)}
+
+
+@app.get("/api/export/bibtex")
+def export_bibtex(request: Request, collection_id: str = ""):
+    """整库/按库导出 BibTeX（Zotero/EndNote 可直接导入）."""
+    u = require(request)
+    vis = "" if u["role"] == "admin" else " AND (visibility='shared' OR owner_id=?)"
+    args: list[Any] = [] if u["role"] == "admin" else [u["id"]]
+    if collection_id:
+        ids = [x for x in collection_id.split(",") if x]
+        vis += f" AND collection_id IN ({','.join('?' * len(ids))})"
+        args.extend(ids)
+    rows = db.all(
+        f"SELECT id, title, authors, year, journal, doi, abstract, keywords FROM papers "
+        f"WHERE deleted_at IS NULL{vis} ORDER BY created_at", tuple(args))
+    out = ["% BibTeX export from paper-system", ""]
+    for r in rows:
+        key = _bibtex_key(r)
+        authors = r["authors"] or ""
+        fields = [("title", (r["title"] or "").replace("{", "").replace("}", "")),
+                  ("author", authors),
+                  ("journal", r["journal"] or ""),
+                  ("year", r["year"] or ""),
+                  ("doi", r["doi"] or "")]
+        if r["keywords"]:
+            fields.append(("keywords", r["keywords"].strip("[]\"' ")))
+        if r["abstract"]:
+            fields.append(("abstract", r["abstract"].replace("{", "").replace("}", "")))
+        out.append(f"@article{{{key},")
+        for k, v in fields:
+            if v:
+                out.append(f"  {k} = {{{v}}},")
+        out.append("}")
+        out.append("")
+    md = "\n".join(out)
+    return _md_response(md, f"paper-system-{len(rows)}-papers.bib")
+
+
+def _bibtex_key(r) -> str:
+    """生成 BibTeX 引用键：首作者姓+年份+标题首词."""
+    import re as _re
+    authors = (r["authors"] or "").split(",")[0].strip()
+    surname = authors.split()[-1] if authors else "anon"
+    surname = _re.sub(r"[^A-Za-z]", "", surname) or "anon"
+    year = _re.sub(r"[^0-9]", "", r["year"] or "")[:4] or "0000"
+    words = _re.sub(r"[^A-Za-z ]", " ", r["title"] or "").split()
+    first = words[0].lower() if words else "paper"
+    return f"{surname.lower()}{year}{first}"
 
 
 # ---------------- 索引重建 ----------------
