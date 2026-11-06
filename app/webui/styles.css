@@ -54,6 +54,9 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
 .btn.primary:hover { background: var(--primary-dark); }
 .btn.danger { color: var(--err); border-color: var(--tint-err-2); }
 .btn.small { padding: 3px 8px; font-size: var(--fs-sm); }
+/* 纯图标按钮（工具位统一形态：图标 + tooltip） */
+.btn.ic-only { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; }
+.btn.ic-only .ic { vertical-align: 0; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 
 /* ---------- 登录 ---------- */

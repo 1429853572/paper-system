@@ -87,6 +87,10 @@ const ICONS = {
   checklist: '<path d="M2.2 4.3l1.5 1.5 2.7-3M2.2 11.3l1.5 1.5 2.7-3M9.2 4.4h4.6M9.2 11.6h4.6"/>',
   search: '<circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5"/>',
   book: '<path d="M8 4.2C6.6 3 4.2 2.8 2.6 3.6v9c1.6-.8 4-.6 5.4.6 1.4-1.2 3.8-1.4 5.4-.6v-9C11.8 2.8 9.4 3 8 4.2z"/><path d="M8 4.2v9"/>',
+  moon: '<path d="M13.2 9.7A5.7 5.7 0 016.3 2.8a5.7 5.7 0 106.9 6.9z"/>',
+  sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M15 8h-1.5M2.5 8H1M12.9 3.1l-1.1 1.1M4.2 11.8l-1.1 1.1M12.9 12.9l-1.1-1.1M4.2 4.2L3.1 3.1"/>',
+  logout: '<path d="M6 13.5H3.5a1 1 0 01-1-1v-9a1 1 0 011-1H6M9.5 11L13.5 8l-4-3M13.5 8H6"/>',
+  quote: '<path d="M2.8 12.4c0-3.3 1.4-5.9 4-6.9l.7 1.5C6 7.8 5.2 9.2 5 10.6h2.4v3.6H2.8v-1.8zM8.8 12.4c0-3.3 1.4-5.9 4-6.9l.7 1.5c-1.5.8-2.3 2.2-2.5 3.6h2.4v3.6H8.8v-1.8z"/>',
 };
 window.icon = (name, size = 14) =>
   `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -1126,7 +1130,7 @@ async function renderMeta() {
       <div class="meta-line" id="m-rank"><span class="muted">期刊分区：加载中…</span></div>
       <div class="meta-line">${icon('library')} <span id="m-src">${esc([paper.journal, paper.year, paper.doi ? 'DOI: ' + paper.doi : ''].filter(Boolean).join(' · ') || '—')}</span>
         ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">${icon('check')} 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>
-      <div class="meta-line">⭐ <span id="m-stars">${[1,2,3,4,5].map(i => `<span class="star ${i <= (notes.importance||0) ? 'on' : ''}" data-i="${i}">${icon('star')}</span>`).join('')}</span>
+      <div class="meta-line"><span id="m-stars">${[1,2,3,4,5].map(i => `<span class="star ${i <= (notes.importance||0) ? 'on' : ''}" data-i="${i}">${icon('star')}</span>`).join('')}</span>
         ${icon('tag')} <span id="m-tags">${esc(notes.tags || '') || '<i class=muted>点击右侧添加</i>'}</span></div>
       <div class="meta-actions">
         <button class="btn small" onclick="editMeta('${pid}')">${icon('edit')} 编辑</button>
@@ -1294,7 +1298,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     </div>
     <div class="preset-qs" id="preset-qs"></div>
     <div class="qa-quote" id="qa-quote" hidden>
-      <span class="muted" style="font-size:11px">📎 引用</span>
+      <span class="muted" style="font-size:11px">${icon('quote', 12)} 引用</span>
       <div class="qa-quote-text" id="qa-quote-text"></div>
       <button class="btn small" id="qa-quote-clear" title="移除引用">${icon('close')}</button>
     </div>
@@ -1653,7 +1657,7 @@ function sendQa() {
   collapsePresetList();      // 已提问 → 收起推荐问题，把版面让给回答
   const quote = state.qaQuote || '';
   $('#qa-msg-list').insertAdjacentHTML('beforeend',
-    `<div class="msg user"><div class="bubble">${quote ? '<div class="muted" style="font-size:11px;border-left:2px solid #c9d2ee;padding-left:6px;margin-bottom:4px">📎 ' + esc(quote.split('\n> ')[1]?.slice(0, 80) || '') + '…</div>' : ''}${esc(text)}</div></div>
+    `<div class="msg user"><div class="bubble">${quote ? '<div class="muted" style="font-size:11px;border-left:2px solid #c9d2ee;padding-left:6px;margin-bottom:4px">' + icon('quote', 12) + ' ' + esc(quote.split('\n> ')[1]?.slice(0, 80) || '') + '…</div>' : ''}${esc(text)}</div></div>
      <div class="msg assistant"><div class="bubble" id="qa-live">…</div></div>`);
   const live = $('#qa-live'); live.id = '';
   clearQuote();
@@ -2951,7 +2955,10 @@ state.theme = localStorage.getItem('ps-theme') ||
 window.applyTheme = () => {
   document.documentElement.dataset.theme = state.theme;
   const b = $('#theme-btn');
-  if (b) { b.textContent = state.theme === 'dark' ? '☀️' : '🌙'; b.title = state.theme === 'dark' ? '切换浅色' : '切换深色'; }
+  if (b) {
+    b.innerHTML = icon(state.theme === 'dark' ? 'sun' : 'moon');
+    b.title = state.theme === 'dark' ? '切换浅色' : '切换深色';
+  }
 };
 $('#theme-btn').onclick = () => {
   state.theme = state.theme === 'dark' ? 'light' : 'dark';

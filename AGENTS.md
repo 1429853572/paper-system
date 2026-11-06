@@ -88,7 +88,16 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - **会话吊销**：users.token_ver（v12）——改密/登出所有设备时 +1，current_user 逐请求比对（auth.check_token_ver）。**给 current_user 增加鉴权语义时记得 ver 校验在 auth 层**。
 - **用户管理**：users.disabled（0=正常 1=禁用 2=已注销匿名化）；禁用/注销时 token_ver+1；登录校验 disabled；管理员不能禁用/删除自己与 admin 账号。audit_log 已启用（登录/改密/删论文/改配额/禁用等，管理区可查）。
 - **登录限速**：按 IP+用户名计数（auth.py _fail_log，内存态），上限 500 键自动清理。
-- **深色模式**：`[data-theme=dark]` 覆盖 :root token（styles.css）；切换按钮在侧栏头部（🌙/☀️，存 ps-theme）。新样式只用 token 变量即可自动适配深色。
+- **深色模式**：`[data-theme=dark]` 覆盖 :root token（styles.css）；切换按钮在侧栏头部（SVG 月/日，存 ps-theme）。新样式只用 token 变量即可自动适配深色。
+- **图标规范（按角色分层，同层同形式）**：
+  - L1 顶栏主导航（应用级视图切换）→ **图标 + 文字**（阅读=book / 文库=library / 回收站=trash / 设置=sliders / 队列=clock / 问答=chat）
+  - L2 右栏一级页签（同一论文的视图）→ **纯文字**（阅读/文献信息/图表/JSON）；它与下方 L3 页签条紧挨着，两行必须一致
+  - L3 右栏二级页签（阅读模式）→ 纯文字（原文/双语对照/中文）
+  - L4 工具按钮（单一动作）→ **纯图标 + tooltip**（`.btn.ic-only`）；行内表格里的操作按钮用纯文字
+  - L5 主操作 CTA → 图标 + 文字 + 高亮
+  - 图形语言：**只有一套**——16 viewBox 线性 SVG、stroke 1.5、currentColor，图标一律带 `.ic` class（`viewer.js` 的 `ICONS` + `icon(name, size)`）。
+    Emoji 不进图标位（跨平台字形不一、颜色不受控）；emoji 只允许出现在**正文/消息文本**里（如 toast 的 ✅❌、模型输出）。
+  - 新增图标：加到 `ICONS` 里，不要在 HTML 里手写裸 `<svg>`（裸 svg 不会继承 `.ic` 的描边样式）。
 - **批量端点**：`POST /api/papers/batch-delete` 替代 N+1 逐篇 DELETE；前端 batch-delete 按钮已接入。
 - **错误处理**：全局 exception_handler 统一 JSON 500（勿在前端假设 500 是纯文本）；SSE 收尾已包 try（error 事件而非断流）。
 - **安全头**：中间件统一 nosniff/DENY/CSP。CSP 用 CSP3 的 elem/attr 拆分：`script-src-elem 'self'` 禁内联 `<script>` 块（注入防护）、`script-src-attr 'unsafe-inline'` 放行 70+ 处 onclick 属性、`style-src-attr 'unsafe-inline'` 放行动态 style=""、`worker-src blob:` 给 pdf.js。

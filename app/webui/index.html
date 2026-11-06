@@ -18,16 +18,16 @@
       <span class="title"><svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 13.5V3.5M6.3 13.5V3.5M9.6 13.5V3.5M2 13.5h12"/></svg> 我的文库</span>
       <span id="health-dot" class="health-dot bad" title="服务状态"></span>
       <span id="who" class="muted" style="font-size:12px"></span>
-      <button class="btn small" id="theme-btn" title="深色/浅色切换">🌙</button>
-      <button class="btn small" id="logout-btn">退出</button>
+      <button class="btn small ic-only" id="theme-btn" title="切换深色/浅色" aria-label="切换深色/浅色"></button>
+      <button class="btn small ic-only" id="logout-btn" title="退出登录" aria-label="退出登录"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 13.5H3.5a1 1 0 01-1-1v-9a1 1 0 011-1H6M9.5 11L13.5 8l-4-3M13.5 8H6"/></svg></button>
       <button class="side-collapse" id="side-collapse" title="收起侧栏（文库）" aria-label="收起侧栏"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M7.5 4L3.5 8l4 4M11.5 4l-4 4 4 4"/></svg></button>
     </header>
     <div class="collections" id="collections"></div>
     <div class="search"><input id="lib-search" placeholder="搜索标题/全文…"></div>
     <div class="lib-tools">
       <button class="tool-arrow" id="filter-arrow" title="筛选与排序">
-        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M1.8 2.6h12.4a.5.5 0 0 1 .39.81L9.9 9.4v4.1a.6.6 0 0 1-.87.54l-2.4-1.2a.6.6 0 0 1-.33-.54V9.4L1.41 3.41A.5.5 0 0 1 1.8 2.6z" fill="currentColor"/>
+        <svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M1.8 2.6h12.4a.5.5 0 0 1 .39.81L9.9 9.4v4.1a.6.6 0 0 1-.87.54l-2.4-1.2a.6.6 0 0 1-.33-.54V9.4L1.41 3.41A.5.5 0 0 1 1.8 2.6z"/>
         </svg>
       </button>
       <div class="tool-pop" id="filter-pop" hidden>
@@ -45,10 +45,10 @@
         <div class="tp-item" data-s="size">文件大小</div>
       </div>
       <button class="tool-arrow" id="sel-toggle" title="批量选择">
-        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none">
-          <path d="M2.2 4.3l1.5 1.5 2.7-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M2.2 11.3l1.5 1.5 2.7-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M9.2 4.4h4.6M9.2 11.6h4.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        <svg class="ic" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none">
+          <path d="M2.2 4.3l1.5 1.5 2.7-3"/>
+          <path d="M2.2 11.3l1.5 1.5 2.7-3"/>
+          <path d="M9.2 4.4h4.6M9.2 11.6h4.6"/>
         </svg>
       </button>
       <span class="spacer"></span>
@@ -80,9 +80,9 @@
       <button class="btn small" id="menu-toggle" aria-label="菜单"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg></button>
       <span class="title" id="page-title">阅读</span>
       <div class="topnav">
-        <button data-page="reader" class="on">阅读</button>
+        <button data-page="reader" class="on"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 4.2C6.6 3 4.2 2.8 2.6 3.6v9c1.6-.8 4-.6 5.4.6 1.4-1.2 3.8-1.4 5.4-.6v-9C11.8 2.8 9.4 3 8 4.2z"/><path d="M8 4.2v9"/></svg> 阅读</button>
         <button data-page="collections"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 13.5V3.5M6.3 13.5V3.5M9.6 13.5V3.5M2 13.5h12"/></svg> 文库</button>
-        <button data-page="trash">回收站</button>
+        <button data-page="trash"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 9.5h5.8l.6-9.5"/></svg> 回收站</button>
         <button data-page="settings"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 5h10M3 11h10"/><circle cx="6" cy="5" r="1.8"/><circle cx="10" cy="11" r="1.8"/></svg> 设置</button>
         <button class="btn small" id="queue-btn" hidden><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5V8l2.5 1.5"/></svg> 队列 <span class="qbadge" id="qbadge">0</span></button>
         <button class="btn small primary" id="qa-open" title="聚焦问答框"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 5A1.5 1.5 0 014 3.5h8A1.5 1.5 0 0113.5 5v4A1.5 1.5 0 0112 10.5H7.5L4.5 13v-2.5H4A1.5 1.5 0 012.5 9V5z"/></svg> 问答</button>
@@ -114,7 +114,7 @@
         <button class="rpane-restore" id="rpane-restore" hidden title="展开右栏（阅读/问答）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M7.5 4L3.5 8l4 4M11.5 4l-4 4 4 4"/></svg> 展开右栏</button>
         <div class="pane-right">
           <div class="view-tabs">
-            <button data-v="read" class="on"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 4.2C6.6 3 4.2 2.8 2.6 3.6v9c1.6-.8 4-.6 5.4.6 1.4-1.2 3.8-1.4 5.4-.6v-9C11.8 2.8 9.4 3 8 4.2z"/><path d="M8 4.2v9"/></svg> 阅读</button>
+            <button data-v="read" class="on">阅读</button>
             <button data-v="meta">文献信息</button>
             <button data-v="assets">图表</button>
             <button data-v="json" title="调试视图">JSON</button>
