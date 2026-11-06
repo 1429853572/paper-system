@@ -96,16 +96,16 @@ def _unpack(blob: bytes) -> np.ndarray:
 
 
 def embed_texts(texts: list[str], batch_size: int | None = None) -> list[list[float]]:
-    """批量调用本地 Ollama；批大小上限控 GPU 峰值。"""
+    """批量调用本地 embedding 服务（xinference / Ollama 均可，OpenAI 兼容）."""
     bs = batch_size or int(config.get("scheduler", "embed_backfill_batch"))
+    base = (os.environ.get("EMBED_BASE_URL") or EMBED_BASE_URL).rstrip("/")
+    model = os.environ.get("EMBED_MODEL_NAME") or EMBED_MODEL
     out: list[list[float]] = []
-    with httpx.Client(timeout=120) as http:
+    with httpx.Client(timeout=180) as http:
         for i in range(0, len(texts), bs):
             batch = [t[:6000] for t in texts[i:i + bs]]  # BGE-M3 8192 token，留余量
-            r = http.post(
-                f"{OLLAMA_BASE_URL}/v1/embeddings",
-                json={"model": EMBED_MODEL, "input": batch},
-            )
+            r = http.post(f"{base}/v1/embeddings",
+                         json={"model": model, "input": batch})
             r.raise_for_status()
             data = r.json()["data"]
             data.sort(key=lambda x: x["index"])

@@ -26,37 +26,26 @@ services:
               device_ids: ["0"]
               capabilities: [gpu]
 
-  ollama:
-    image: ollama/ollama:0.40.14   # 版本锁定（里程碑6随离线包固化）
-    container_name: paper-system-ollama
+  # 统一本地 AI 服务：embedding(BGE-M3) + rerank(qwen3-reranker) 一个容器
+  # 模型由 scripts/setup-xinference.sh 启动（server+worker，ModelScope 源）
+  xinference:
+    image: docker.1ms.run/xprobe/xinference:latest-cu129
+    container_name: paper-system-xinference
     restart: unless-stopped
-    ports: ["11434:11434"]
-    volumes: ["./models/ollama:/root/.ollama"]
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 2m
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["0"]
-              capabilities: [gpu]
-
-  rerank:                      # 可选：交叉编码器重排（库大时提升精度）
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda
-    container_name: paper-system-rerank
-    restart: unless-stopped
-    profiles: ["rerank"]
-    ports: ["8081:8080"]
+    ports: ["9997:9997"]
     volumes:
-      - ./models/reranker:/models:ro
-    command: ["--model", "/models/qwen3-reranker-0.6b-q8_0.gguf",
-               "--pooling", "rank", "--host", "0.0.0.0", "--port", "8080",
-               "--alias", "qwen3-reranker", "-ngl", "99", "--no-warmup"]
+      - ./models/xinference:/root/.xinference/cache
+    environment:
+      XINFERENCE_HOME: /root/.xinference
+      XINFERENCE_MODEL_SOURCE: modelscope
+    command: ["xinference-local", "-i", "0", "--host", "0.0.0.0", "--port", "9997",
+              "--model-source", "modelscope"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9997/v1/models >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 8s
+      retries: 15
+      start_period: 5m
     deploy:
       resources:
         reservations:
@@ -74,14 +63,15 @@ services:
     depends_on:
       mineru:
         condition: service_healthy
-      ollama:
+      xinference:
         condition: service_healthy
     ports: ["8001:8001"]
     env_file: .env
     environment:
       MINERU_BASE_URL: http://mineru:8000
-      OLLAMA_BASE_URL: http://ollama:11434
-      RERANK_BASE_URL: http://rerank:8080
+      EMBED_BASE_URL: http://xinference:9997
+      EMBED_MODEL_NAME: bge-m3
+      RERANK_BASE_URL: http://xinference:9997
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
