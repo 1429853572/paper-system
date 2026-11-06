@@ -389,6 +389,13 @@ class Scheduler:
                         extract_meta_llm(job["user_id"], paper_id)
                     except Exception as e:  # noqa: BLE001
                         log.info("meta AI补全 %s 跳过: %s", paper_id, str(e)[:120])
+                    # 章节摘要（两段式问答用；失败不影响其他功能）
+                    try:
+                        from .summarizer import generate_section_summaries
+                        n = generate_section_summaries(job["user_id"], paper_id)
+                        log.info("章节摘要 %s: %d 节", paper_id, n)
+                    except Exception as e:  # noqa: BLE001
+                        log.info("章节摘要 %s 跳过: %s", paper_id, str(e)[:120])
                 self._update(job["id"], status="done")
             except Exception as e:  # noqa: BLE001
                 log.exception("meta job %s 异常", job["id"])
