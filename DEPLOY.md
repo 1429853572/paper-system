@@ -37,6 +37,11 @@ rsync -avP offline-images/ models/ new-server:/path/paper-system/
 # ② 新服务器上（里程碑6: install.sh --offline 自动 docker load + 启动）
 ```
 
+## 重启后自检
+
+服务器重启后自动执行 `paper-system-postboot.service`（已 enable）：
+起服务 → 加载 xinference 模型 → 重算向量 → 检索自检 → 报告写入 `data/verify-report.txt`
+
 ## 日常运维
 
 ```bash

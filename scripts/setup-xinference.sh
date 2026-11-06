@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 API="http://localhost:9997"
-MODELS_DIR="models/xinference"
+MODELS_DIR="/root/.xinference/cache"   # 容器内挂载点（宿主机 ./models/xinference）
 mkdir -p "$MODELS_DIR"
 
 echo "== 等待 xinference server 就绪 =="

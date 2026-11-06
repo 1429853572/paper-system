@@ -42,6 +42,8 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "context_char_budget": 90000,
     },
     "retention": {"trash_days": 30, "backup_keep": 7},
+    "rerank": {"enabled": False, "base_url": "http://xinference:9997",
+               "model": "bge-reranker-v2-m3", "top_n": 50, "keep": 8, "timeout": 30},
 }
 
 
@@ -57,7 +59,11 @@ class Config:
                 break
 
     def get(self, section: str, key: str) -> Any:
-        return self._data.get(section, {}).get(key, _DEFAULTS[section][key])
+        """取值优先级：config.yaml → 内建默认 → None（不抛错）。"""
+        sec = self._data.get(section)
+        if isinstance(sec, dict) and key in sec:
+            return sec[key]
+        return _DEFAULTS.get(section, {}).get(key)
 
     def section(self, section: str) -> dict[str, Any]:
         return {**_DEFAULTS.get(section, {}), **self._data.get(section, {})}

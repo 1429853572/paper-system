@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import secrets
 from pathlib import Path
 from typing import Any, Iterator
@@ -147,14 +148,19 @@ def _shutdown() -> None:
 # ---------------- 健康与配置自检 ----------------
 @app.get("/api/health")
 def health():
-    ollama_ok = False
+    # 本地 AI 服务（xinference：embedding + rerank）
+    ai_ok = False
+    models: list[str] = []
     try:
         import httpx
-        r = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-        ollama_ok = r.status_code == 200
+        base = (os.environ.get("EMBED_BASE_URL") or OLLAMA_BASE_URL).rstrip("/")
+        r = httpx.get(f"{base}/v1/models", timeout=5)
+        if r.status_code == 200:
+            models = [m.get("id", "") for m in r.json().get("data", [])]
+            ai_ok = any("bge-m3" in m for m in models)
     except Exception:  # noqa: BLE001
         pass
-    return {"db": True, "mineru": mineru.healthy(), "ollama": ollama_ok,
+    return {"db": True, "mineru": mineru.healthy(), "ai": ai_ok, "models": models,
             "trash_days": int(config.get("retention", "trash_days"))}
 
 

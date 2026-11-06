@@ -38,8 +38,7 @@ services:
     environment:
       XINFERENCE_HOME: /root/.xinference
       XINFERENCE_MODEL_SOURCE: modelscope
-    command: ["xinference-local", "-i", "0", "--host", "0.0.0.0", "--port", "9997",
-              "--model-source", "modelscope"]
+    command: ["xinference-local", "--host", "0.0.0.0", "--port", "9997"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9997/v1/models >/dev/null || exit 1"]
       interval: 20s

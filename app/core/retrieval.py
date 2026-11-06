@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import struct
 from typing import Any
 
@@ -27,6 +28,16 @@ def build_chunks(paper_id: str, run_id: str, blocks: list) -> int:
 
     返回 chunk 数。chunk.page_index 取首 block 页（0 基）。
     """
+    def _clean(t: str) -> str:
+        """表格 HTML → 纯文本（避免 <table> 污染索引与检索展示）."""
+        if not t or "<" not in t:
+            return t
+        t = re.sub(r"<\s*(br|/tr|/p|/div|/td|/th)[^>]*>", " ", t, flags=re.I)
+        t = re.sub(r"<[^>]+>", " ", t)
+        for a, b in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">")):
+            t = t.replace(a, b)
+        return re.sub(r"[ \t]+", " ", t).strip()
+
     target = int(config.get("rag", "chunk_tokens")) * 1.3  # ≈字符数（英文 ~1.3 char/token）
     overlap_chars = int(config.get("rag", "overlap_tokens")) * 1.3
     chunks: list[tuple[str, str, int]] = []  # (text, block_ids_json, page_index)
@@ -37,7 +48,7 @@ def build_chunks(paper_id: str, run_id: str, blocks: list) -> int:
         nonlocal cur, cur_len
         if not cur:
             return
-        text = "\n\n".join(b["text"] for b in cur if b["text"].strip())
+        text = "\n\n".join(_clean(b["text"]) for b in cur if b["text"].strip())
         if text.strip():
             chunks.append((
                 text,
@@ -64,7 +75,7 @@ def build_chunks(paper_id: str, run_id: str, blocks: list) -> int:
     flush()
     # 尾部重叠残余并入
     if cur:
-        text = "\n\n".join(b["text"] for b in cur if b["text"].strip())
+        text = "\n\n".join(_clean(b["text"]) for b in cur if b["text"].strip())
         if text.strip() and (not chunks or chunks[-1][0] != text):
             chunks.append((text, json.dumps([b["block_id"] for b in cur]), int(cur[0]["page_index"])))
 
@@ -251,8 +262,13 @@ def rerank_chunks(query: str, chunks: list[dict], top_n: int, keep: int) -> list
                        timeout=config.get("rerank", "timeout"))
         r.raise_for_status()
         results = r.json().get("results") or []
-    except (httpx.HTTPError, ValueError, KeyError):
+    except Exception as e:  # noqa: BLE001 —— 降级但留痕（否则静默失败难排查）
+        import logging
+        logging.getLogger("retrieval").warning("rerank 失败，降级为向量排序: %s", e)
         return chunks
+    if not results:
+        import logging
+        logging.getLogger("retrieval").warning("rerank 返回空结果（model=%s, docs=%d）", model, len(docs))
     out = []
     for item in results:
         idx = item.get("index")
