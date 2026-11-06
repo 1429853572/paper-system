@@ -677,7 +677,7 @@ function drawOverlays(wrap) {
   if (active && active.dataset.bbox && active.dataset.bbox !== '') {
     const ab = state.blocks.find(x => x.block_id === active.dataset.bid);
     const hc = typeColor(ab ? ab.type : 'text');
-    for (const {box: b, page} of parseBoxes(active.dataset.bbox, active.dataset.bboxPages, ab)) {
+    for (const {box: b, page} of parseBoxPages(active.dataset.bbox, active.dataset.bboxPages, ab)) {
       if (page !== idx) continue;   // 该框属于别的页（跨页段落）
       const r = document.createElement('div');
       r.className = 'hl-rect';
@@ -694,7 +694,7 @@ function drawOverlays(wrap) {
     const colors = {text: '#4a6cf7', title: '#8a5cf6', equation: '#e6a23c',
                     table: '#2eaa6e', image: '#e0528f', ref_text: '#8a93b0'};
     state.blocks.filter(b => b.bbox).forEach(b => {
-      for (const {box: bb, page} of parseBoxes(b.bbox, b.bbox_pages, b)) {
+      for (const {box: bb, page} of parseBoxPages(b.bbox, b.bbox_pages, b)) {
         if (page !== idx) continue;
         const r = document.createElement('div');
         r.className = 'layout-rect';
@@ -706,17 +706,39 @@ function drawOverlays(wrap) {
       }
     });
   }
+  // 定位闪烁框（点引文跳转到的那一块）：由 state._flashBlock 驱动，
+  // 重绘时补画——页重渲染会 innerHTML='' 清空，直接 append 会被抹掉
+  const fb = state._flashBlock;
+  if (fb && fb.until > Date.now()) {
+    const fblk = state.blocks.find(x => x.block_id === fb.bid);
+    if (fblk) {
+      const fc = typeColor(fblk.type);
+      for (const {box: b, page} of parseBoxPages(fblk.bbox, fblk.bbox_pages, fblk)) {
+        if (page !== idx) continue;
+        const r = document.createElement('div');
+        r.className = 'hl-rect hl-flash';
+        r.style.borderColor = fc; r.style.background = fc + '30';
+        r.style.left = (b[0]*vp.width)+'px'; r.style.top = (b[1]*vp.height)+'px';
+        r.style.width = ((b[2]-b[0])*vp.width)+'px'; r.style.height = ((b[3]-b[1])*vp.height)+'px';
+        wrap.appendChild(r);
+      }
+    }
+  }
 }
 /* 块 bbox 统一解析：DB 存的是扁平 [x0,y0,x1,y1]；兼容列表 [[...],[...]]（跨栏/跨页段落）。
    注意：不要直接对扁平数组用 .forEach 取框——那会把 4 个数字当框迭代，算出 NaN 尺寸。
-   返回 [{box:[x0,y0,x1,y1], page:页码}]：bbox_pages 缺省时全部落在 block.page_index。 */
-function parseBoxes(bbox, bboxPages, blk) {
+   返回 [[x0,y0,x1,y1], ...]（保持旧形状，多数调用点按数组解构）。 */
+function parseBoxes(bbox) {
   if (!bbox) return [];
   let v; try { v = JSON.parse(bbox); } catch { return []; }
   if (!Array.isArray(v) || v.length === 0) return [];
-  let boxes;
-  if (typeof v[0] === 'number') boxes = (v.length >= 4) ? [v] : [];
-  else boxes = v.filter(b => Array.isArray(b) && b.length >= 4);
+  if (typeof v[0] === 'number') return v.length >= 4 ? [v] : [];
+  return v.filter(b => Array.isArray(b) && b.length >= 4);
+}
+/* 带页码的框：跨页段落有多个框、分属不同页（bbox_pages 与 bbox 一一对应）。
+   bbox_pages 缺省时所有框都落在 block.page_index。 */
+function parseBoxPages(bbox, bboxPages, blk) {
+  const boxes = parseBoxes(bbox);
   let pages = null;
   if (bboxPages) { try { pages = JSON.parse(bboxPages); } catch { pages = null; } }
   if (!Array.isArray(pages)) pages = null;
@@ -762,7 +784,7 @@ function highlightBlockOnPdf(blkEl) {
   const pages = new Set([pg]);
   const blk = state.blocks.find(x => x.block_id === blkEl?.dataset.bid);
   if (blk) {
-    for (const {page} of parseBoxes(blk.bbox, blk.bbox_pages, blk)) pages.add(page);
+    for (const {page} of parseBoxPages(blk.bbox, blk.bbox_pages, blk)) pages.add(page);
   }
   let needsRedraw = false;
   for (const p of pages) {
@@ -1746,9 +1768,34 @@ function wireCites(container, evidence) {
     if (ev) jumpToEvidence(ev);
   });
 }
+/* 点引文 → 定位到具体块：PDF 里闪烁高亮 + 右侧阅读面板滚到该段并置为激活。
+   只跳页的话整页几十个块还是不好找，所以必须定位到块。 */
 window.jumpToEvidence = async e => {
   if (!e) return;
   if (state.current && state.current.id !== e.paper_id) await openPaper(e.paper_id);
+  // 找到对应的块（证据里带 block_id）
+  const blk = (e.block_id && state.blocks || []).find(x => x.block_id === e.block_id)
+            || state.blocks.find(x => x.page_index === e.page_index && x.text
+                 && e.text && (x.text.includes(e.text.slice(0, 60)) || e.text.includes(x.text.slice(0, 60))));
+  if (blk) {
+    switchPage('reader');
+    // 右侧阅读面板：置为激活块 + 滚到可见（当前子页签没显示正文就切到"原文"）
+    let blkEl = $(`#content-view .blk[data-bid="${blk.block_id}"]`);
+    if (!blkEl) {
+      switchView('read', 'orig');
+      blkEl = $(`#content-view .blk[data-bid="${blk.block_id}"]`);
+    }
+    if (blkEl) {
+      $$('#content-view .blk').forEach(x => { x.classList.remove('active'); x.style.removeProperty('--hlc'); });
+      applyActiveStyle(blkEl);
+      blkEl.scrollIntoView({block: 'center', behavior: 'smooth'});
+    }
+    // PDF：滚到块所在页并闪烁高亮框（跨页段落每页各画一个）
+    if (state.pdfDoc) state.pageNum = blk.page_index + 1;
+    await pdfFlashBlock(blk);
+    return;
+  }
+  // 找不到块（跨论文证据 / 块已重建）→ 至少跳到对应页
   if (state.pdfDoc) { state.pageNum = e.page_index + 1; renderPage(); }
 };
 window.jumpEvidence = page => { switchPage('reader'); if (state.pdfDoc) { state.pageNum = page + 1; renderPage(); } };
@@ -2834,31 +2881,38 @@ window.applyActiveStyle = blkEl => {
   blkEl.classList.add('active');
 };
 
-/* ===== 文献信息联动：摘要/参考文献 → PDF 定位并闪烁高亮 ===== */
+/* ===== PDF 定位：滚到块所在页 + 在该块上画闪烁高亮框 ===== */
+/* 跨页段落：框分属多页 → 每页各画一个（按 bbox_pages 归位）。
+   闪烁状态放在 state._flashBlock，页重渲染时由 drawOverlays 补画。 */
 window.pdfFlashBlock = async b => {
   if (!b || !state.pdfDoc) return;
   await pdfEnsureAll();
-  const wrap = _pdfBuilt && _pdfBuilt.wraps.get(b.page_index);
-  if (!wrap) return;
-  if (wrap.dataset.rendered !== '1') await renderOneWrap(wrap);
-  const vp = wrap._vp;
-  state._suppressFollow = true;
-  wrap.scrollIntoView({ block: 'center' });
-  setTimeout(() => { state._suppressFollow = false; }, 350);
-  let bb; try { bb = parseBoxes(b.bbox); } catch { bb = []; }
-  if (bb.length) {
-    const c = typeColor(b.type);
-    for (const [x0, y0, x1, y1] of bb) {
-      const r = document.createElement('div');
-      r.className = 'hl-rect hl-flash';
-      r.style.borderColor = c; r.style.background = c + '30';
-      r.style.left = (x0*vp.width)+'px'; r.style.top = (y0*vp.height)+'px';
-      r.style.width = ((x1-x0)*vp.width)+'px'; r.style.height = ((y1-y0)*vp.height)+'px';
-      wrap.appendChild(r);
-      setTimeout(() => r.remove(), 2600);
+  const boxes = parseBoxPages(b.bbox, b.bbox_pages, b);
+  // 涉及的页先渲染出来（否则高亮框没地方画）
+  for (const {page} of boxes) {
+    const wrap = _pdfBuilt && _pdfBuilt.wraps.get(page);
+    if (wrap && (wrap.dataset.rendered !== '1' || wrap._scale !== state.scale)) {
+      wrap.dataset.rendered = '1';
+      await renderOneWrap(wrap);
     }
   }
-  state.pageNum = b.page_index + 1;
+  state._flashBlock = {bid: b.block_id, until: Date.now() + 2600};
+  redrawHl();
+  setTimeout(() => {
+    if (state._flashBlock && state._flashBlock.until <= Date.now()) {
+      state._flashBlock = null;
+      redrawHl();
+    }
+  }, 2700);
+  // 滚动到块所在的首个页面
+  const first = boxes.length ? boxes[0].page : b.page_index;
+  const wrap0 = _pdfBuilt && _pdfBuilt.wraps.get(first);
+  if (wrap0) {
+    state._suppressFollow = true;
+    wrap0.scrollIntoView({ block: 'center' });
+    setTimeout(() => { state._suppressFollow = false; }, 350);
+  }
+  state.pageNum = first + 1;
   $('#pg-label').textContent = `${state.pageNum} / ${state.pdfDoc.numPages}`;
 };
 window.flashAbstract = async pid => {
