@@ -177,6 +177,22 @@ else
     docker compose pull --ignore-pull-failures caddy ollama || true
 fi
 
+# ---------- 4.5 宿主 PDF 渲染服务（导出 PDF 依赖） ----------
+if ! curl -sf -m 3 http://127.0.0.1:8801/health >/dev/null 2>&1; then
+    if systemctl list-unit-files 2>/dev/null | grep -q papersystem-render; then
+        systemctl start papersystem-render 2>/dev/null || true
+        sleep 2
+    fi
+    if curl -sf -m 3 http://127.0.0.1:8801/health >/dev/null 2>&1; then
+        info "PDF 渲染服务已就绪（:8801）"
+    else
+        warn "PDF 渲染服务未运行——导出 PDF 不可用（其余功能正常）"
+        warn "  启动: systemctl start papersystem-render"
+    fi
+else
+    info "PDF 渲染服务已就绪（:8801）"
+fi
+
 # ---------- 5. 启动与健康检查 ----------
 echo "== 启动服务 =="
 docker compose up -d

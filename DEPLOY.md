@@ -37,6 +37,20 @@ rsync -avP offline-images/ models/ new-server:/path/paper-system/
 # ② 新服务器上（里程碑6: install.sh --offline 自动 docker load + 启动）
 ```
 
+## 宿主依赖：PDF 渲染服务（导出 PDF 用）
+
+容器内不装 Chrome（apt 太慢、镜像膨胀），改用**宿主渲染服务**：
+
+```bash
+# 宿主需有 google-chrome（PDF 打印）+ 该服务（systemd 已装）
+systemctl status papersystem-render.service   # 监听 :8801
+```
+
+- 服务脚本：`scripts/render-service.py`（POST /render {"html": ...} → application/pdf）
+- app 容器通过 `host.docker.internal:8801/render` 调用（compose 里配了 extra_hosts）
+- **迁移到新服务器时**：装 google-chrome + 复制此脚本 + 注册 systemd 服务
+- 公式渲染用容器内 node + vendored KaTeX（`app/tools/katex_render.mjs`）
+
 ## 重启后自检
 
 服务器重启后自动执行 `paper-system-postboot.service`（已 enable）：
