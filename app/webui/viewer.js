@@ -133,7 +133,8 @@ function renderCollections() {
   nodes.forEach(c => (children[c.parent_id || 'root'] ||= []).push(c));
   const row = (c, depth) => {
     const kids = children[c.id] || [];
-    const open = colState[c.id] !== false;
+    // 库树默认收起（有子库的才可展开）；用户手动展开过则记忆
+    const open = colState[c.id] === true;
     const selected = state.currentCollection === c.id;
     const desc = colDescendants(c.id);
     const active = selected || desc.includes(state.currentCollection);
@@ -145,6 +146,7 @@ function renderCollections() {
     </div>` + (kids.length && open ? kids.map(k => row(k, depth + 1)).join('') : '');
   };
   const roots = children['root'] || [];
+  const allOpen = roots.some(r => colState[r.id] === true);
   el.innerHTML =
     `<div class="col-item ${state.currentCollection === '' ? 'on' : ''}" data-id="">
       <span class="col-arrow-none"></span><span class="col-name">${icon('library')} 全部文献</span>
@@ -252,7 +254,16 @@ async function loadPapers(append = false) {
   const params = new URLSearchParams({q: state.q.trim(), collection_id: scope,
     status: state.filter === 'private' ? '' : state.filter, page, page_size: 200});
   const d = await api('/api/papers?' + params);
-  const papers = state.filter === 'private' ? d.papers.filter(p => p.visibility === 'private') : d.papers;
+  let papers = state.filter === 'private' ? d.papers.filter(p => p.visibility === 'private') : d.papers;
+  // 快捷范围（服务端筛不了的在前端过滤）
+  if (state.scope === 'untranslated') {
+    const st = state._statuses || {};
+    papers = papers.filter(p => st[p.id]?.translate_job?.status !== 'done');
+  } else if (state.scope === 'parsing') {
+    papers = papers.filter(p => ['parsing', 'pending'].includes(p.parse_status));
+  } else if (state.scope === 'private') {
+    papers = papers.filter(p => p.visibility === 'private');
+  }
   state.papers = append ? [...state.papers, ...papers] : papers;
   state.papersPage = page;
   state.papersHasMore = !!d.has_more;
@@ -308,26 +319,22 @@ function updateUploadTarget() {
     (state.currentCollection ? (state.collections.find(c => c.id === state.currentCollection)?.name || '默认文献库') : '全部文献');
 }
 function updateVisToggle() {
-  const b = $('#vis-toggle');
-  if (!b) return;
-  b.innerHTML = state.uploadPrivate ? icon('lock') : icon('unlock');
-  b.classList.toggle('has-val', state.uploadPrivate);
-  b.title = state.uploadPrivate
-    ? '上传可见性：仅自己可见（点击改为共享）'
-    : '上传可见性：共享（点击改为仅自己可见）';
+  const cb = $('#upload-private');
+  if (cb) cb.checked = state.uploadPrivate;
 }
-$('#vis-toggle').onclick = () => {
-  state.uploadPrivate = !state.uploadPrivate;
+$('#upload-private')?.addEventListener('change', e => {
+  state.uploadPrivate = e.target.checked;
   localStorage.setItem('ps-upload-private', state.uploadPrivate ? '1' : '0');
-  updateVisToggle();
   toast(state.uploadPrivate ? '新上传的文献将仅自己可见' : '新上传的文献将对所有人可见');
-};
+});
 const upPop = $('#upload-pop');
-$('#upload-arrow').onclick = e => {
+$('#upload-arrow')?.addEventListener('click', e => {
   e.stopPropagation();
   upPop.hidden = !upPop.hidden;
-  updateUploadTarget();
-};
+  upPop.style.bottom = '52px'; upPop.style.top = 'auto';
+  upPop.style.right = '12px'; upPop.style.left = 'auto';
+  updateUploadTarget(); updateVisToggle();
+});
 $('#upload-file-btn').onclick = () => { upPop.hidden = true; $('#file-input').click(); };
 document.addEventListener('click', e => {
   if (!upPop.hidden && !e.target.closest('#upload-pop') && !e.target.closest('#upload-arrow')) upPop.hidden = true;
@@ -453,14 +460,19 @@ $('#side-expand').onclick = () => {
 };
 applySidebarCollapse();
 
-$('#sel-toggle').onclick = () => {
+const _toggleSelectMode = () => {
   state.selectMode = !state.selectMode;
-  const b = $('#sel-toggle');
-  b.classList.toggle('has-val', state.selectMode);
-  b.title = state.selectMode ? '退出批量选择' : '批量选择';
+  ['#sel-toggle', '#sel-toggle2'].forEach(sel => {
+    const b = $(sel); if (!b) return;
+    b.classList.toggle('has-val', state.selectMode);
+    b.classList.toggle('primary', state.selectMode);
+    b.title = state.selectMode ? '退出批量选择' : '批量选择';
+  });
   if (!state.selectMode) { state.selected.clear(); $('#batch-bar').classList.remove('show'); }
   renderPapers();
 };
+$('#sel-toggle')?.addEventListener('click', _toggleSelectMode);
+$('#sel-toggle2')?.addEventListener('click', _toggleSelectMode);
 $('#batch-cancel').onclick = () => {
   state.selected.clear(); $('#batch-bar').classList.remove('show');
   state.selectMode = false; const sb = $('#sel-toggle'); sb.classList.remove('has-val'); sb.title = '批量选择';
@@ -487,8 +499,14 @@ $('#batch-move').onchange = async e => {
   e.target.value = ''; $('#batch-cancel').click(); await refreshLib();
 };
 
-/* 搜索 */
+/* 搜索 + 快捷范围 chips */
 $('#lib-search').oninput = e => { state.q = e.target.value; loadPapers(); };
+$$('#scope-chips .chip-btn').forEach(b => b.addEventListener('click', () => {
+  const s = b.dataset.scope;
+  state.scope = state.scope === s ? '' : s;      // 再点取消
+  $$('#scope-chips .chip-btn').forEach(x => x.classList.toggle('on', x.dataset.scope === state.scope));
+  loadPapers();
+}));
 
 /* ---------------- 阅读器 ---------------- */
 let pdfjsLib = null;
@@ -2214,6 +2232,7 @@ window.exportChat = exportChat;   // 兼容内联 onclick 调用
 /* ---- 📚 文库管理页（左库树 + 右条目 + 详情，参考 Zotero/EndNote 的下钻式） ---- */
 state.libSel = localStorage.getItem('ps-lib-sel') || '';   // '' = 全部文献
 state.libPaper = '';                                        // 详情面板选中的论文
+state.scope = '';                                           // 侧栏快捷范围筛选
 state.libQuery = '';                                        // 管理页搜索词
 state.libLevel = 1;                                         // 管理页层级: 1=库列表 2=库内
 state.libView = 'card';                                     // 库列表视图: card | list

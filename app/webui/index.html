@@ -30,7 +30,13 @@
       <button class="side-collapse" id="side-collapse" title="收起侧栏（文库）" aria-label="收起侧栏"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M7.5 4L3.5 8l4 4M11.5 4l-4 4 4 4"/></svg></button>
     </header>
     <div class="collections" id="collections"></div>
-    <div class="search"><input id="lib-search" placeholder="搜索标题/全文…"></div>
+    <div class="search"><input id="lib-search" placeholder="搜索标题 / 全文…"></div>
+    <div class="scope-chips" id="scope-chips">
+      <button class="chip-btn on" data-scope="">全部</button>
+      <button class="chip-btn" data-scope="private">🔒 仅我</button>
+      <button class="chip-btn" data-scope="untranslated">未翻译</button>
+      <button class="chip-btn" data-scope="parsing">解析中</button>
+    </div>
     <div class="lib-tools">
       <button class="tool-arrow" id="filter-arrow" title="筛选与排序">
         <svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -59,8 +65,11 @@
         </svg>
       </button>
       <span class="spacer"></span>
-      <button class="tool-arrow" id="vis-toggle" title="上传可见性：当前为共享（点击改为仅自己可见）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6.5" rx="1.5"/><path d="M5.5 7V5.5a2.5 2.5 0 014.9-.8"/></svg></button>
-      <button class="tool-arrow" id="upload-arrow" title="上传文献（也可直接把文件拖到下方列表区）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 10V2.5M5 5l3-3 3 3M3 13.5h10"/></svg></button>
+      <button class="tool-arrow" id="filter-arrow2" title="排序方式">
+        <svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M2.5 4h11M4.5 8h7M6.5 12h3"/>
+        </svg>
+      </button>
       <div class="tool-pop upload-pop" id="upload-pop" hidden>
         <div class="tp-item" id="upload-file-btn"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 2.5h5.5L12.5 5.5V13.5h-8.5z"/><path d="M9.5 2.5v3h3"/></svg> 选择文件上传</div>
         <div class="url-import">
@@ -68,6 +77,10 @@
           <button class="btn small primary" id="url-import-btn">导入</button>
         </div>
         <div class="muted" style="font-size:11px;padding:2px 12px 4px" id="upload-target">上传到：全部文献</div>
+        <div class="tp-sep"></div>
+        <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+          <input type="checkbox" id="upload-private" style="width:auto"> 仅自己可见
+        </label>
       </div>
       <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
     </div>
@@ -78,6 +91,18 @@
       <button class="btn small" id="batch-cancel">取消</button>
     </div>
     <div class="paper-list" id="paper-list"></div>
+    <div class="sidebar-foot">
+      <button class="btn small primary" id="upload-arrow" title="上传文献（也可直接把文件拖到列表区）">
+        <svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 10V2.5M5 5l3-3 3 3M3 13.5h10"/></svg>
+        上传
+      </button>
+      <span class="spacer"></span>
+      <button class="btn small" id="sel-toggle2" title="批量选择（也可直接在条目上勾选）">
+        <svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M2.2 4.3l1.5 1.5 2.7-3"/><path d="M2.2 11.3l1.5 1.5 2.7-3"/><path d="M9.2 4.4h4.6M9.2 11.6h4.6"/>
+        </svg>
+      </button>
+    </div>
   </aside>
   <div class="side-rail" id="side-rail" hidden><button id="side-expand" title="展开侧栏（文库）" aria-label="展开侧栏"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.5 4l4 4-4 4M4.5 4l4 4-4 4"/></svg></button></div>
 

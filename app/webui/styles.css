@@ -784,3 +784,21 @@ table.list input[type=checkbox] { width: auto; }
               padding: 8px 10px; background: #f8f9fc; border: 1px solid var(--border); border-radius: 8px; }
 .lib-subbar .chip { cursor: pointer; }
 .lib-subbar .chip:hover { background: #dfe6ff; }
+
+/* ===== 侧栏：快捷范围 chips + 底部固定条 ===== */
+.scope-chips { display: flex; gap: 5px; padding: 0 10px 8px; overflow-x: auto; scrollbar-width: none; }
+.scope-chips::-webkit-scrollbar { display: none; }
+.chip-btn { border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+             border-radius: 20px; padding: 3px 11px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.chip-btn:hover { border-color: var(--primary); color: var(--primary); }
+.chip-btn.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+.sidebar-foot { display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+                border-top: 1px solid var(--border); background: var(--panel); }
+.sidebar-foot .spacer { flex: 1; }
+#sel-toggle2.has-val, #sel-toggle2.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.upload-pop .tp-item { display: flex; align-items: center; gap: 7px; }
+
+/* 上传弹层：贴底部按钮上方 */
+.upload-pop { position: absolute; bottom: 52px; right: 12px; left: auto; top: auto;
+              min-width: 240px; z-index: 70; }
