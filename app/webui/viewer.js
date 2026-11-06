@@ -2362,7 +2362,7 @@ async function renderCollectionsPage(preset = null) {
       <button class="btn" onclick="exportBibtex()" title="导出全库为 BibTeX（Zotero/EndNote 可直接导入）">⬇ BibTeX</button>
     </div>
     <div class="lib-crumb">
-      <span class="muted">位置：</span>
+      ${state.libLevel === 2 ? `<a href="#" onclick="libGoL1();return false">← 全部库</a> <span class="muted">›</span> ` : '<span class="muted">位置：</span>'}
       ${(() => {
         const chain = [];
         let cur = d.collections.find(c => c.id === sel);
