@@ -46,6 +46,25 @@ services:
               device_ids: ["0"]
               capabilities: [gpu]
 
+  rerank:                      # 可选：交叉编码器重排（库大时提升精度）
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: paper-system-rerank
+    restart: unless-stopped
+    profiles: ["rerank"]
+    ports: ["8081:8080"]
+    volumes:
+      - ./models/reranker:/models:ro
+    command: ["--model", "/models/qwen3-reranker-0.6b-q8_0.gguf",
+               "--pooling", "rank", "--host", "0.0.0.0", "--port", "8080",
+               "--alias", "qwen3-reranker", "-ngl", "99", "--no-warmup"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
   app:
     image: papersys-app:v1
     build: ./app
@@ -62,6 +81,7 @@ services:
     environment:
       MINERU_BASE_URL: http://mineru:8000
       OLLAMA_BASE_URL: http://ollama:11434
+      RERANK_BASE_URL: http://rerank:8080
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro

@@ -149,6 +149,23 @@ def cmd_serve(args):
     os.execvp("docker", ["docker", "compose", "up", "-d"])
 
 
+def cmd_backup(args):
+    """立即备份（数据库快照 + 论文归档）。"""
+    import subprocess
+    r = subprocess.run(["bash", "scripts/backup.sh", str(args.keep)], capture_output=True, text=True)
+    print(r.stdout or r.stderr)
+
+
+def cmd_restore(args):
+    """从备份恢复。"""
+    import subprocess
+    cmd = ["bash", "scripts/restore.sh"]
+    if args.date:
+        cmd.append(args.date)
+    r = subprocess.run(cmd, text=True)
+    sys.exit(r.returncode)
+
+
 def cmd_export_images(args):
     """离线部署：导出全部镜像 tar。"""
     dest = Path(args.out)
@@ -225,6 +242,14 @@ def main() -> None:
     p.set_defaults(fn=cmd_user)
 
     sub.add_parser("serve", help="启动服务(docker compose up -d)").set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("backup", help="立即备份（数据库+论文）")
+    p.add_argument("--keep", type=int, default=0, help="保留份数（0=用配置默认）")
+    p.set_defaults(fn=cmd_backup)
+
+    p = sub.add_parser("restore", help="从备份恢复（默认最近一份）")
+    p.add_argument("--date", default="", help="指定备份日期 YYYY-MM-DD")
+    p.set_defaults(fn=cmd_restore)
 
     p = sub.add_parser("export-images", help="导出镜像 tar（离线部署）")
     p.add_argument("--out", default="offline-images")

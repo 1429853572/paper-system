@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import struct
 from typing import Any
 
@@ -208,6 +209,11 @@ def search(query: str, *, user_id: int, is_admin: bool,
     score_map = dict(ranked)
     out = [dict(r) | {"score": score_map[r["id"]]} for r in rows]
     out.sort(key=lambda x: -x["score"])
+    # 可选：交叉编码器重排（配置开启且服务可用时）
+    if config.get("rerank", "enabled") and out:
+        out = rerank_chunks(query, out,
+                            int(config.get("rerank", "top_n")),
+                            int(config.get("rerank", "keep")))
     return out
 
 
@@ -215,3 +221,45 @@ def search(query: str, *, user_id: int, is_admin: bool,
 
 def index_version() -> str:
     return f"{EMBED_MODEL}:{EMBED_DIMS}:v1"
+
+
+# ================= 交叉编码器重排（可选） =================
+def rerank_available() -> bool:
+    if not config.get("rerank", "enabled"):
+        return False
+    base = os.environ.get("RERANK_BASE_URL") or config.get("rerank", "base_url")
+    if not base:
+        return False
+    try:
+        r = httpx.get(f"{base.rstrip('/')}/health", timeout=3)
+        return r.status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def rerank_chunks(query: str, chunks: list[dict], top_n: int, keep: int) -> list[dict]:
+    """用交叉编码器对候选重排（失败则原样返回，不影响可用性）。"""
+    if not chunks:
+        return chunks
+    base = (os.environ.get("RERANK_BASE_URL") or config.get("rerank", "base_url")).rstrip("/")
+    model = config.get("rerank", "model")
+    docs = [(c.get("text") or "")[:1200] for c in chunks]
+    try:
+        r = httpx.post(f"{base}/v1/rerank",
+                       json={"model": model, "query": query, "documents": docs,
+                             "top_n": min(top_n, len(docs))},
+                       timeout=config.get("rerank", "timeout"))
+        r.raise_for_status()
+        results = r.json().get("results") or []
+    except (httpx.HTTPError, ValueError, KeyError):
+        return chunks
+    out = []
+    for item in results:
+        idx = item.get("index")
+        if idx is None or idx >= len(chunks):
+            continue
+        c = dict(chunks[idx])
+        c["score"] = float(item.get("relevance_score", c.get("score", 0.0)))
+        c["reranked"] = True
+        out.append(c)
+    return out[:keep] if out else chunks

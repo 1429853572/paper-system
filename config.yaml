@@ -29,10 +29,20 @@ rag:
   fts_top_k: 15
 
 qa:
-  fulltext_max_tokens: 200000   # 单篇全文直读的 token 预算
+  fulltext_max_tokens: 200000  # 全文直读预算（1M 上下文模型可全塞；小窗口模型改小自动降级检索）
   multi_paper_max: 10          # 跨论文对比上限
   context_char_budget: 90000   # 多篇拼接的字符预算（约1:1.5 token）
 
 retention:
   trash_days: 30            # 回收站保留天数
   backup_keep: 7            # 备份保留份数
+
+# ---- 可选：交叉编码器重排（llama.cpp server, /v1/rerank）----
+# 库规模小（<100篇）时双塔混合检索已足够；库大了再开，收益最明显
+rerank:
+  enabled: false
+  base_url: http://rerank:8080
+  model: qwen3-reranker
+  top_n: 50          # 参与重排的候选数
+  keep: 8            # 重排后保留
+  timeout: 30

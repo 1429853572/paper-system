@@ -36,3 +36,13 @@ qa:
 retention:
   trash_days: 30            # 回收站保留天数
   backup_keep: 7            # 备份保留份数
+
+# ---- 可选：交叉编码器重排（llama.cpp server, /v1/rerank）----
+# 库规模小（<100篇）时双塔混合检索已足够；库大了再开，收益最明显
+rerank:
+  enabled: false
+  base_url: http://rerank:8080
+  model: qwen3-reranker
+  top_n: 50          # 参与重排的候选数
+  keep: 8            # 重排后保留
+  timeout: 30
