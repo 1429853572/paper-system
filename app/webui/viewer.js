@@ -961,7 +961,14 @@ function watchTranslation() {
   }, 4000);
 }
 const _tb = $('#translate-btn'); if (_tb) _tb.onclick = startTranslate;   // 按钮已移除，兼容空值
+window.updateQaBtn = () => {
+  const b = $('#qa-open');
+  if (!b) return;
+  b.classList.toggle('on', !!state.qaOpen);
+  b.title = state.qaOpen ? '隐藏论文问答框' : '显示论文问答框（Ctrl+Q）';
+};
 function switchView(v, s) {
+  updateQaBtn();
   // v ∈ read|meta|assets|json；兼容 orig/bilingual/zh → read+子视图；qa → 聚焦问答框
   if (['orig', 'bilingual', 'zh'].includes(v)) { s = v; v = 'read'; }
   if (v === 'qa') { switchPage('reader'); $('#qa-text')?.focus(); return; }
@@ -1837,6 +1844,7 @@ async function boot() {
     if (!accPop.hidden) {
       $('#acc-name').textContent = state.me.username;
       $('#acc-role').textContent = state.me.role === 'admin' ? '管理员' : '成员';
+      const ai = $('#acc-admin-item'); if (ai) ai.hidden = state.me.role !== 'admin';
       $('#acc-initial').textContent = (state.me.username || '?').trim()[0].toUpperCase();
     }
   };
@@ -1851,6 +1859,10 @@ async function boot() {
     if (act === 'logout') { await fetch('/api/logout', {method: 'POST'}); location.href = '/login'; }
     else if (act === 'settings') switchPage('settings');
     else if (act === 'trash') switchPage('trash');
+    else if (act === 'admin') {   // 管理区在设置页底部
+      switchPage('settings');
+      setTimeout(() => $('#admin-zone')?.scrollIntoView({block: 'start', behavior: 'smooth'}), 350);
+    }
     else if (act === 'usage') { switchPage('settings'); setTimeout(() => $('#usage-zone')?.scrollIntoView({block: 'center'}), 300); }
   };
   // 未配置 key 提示横幅

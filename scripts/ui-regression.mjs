@@ -81,7 +81,8 @@ const doc = window.document;
 const results = [];
 
 // 1) 导航页
-for (const pg of ['collections', 'trash', 'settings', 'reader']) {
+// 顶栏只保留 阅读/文库；回收站/设置 已移入账号菜单
+for (const pg of ['collections', 'reader']) {
   const btn = doc.querySelector(`.topnav button[data-page="${pg}"]`);
   if (!btn) { errors.push(`nav ${pg}: 按钮缺失`); continue; }
   try {
@@ -94,6 +95,22 @@ for (const pg of ['collections', 'trash', 'settings', 'reader']) {
   } catch (e) { errors.push(`nav ${pg}: ${e.message}`); }
 }
 
+// 1.5) 账号菜单（回收站/设置入口）
+try {
+  const acc = doc.querySelector('#acc-btn');
+  if (!acc) errors.push('账号按钮缺失');
+  else {
+    acc.click();
+    await new Promise((r) => setTimeout(r, 120));
+    const items = [...doc.querySelectorAll('#acc-pop .acc-item')].map(x => x.dataset.act);
+    results.push(`账号菜单: ${items.join(',')}`);
+    for (const need of ['settings', 'trash', 'logout']) {
+      if (!items.includes(need)) errors.push(`账号菜单缺少: ${need}`);
+    }
+    acc.click();
+  }
+} catch (e) { errors.push('账号菜单: ' + e.message); }
+
 // 2) 右栏视图
 for (const v of ['meta', 'assets', 'json', 'qa', 'read']) {
   try {
@@ -104,6 +121,16 @@ for (const v of ['meta', 'assets', 'json', 'qa', 'read']) {
     results.push(`view ${v}: ${len} 字符`);
     if (len === 0) errors.push(`view ${v}: 内容为空`);
   } catch (e) { errors.push(`view ${v}: ${e.message}`); }
+}
+
+// 2.5) 提问按钮应在阅读页内
+const qaBtn = doc.querySelector('#qa-open');
+if (!qaBtn) errors.push('提问按钮缺失');
+else {
+  const inTop = !!qaBtn.closest('.topbar');
+  const inReader = !!qaBtn.closest('#page-reader');
+  results.push(`提问按钮位置: ${inTop ? '顶栏' : inReader ? '阅读页' : '未知'}`);
+  if (inTop) errors.push('提问按钮应在阅读页内，不该在顶栏');
 }
 
 // 3) 关键函数存在性

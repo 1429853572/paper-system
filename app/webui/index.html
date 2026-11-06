@@ -24,6 +24,7 @@
         <div class="acc-item" data-act="settings">⚙️ 我的设置</div>
         <div class="acc-item" data-act="usage">📊 我的用量</div>
         <div class="acc-item" data-act="trash">🗑 回收站</div>
+        <div class="acc-item" id="acc-admin-item" data-act="admin" hidden>👑 管理后台</div>
         <div class="acc-sep"></div>
         <div class="acc-item danger" data-act="logout">↩ 退出登录</div>
       </div>
@@ -114,10 +115,7 @@
       <div class="topnav">
         <button data-page="reader" class="on"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 4.2C6.6 3 4.2 2.8 2.6 3.6v9c1.6-.8 4-.6 5.4.6 1.4-1.2 3.8-1.4 5.4-.6v-9C11.8 2.8 9.4 3 8 4.2z"/><path d="M8 4.2v9"/></svg> 阅读</button>
         <button data-page="collections"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 13.5V3.5M6.3 13.5V3.5M9.6 13.5V3.5M2 13.5h12"/></svg> 文库</button>
-        <button data-page="trash"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 9.5h5.8l.6-9.5"/></svg> 回收站</button>
-        <button data-page="settings"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 5h10M3 11h10"/><circle cx="6" cy="5" r="1.8"/><circle cx="10" cy="11" r="1.8"/></svg> 设置</button>
         <button class="btn small" id="queue-btn" hidden><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5V8l2.5 1.5"/></svg> 队列 <span class="qbadge" id="qbadge">0</span></button>
-                <button class="btn small primary" id="qa-open" title="向当前论文提问（Ctrl+Q）">✍️ 提问</button>
       </div>
     </nav>
 
@@ -159,6 +157,7 @@
             <button data-s="bilingual">双语对照</button>
             <button data-s="zh">中文</button>
             <span class="spacer"></span>
+            <button class="btn small primary" id="qa-open" title="显示/隐藏论文问答框（Ctrl+Q）">✍️ 提问</button>
             <select id="version-select" style="width:auto; font-size:12px" hidden></select>
           </div>
           <div id="job-progress" hidden></div>
@@ -187,7 +186,6 @@
     <!-- 设置 -->
     <div class="page" id="page-settings" style="display:none"></div>
     <!-- 管理 -->
-    <div class="page" id="page-admin" style="display:none"></div>
   </main>
 </div>
 
