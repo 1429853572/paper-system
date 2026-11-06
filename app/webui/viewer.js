@@ -3260,3 +3260,50 @@ function bindLibLevel1() {
 }
 
 window.setLibView = v => { state.libView = v; renderCollectionsPage(); };
+
+/* ===== 下载菜单 ===== */
+(() => {
+  const pop = $('#download-pop'), btn = $('#download-btn');
+  if (!pop || !btn) return;
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    pop.hidden = !pop.hidden;
+    if (!pop.hidden) loadDlOptions();
+  });
+  document.addEventListener('click', e => {
+    if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) pop.hidden = true;
+  });
+  $$('#download-pop .tp-item[data-dl]').forEach(it => it.addEventListener('click', () => {
+    const fmt = it.dataset.dl;
+    const pid = state.current?.id;
+    if (!pid) { toast('请先打开一篇论文'); return; }
+    location.href = `/api/papers/${pid}/download/${fmt}`;
+    pop.hidden = true;
+  }));
+  $('#dl-zip-btn')?.addEventListener('click', () => {
+    const pid = state.current?.id;
+    if (!pid) { toast('请先打开一篇论文'); return; }
+    const items = $$('#download-pop input[data-zip]').filter(x => x.checked).map(x => x.dataset.zip);
+    if (!items.length) { toast('至少勾选一项'); return; }
+    location.href = `/api/papers/${pid}/download/zip?items=${items.join(',')}`;
+    pop.hidden = true;
+  });
+})();
+
+async function loadDlOptions() {
+  const pid = state.current?.id;
+  if (!pid) return;
+  try {
+    const o = await api(`/api/papers/${pid}/download-options`);
+    const map = {pdf: 'pdf', md: 'md', bilingual_md: 'bilingual_md',
+                 bilingual_pdf: 'bilingual_pdf', zh_pdf: 'zh_pdf', en_pdf: 'en_pdf'};
+    $$('#download-pop .tp-item[data-dl]').forEach(it => {
+      const avail = o[map[it.dataset.dl]];
+      it.classList.toggle('disabled', !avail);
+      it.title = avail ? '' : (o.translated ? '原件缺失' : '尚未翻译');
+    });
+    $$('#download-pop input[data-zip]').forEach(cb => {
+      cb.disabled = !o[cb.dataset.zip];
+    });
+  } catch (e) { /* 忽略 */ }
+}

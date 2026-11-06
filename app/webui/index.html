@@ -157,6 +157,27 @@
             <button data-s="bilingual">双语对照</button>
             <button data-s="zh">中文</button>
             <span class="spacer"></span>
+            <button class="btn small" id="download-btn" title="下载原文/译文/PDF/ZIP">⬇ 下载</button>
+            <div class="tool-pop dl-pop" id="download-pop" hidden>
+              <div class="tp-label">单独下载</div>
+              <div class="tp-item" data-dl="pdf">📄 原始 PDF</div>
+              <div class="tp-item" data-dl="md">📝 原文 Markdown</div>
+              <div class="tp-item" data-dl="bilingual_md">📝 中英对照 Markdown</div>
+              <div class="tp-item" data-dl="bilingual_pdf">📕 中英对照 PDF</div>
+              <div class="tp-item" data-dl="zh_pdf">📕 纯中文 PDF</div>
+              <div class="tp-item" data-dl="en_pdf">📕 纯英文 PDF</div>
+              <div class="tp-sep"></div>
+              <div class="tp-label">打包下载（勾选后生成 ZIP）</div>
+              <div class="dl-checks">
+                <label><input type="checkbox" data-zip="pdf" checked> 原始 PDF</label>
+                <label><input type="checkbox" data-zip="md" checked> 原文 md</label>
+                <label><input type="checkbox" data-zip="bilingual_md"> 中英对照 md</label>
+                <label><input type="checkbox" data-zip="bilingual_pdf"> 中英对照 pdf</label>
+                <label><input type="checkbox" data-zip="zh_pdf"> 纯中文 pdf</label>
+                <label><input type="checkbox" data-zip="en_pdf"> 纯英文 pdf</label>
+              </div>
+              <button class="btn small primary" id="dl-zip-btn" style="margin:8px 0 4px">⬇ 打包下载 ZIP</button>
+            </div>
             <button class="btn small primary" id="qa-open" title="显示/隐藏论文问答框（Ctrl+Q）">✍️ 提问</button>
             <select id="version-select" style="width:auto; font-size:12px" hidden></select>
           </div>

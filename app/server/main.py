@@ -1431,6 +1431,77 @@ def _bibtex_key(r) -> str:
     return f"{surname.lower()}{year}{first}"
 
 
+# ---------------- 导出下载（原文/双语 PDF·MD·ZIP 组合） ----------------
+@app.get("/api/papers/{paper_id}/download/{fmt}")
+def download_paper(paper_id: str, fmt: str, request: Request, items: str = ""):
+    """fmt: pdf(原始PDF) md(原文md) bilingual_md bilingual_pdf zh_pdf en_pdf zip(组合)"""
+    u = require(request)
+    p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    if p is None:
+        raise HTTPException(404, "论文不存在")
+    _require_visible(u, p)
+    from core.exporter import (_zip_base_name, bilingual_md, build_zip, en_md,
+                               md_to_pdf, original_md, zh_md)
+    base = _zip_base_name(dict(p))
+    title = p["title"] or base
+
+    def _resp(content: bytes, filename: str, mime: str):
+        from urllib.parse import quote
+        return Response(content=content, media_type=mime, headers={
+            "Content-Disposition":
+                f"attachment; filename=\"file\"; filename*=UTF-8''{quote(filename)}"})
+
+    if fmt == "pdf":
+        path = ingest.PAPERS_DIR / paper_id / "original.pdf"
+        if not path.exists():
+            raise HTTPException(404, "原始 PDF 不存在")
+        return _resp(path.read_bytes(), f"{base}.pdf", "application/pdf")
+    if fmt == "md":
+        return _resp(original_md(paper_id).encode("utf-8"), f"{base}.md", "text/markdown; charset=utf-8")
+    if fmt == "bilingual_md":
+        content = bilingual_md(paper_id)
+        if not content.strip():
+            raise HTTPException(400, "尚未翻译，无法导出中英对照")
+        return _resp(content.encode("utf-8"), f"{base}-双语对照.md", "text/markdown; charset=utf-8")
+    if fmt in ("bilingual_pdf", "zh_pdf", "en_pdf"):
+        src = {"bilingual_pdf": bilingual_md, "zh_pdf": zh_md, "en_pdf": en_md}[fmt]
+        content = src(paper_id)
+        if not content.strip():
+            raise HTTPException(400, "尚未翻译，无法导出该 PDF")
+        pdf = md_to_pdf(content, title)
+        suffix = {"bilingual_pdf": "中英对照", "zh_pdf": "中文版", "en_pdf": "English"}[fmt]
+        return _resp(pdf, f"{base}-{suffix}.pdf", "application/pdf")
+    if fmt == "zip":
+        want = [x for x in items.split(",") if x]
+        if not want:
+            raise HTTPException(400, "请选择要打包的内容")
+        try:
+            data, name = build_zip(paper_id, want)
+        except RuntimeError as e:
+            raise HTTPException(500, f"打包失败：{e}")
+        return _resp(data, name, "application/zip")
+    raise HTTPException(400, f"不支持的格式: {fmt}")
+
+
+@app.get("/api/papers/{paper_id}/download-options")
+def download_options(paper_id: str, request: Request):
+    """可下载项（依据是否已翻译）。"""
+    u = require(request)
+    p = db.one("SELECT id FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    if p is None:
+        raise HTTPException(404, "论文不存在")
+    _require_visible(u, p)
+    has_pdf = (ingest.PAPERS_DIR / paper_id / "original.pdf").exists()
+    tr = db.one("SELECT COUNT(*) n FROM translations WHERE paper_id=?", (paper_id,))
+    translated = bool(tr and tr["n"] > 0)
+    return {
+        "pdf": has_pdf, "md": True,
+        "bilingual_md": translated, "bilingual_pdf": translated,
+        "zh_pdf": translated, "en_pdf": True,
+        "translated": translated,
+    }
+
+
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
 def reindex_paper(paper_id: str, request: Request):
