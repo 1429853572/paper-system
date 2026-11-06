@@ -71,6 +71,18 @@ echo "$H1" | grep -qi "x-frame-options: DENY" && ok "X-Frame-Options" || bad "�
 echo "$H1" | grep -qi "x-content-type-options: nosniff" && ok "X-Content-Type-Options" || bad "缺 XCTO"
 echo "$H1" | grep -qi "content-security-policy" && ok "CSP" || bad "缺 CSP"
 
+# 5d. CSP 指令正确性（曾经因 script-src 'self' 拦截内联脚本，导致登录页无法提交）
+CSP=$(curl -s -D- -o /dev/null "$BASE/login" | grep -i "^content-security-policy" | tr -d '\r')
+echo "$CSP" | grep -qi "script-src-elem 'self'" && ok "CSP 禁止内联 <script> 块" \
+  || bad "CSP 缺 script-src-elem 'self'（登录页会静默失效）: $CSP"
+echo "$CSP" | grep -qi "script-src-attr 'unsafe-inline'" && ok "CSP 放行 onclick 属性" \
+  || bad "CSP 缺 script-src-attr 'unsafe-inline'（内联 onclick 会全部失效）"
+# 登录页不得再有内联 <script>（外置为 /static/login.js）
+INL=$(curl -s "$BASE/login" | grep -c "<script>" || true)
+[[ "$INL" == "0" ]] && ok "登录页无内联 <script>" || bad "登录页仍有 $INL 个内联 <script>，会被 CSP 拦截"
+LJS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE/static/login.js")
+[[ "$LJS" == 200 ]] && ok "login.js 200" || bad "login.js HTTP $LJS"
+
 # 6. 未登录访问受保护端点应 401
 CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/papers")
 [[ "$CODE" == 401 ]] && ok "未登录 401 保护" || bad "未登录访问返回 $CODE（应 401）"

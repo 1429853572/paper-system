@@ -85,7 +85,10 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - **深色模式**：`[data-theme=dark]` 覆盖 :root token（styles.css）；切换按钮在侧栏头部（🌙/☀️，存 ps-theme）。新样式只用 token 变量即可自动适配深色。
 - **批量端点**：`POST /api/papers/batch-delete` 替代 N+1 逐篇 DELETE；前端 batch-delete 按钮已接入。
 - **错误处理**：全局 exception_handler 统一 JSON 500（勿在前端假设 500 是纯文本）；SSE 收尾已包 try（error 事件而非断流）。
-- **安全头**：中间件统一 nosniff/DENY/CSP（CSP 允许 inline style 与 blob——KaTeX/pdf.js 依赖；改前端加载方式时同步 CSP）。
+- **安全头**：中间件统一 nosniff/DENY/CSP。CSP 用 CSP3 的 elem/attr 拆分：`script-src-elem 'self'` 禁内联 `<script>` 块（注入防护）、`script-src-attr 'unsafe-inline'` 放行 70+ 处 onclick 属性、`style-src-attr 'unsafe-inline'` 放行动态 style=""、`worker-src blob:` 给 pdf.js。
+  - ⚠️ **内联 `<script>` 块必须外置**：一旦新增内联脚本块会被 `script-src-elem` 静默拦截（登录页就是这么坏的）。页面级脚本放 `/static/<page>.js`。
+  - ⚠️ onclick 属性外置（addEventListener）是 P4 重构项；在那之前 `script-src-attr` 必须保留 unsafe-inline。
+  - 冒烟测试 `scripts/smoke-test.sh` 已断言这几条指令（5d 段），改 CSP 前先看它。
 - **回收站**：软删除 30 天，janitor 每小时清理；"清空回收站"按用户隔离（admin 才全量）。
 - **上传存储/限额**：member 限额来自 `config.yaml limits.*` + `user_quotas.overrides`（管理页可按人覆盖），admin 全豁免。
 

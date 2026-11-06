@@ -50,12 +50,22 @@ async def _cache_policy(request: Request, call_next):
         resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
     elif p.startswith("/static") or p in ("/", "/login"):
         resp.headers["Cache-Control"] = "no-cache"
-    # 安全响应头（同源部署；CSP 允许内联样式——KaTeX/pdf.js 需要）
+    # 安全响应头（同源部署）
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
+    # CSP 用 CSP3 的 elem/attr 拆分，兼顾"注入防护"与"内联 onclick"：
+    #   script-src-elem 'self'           → 禁止内联 <script> 块（XSS 注入的主要载体）
+    #   script-src-attr 'unsafe-inline'  → 放行 onclick=... 属性（本代码库 70+ 处内联 handler）
+    #   style-src-attr 'unsafe-inline'   → 放行 style="" 属性（viewer.js 动态定位用）
+    #   worker-src blob:                 → pdf.js worker
+    # 内联 <script> 已外置为 /static/login.js；若日后要彻底去掉 unsafe-inline，
+    # 需先做 P4 重构（内联 handler 全部改为 addEventListener 绑定）。
     resp.headers.setdefault("Content-Security-Policy",
-        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self'; worker-src 'self' blob:; font-src 'self'; connect-src 'self'")
+        "default-src 'self'; "
+        "img-src 'self' data: blob:; "
+        "style-src 'self'; style-src-attr 'unsafe-inline'; "
+        "script-src 'self'; script-src-elem 'self'; script-src-attr 'unsafe-inline'; "
+        "worker-src 'self' blob:; font-src 'self'; connect-src 'self'")
     return resp
 
 WEBUI_DIR = Path(__file__).parent.parent / "webui"
