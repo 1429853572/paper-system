@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS blocks (
     section_path TEXT NOT NULL DEFAULT '',
     page_index   INTEGER NOT NULL,                   -- PDF 物理页序（0 基）
     block_index  INTEGER NOT NULL,
-    bbox         TEXT,                               -- 归一化 [x0,y0,x1,y1] JSON，可 null
+    bbox         TEXT,                               -- 归一化 [x0,y0,x1,y1] JSON，可 null；跨页/跨栏段落为 [[框],[框]]
+    bbox_pages   TEXT,                               -- 与 bbox 框一一对应的页码 JSON 数组；null = 全在 page_index
     text         TEXT NOT NULL DEFAULT '',
     source_hash  TEXT NOT NULL DEFAULT '',
     UNIQUE(parse_run_id, block_id)
@@ -279,6 +280,14 @@ class Database:
             c.execute("PRAGMA journal_mode=WAL")
 
     def _migrate(self, c: sqlite3.Connection, from_v: int) -> None:
+        if from_v < 13:
+            # 跨页段落：一个逻辑段落可能横跨两页 → bbox 变成多框列表，
+            # bbox_pages 记录每个框各自所在的页（与 bbox 列表一一对应）。
+            # 缺省为空 = 所有框都在 blocks.page_index 这一页（同页多框的旧数据）。
+            try:
+                c.execute("ALTER TABLE blocks ADD COLUMN bbox_pages TEXT")
+            except Exception:
+                pass
         if from_v < 12:
             # 会话吊销：token 版本号（改密/登出所有设备时 +1，旧 token 全失效）
             c.execute("ALTER TABLE users ADD COLUMN token_ver INTEGER NOT NULL DEFAULT 0")

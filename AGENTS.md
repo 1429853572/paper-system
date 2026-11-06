@@ -72,6 +72,12 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - **bbox 数据格式**：`blocks.bbox` 存的是**扁平 4 元组** `[x0,y0,x1,y1]`；**跨栏合并的块**存**多框列表** `[[框1],[框2]]`。一律用 `viewer.js:parseBoxes()` 解析（两种都兼容）。**别直接 `JSON.parse(bbox).forEach(b => b[0]...)`**——扁平数组会被当 4 个数字迭代，算出 `NaNpx` 尺寸，框只剩 2px 边框 → 表现为"PDF 上不高亮显示块"。
 - **跨栏续文合并**：MinerU 用 `block.continues_prev` 标记"本块是上一段的续文"（双栏排版把一段切开）。官网 markdown 渲染层据此合并成一段；`core/ingest.py:build_blocks()` 同样在入库时合并（文本拼接 + bbox 变多框）。不改这段会导致同一段显示成两段、与官网不一致。
 - **改块结构后要重建**：`POST /api/papers/{id}/reindex` 会用已存的 `middle.json` 重建 blocks+chunks（不占 GPU），并清掉 source_hash 失效的旧译文。改 `build_blocks` 后用它刷新存量论文。
+- **跨页/跨栏续文合并**（schema v13）：MinerU 用 `block.continues_prev` 标记「本块是上一段的续文」——段落被页/栏边界切开时会标记。MinerU 官网的 `markdown.md` 据此把续文并回前一段（我们逐字比对过），我们同样在 `ingest.build_blocks` 入库时合并：
+  - 合并后一个块可能有多个框 → `blocks.bbox` 存 `[[框1],[框2]]`；跨页时两个框分属不同页 → `blocks.bbox_pages` 存 `[页1,页2]`（与框一一对应，null = 全在 `page_index`）。
+  - 前端 `parseBoxes(bbox, bboxPages, blk)` 返回 `[{box, page}]`，`drawOverlays` 按 page 分发到各自的页；`highlightBlockOnPdf` 会把跨页段落在每一页都画高亮。
+  - 合并规则：续文并回**最近一个正文块**；浮动图表（image/table/chart）夹在中间**不打断**（与官网 markdown 一致，浮动体排到段落之后）；只有标题（分节）打断。
+  - 页眉/页码/页脚是版面噪声：入库保留（`page_footnote`/`aside_text` 也保留），但阅读面板不显示 header/footer/page_number。
+- **导读证据要落库**：`summaries.content` 存 `{"sections":…, "evidence":[…]}`——只存 sections 的话，重新加载页面后 `[n]` 变成死文本、下方证据列表也消失。块结构变更后证据编号会平移，需重新生成导读。
 - **图裁剪只用 `union_bbox`**：子块 bbox 是组图内的局部坐标，用它会截错。
 - **原始文件统一存为 `original.<真实扩展名>`**（`ingest.store_pdf`）：解析/预览端按 `original.` 前缀定位文件；存成用户原始文件名会导致"原始文件缺失"。
 - **MinerU 远程 task_id 只存服务端内存**：容器重启后轮询 404，调度器 `recover()` 会清 `remote_task_id` 重新排队——这是预期行为，不是 bug。

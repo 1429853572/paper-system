@@ -671,13 +671,14 @@ function drawOverlays(wrap) {
   if (!wrap || !wrap._vp) return;
   const idx = +wrap.dataset.page;
   const vp = wrap._vp;
-  // 高亮框：当前激活块（在该页才画），颜色与右侧激活块同色
+  // 高亮框：当前激活块（跨页段落会在它的每一页各画一个框），颜色与右侧激活块同色
   const active = $('.blk.active');
   $$('.hl-rect', wrap).forEach(x => x.remove());
-  if (active && +active.dataset.page === idx && active.dataset.bbox && active.dataset.bbox !== '') {
+  if (active && active.dataset.bbox && active.dataset.bbox !== '') {
     const ab = state.blocks.find(x => x.block_id === active.dataset.bid);
     const hc = typeColor(ab ? ab.type : 'text');
-    for (const b of parseBoxes(active.dataset.bbox)) {
+    for (const {box: b, page} of parseBoxes(active.dataset.bbox, active.dataset.bboxPages, ab)) {
+      if (page !== idx) continue;   // 该框属于别的页（跨页段落）
       const r = document.createElement('div');
       r.className = 'hl-rect';
       r.style.borderColor = hc;
@@ -687,13 +688,14 @@ function drawOverlays(wrap) {
       wrap.appendChild(r);
     }
   }
-  // 布局框
+  // 布局框：跨页段落的框按 bbox_pages 画到各自的页上
   $$('.layout-rect', wrap).forEach(x => x.remove());
   if (state.showLayout) {
     const colors = {text: '#4a6cf7', title: '#8a5cf6', equation: '#e6a23c',
                     table: '#2eaa6e', image: '#e0528f', ref_text: '#8a93b0'};
-    state.blocks.filter(b => b.page_index === idx && b.bbox).forEach(b => {
-      for (const bb of parseBoxes(b.bbox)) {
+    state.blocks.filter(b => b.bbox).forEach(b => {
+      for (const {box: bb, page} of parseBoxes(b.bbox, b.bbox_pages, b)) {
+        if (page !== idx) continue;
         const r = document.createElement('div');
         r.className = 'layout-rect';
         r.style.left = (bb[0]*vp.width)+'px'; r.style.top = (bb[1]*vp.height)+'px';
@@ -705,14 +707,21 @@ function drawOverlays(wrap) {
     });
   }
 }
-/* 块 bbox 统一解析：DB 存的是扁平 [x0,y0,x1,y1]；兼容列表 [[...],[...]]（跨栏/多框块）。
-   注意：不要直接对扁平数组用 .forEach 取框——那会把 4 个数字当框迭代，算出 NaN 尺寸。 */
-function parseBoxes(bbox) {
+/* 块 bbox 统一解析：DB 存的是扁平 [x0,y0,x1,y1]；兼容列表 [[...],[...]]（跨栏/跨页段落）。
+   注意：不要直接对扁平数组用 .forEach 取框——那会把 4 个数字当框迭代，算出 NaN 尺寸。
+   返回 [{box:[x0,y0,x1,y1], page:页码}]：bbox_pages 缺省时全部落在 block.page_index。 */
+function parseBoxes(bbox, bboxPages, blk) {
   if (!bbox) return [];
   let v; try { v = JSON.parse(bbox); } catch { return []; }
   if (!Array.isArray(v) || v.length === 0) return [];
-  if (typeof v[0] === 'number') return v.length >= 4 ? [[v[0], v[1], v[2], v[3]]] : [];
-  return v.filter(b => Array.isArray(b) && b.length >= 4);
+  let boxes;
+  if (typeof v[0] === 'number') boxes = (v.length >= 4) ? [v] : [];
+  else boxes = v.filter(b => Array.isArray(b) && b.length >= 4);
+  let pages = null;
+  if (bboxPages) { try { pages = JSON.parse(bboxPages); } catch { pages = null; } }
+  if (!Array.isArray(pages)) pages = null;
+  const dflt = blk && Number.isFinite(+blk.page_index) ? +blk.page_index : 0;
+  return boxes.map((b, i) => ({box: b, page: (pages && pages[i] != null) ? +pages[i] : dflt}));
 }
 function pdfScrollToPage(n, noFollow) {
   const wrap = _pdfBuilt?.wraps?.get(n - 1);
@@ -744,17 +753,29 @@ function ensureCurrentRendered() {
     renderOneWrap(w);
   }
 }
-/* 右侧段落 → PDF：在该块所在页立即画高亮框（页未渲染则先渲染，渲染完自动带出） */
+/* 右侧段落 → PDF：在该块所在页立即画高亮框（页未渲染则先渲染，渲染完自动带出）。
+   跨页段落会在它涉及的每一页都画（每页各一个框）。 */
 function highlightBlockOnPdf(blkEl) {
   const pg = parseInt(blkEl?.dataset.page ?? '-1');
   if (!Number.isFinite(pg) || pg < 0) return;
-  const wrap = _pdfBuilt?.wraps?.get(pg);
-  if (!wrap) return;
-  if (wrap.dataset.rendered !== '1' || wrap._scale !== state.scale) {
-    renderOneWrap(wrap);      // 未渲染 → 渲染完成后 drawOverlays 会画出高亮
-  } else {
-    redrawHl();               // 已渲染 → 直接重画覆盖层（不重绘位图）
+  // 收集该段落涉及的所有页（跨页段落：首段所在页 + 续文所在页）
+  const pages = new Set([pg]);
+  const blk = state.blocks.find(x => x.block_id === blkEl?.dataset.bid);
+  if (blk) {
+    for (const {page} of parseBoxes(blk.bbox, blk.bbox_pages, blk)) pages.add(page);
   }
+  let needsRedraw = false;
+  for (const p of pages) {
+    const wrap = _pdfBuilt?.wraps?.get(p);
+    if (!wrap) continue;
+    if (wrap.dataset.rendered !== '1' || wrap._scale !== state.scale) {
+      wrap.dataset.rendered = '1';
+      renderOneWrap(wrap);      // 未渲染 → 渲染完成后 drawOverlays 会画出高亮
+    } else {
+      needsRedraw = true;
+    }
+  }
+  if (needsRedraw) redrawHl();   // 已渲染 → 直接重画覆盖层（不重绘位图）
 }
 
 /* 内容视图（统一走 switchView，保证 mainView/view 两级状态一致） */
@@ -926,13 +947,13 @@ function renderContentView() {
     for (const p of state.pairs) {
       const enHtml = renderBlockBody(p);
       if (p.type === 'image' || p.type === 'equation') {
-        if (enHtml) rows.push(`<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${enHtml}</div>`);
+        if (enHtml) rows.push(`<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${enHtml}</div>`);
         continue;   // 图/公式无对应译文行
       }
       if (!p.zh) continue;   // 未翻译段：不渲染空壳
       const isTitle = p.type === 'title';
-      rows.push(`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${renderBlockBody(p)}</div>
-        <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}">${katexify(esc(p.zh))}</div>`);
+      rows.push(`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${renderBlockBody(p)}</div>
+        <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${katexify(esc(p.zh))}</div>`);
     }
     el.innerHTML = '<div class="pairs">' + rows.join('') + '</div>';
   } else if (state.view === 'zh') {
@@ -945,12 +966,14 @@ function renderContentView() {
     }
     const zh = state.pairs.filter(p => p.zh);
     el.innerHTML = zh.length ? zh.map(p =>
-      `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}'>${esc(p.zh)}</div>`).join('')
+      `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${esc(p.zh)}</div>`).join('')
       : '<p class="muted">尚无中文译文。</p>';
   } else {  // orig
-    el.innerHTML = state.blocks.map(b => {
-      const aux = ['page_number', 'footer', 'header', 'aside_text', 'page_footnote'].includes(b.type) ? ' blk-aux' : '';
-      return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}'>
+    // 页眉/页码是版面噪声（MinerU 官网 markdown 同样不带），正文流里不显示
+    const CHROME = ['page_number', 'footer', 'header'];
+    el.innerHTML = state.blocks.filter(b => !CHROME.includes(b.type)).map(b => {
+      const aux = ['aside_text', 'page_footnote'].includes(b.type) ? ' blk-aux' : '';
+      return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' data-bbox-pages='${esc(b.bbox_pages ?? '')}'>
         ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
       </div>`;}).join('');
   }

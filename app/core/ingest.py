@@ -180,17 +180,23 @@ def build_blocks(paper_id: str, run_id: str, middle_json: dict) -> int:
     - 顶层 block.index 唯一严格递增；PDF 块带归一化 bbox [0,1]
     - 标题层级 doc_title=1, paragraph_title=2..6 → 维护 section_path
 
-    跨栏续文合并：MinerU 用 block.continues_prev 标记「本块是上一段的续文」
-    （双栏排版时同一段落被栏边界切开）。官网 markdown 渲染层据此把续文并回前一段，
-    我们同样在入库时合并，否则同一段会显示成两段。
-    合并后 bbox 变成多框列表 [[框1],[框2]]，前端 parseBoxes() 兼容。
+    跨页/跨栏续文合并：MinerU 用 block.continues_prev 标记「本块是上一段的续文」
+    ——同一段落被栏边界或页边界切开时，续文块带此标记。MinerU 官网的 markdown 输出
+    据此把续文并回前一段（我们核对过 markdown.md：跨页段落是一段连贯文本）。
+    我们在入库时同样合并，否则同一段会显示成两段、翻译也会被切成两半。
+
+    合并后 bbox 变成多框列表 [[框1],[框2]]，前端 parseBoxes() 兼容；
+    跨页时两个框分属不同页 → bbox_pages 记录每个框的页码，
+    前端据此把框画到各自的页上（否则第二页的框会画错页）。
     """
     rows: list[dict] = []
     section_stack: list[tuple[int, str]] = []  # (level, title)
+    last_text: dict | None = None   # 最近一个可续接的正文块（被标题/图表打断则置 None）
 
     def current_section() -> str:
         return " > ".join(t for _, t in section_stack) if section_stack else ""
 
+    # 页眉/页码等版面噪声不打断续接关系（它们常夹在续文块前面）
     for page in middle_json.get("pages", []):
         page_idx = int(page.get("page_idx", 0))
         for block in page.get("blocks", []):
@@ -215,16 +221,16 @@ def build_blocks(paper_id: str, run_id: str, middle_json: dict) -> int:
                         asset = sub.get("image_path") or None
                         break
 
-            # ---- 跨栏续文 → 并入前一个正文块 ----
+            # ---- 续文 → 并入前一个正文块（同页跨栏 / 跨页都并） ----
             anchored = bool((block.get("anchor") or "").strip())
-            prev = rows[-1] if rows else None
             if (block.get("continues_prev") is True and not anchored
-                    and btype == "text" and prev is not None
-                    and prev["type"] == "text" and prev["page"] == page_idx):
+                    and btype == "text" and last_text is not None):
+                prev = last_text
                 prev["text"] = (prev["text"] + " " + text).strip() if text else prev["text"]
                 prev["source_hash"] = sha256_bytes(prev["text"].encode())[:16]
                 if bbox:
                     prev["boxes"] = prev["boxes"] + [list(bbox)]
+                    prev["box_pages"] = prev["box_pages"] + [page_idx]
                 continue
 
             # MinerU 的 index 每页独立编号 → block_id 含页号；不含 run → 重解析后译文/批注仍匹配
@@ -234,21 +240,31 @@ def build_blocks(paper_id: str, run_id: str, middle_json: dict) -> int:
                 "type": normalized, "section": current_section(),
                 "page": page_idx, "index": idx,
                 "boxes": [list(bbox)] if bbox else [],
+                "box_pages": [page_idx] if bbox else [],
                 "text": text, "source_hash": sha256_bytes(text.encode())[:16],
                 "asset": asset,
             })
+            # 只有正文块可被续接。浮动图表（image/table/chart）夹在段落中间
+            # 不打断续接——MinerU 官网 markdown 同样把跨页段落并成一段、
+            # 浮动体排在其后；标题是分节边界，必须打断。
+            if btype == "text":
+                last_text = rows[-1]
+            elif btype in ("doc_title", "paragraph_title"):
+                last_text = None
 
     db_rows = [
         (r["paper_id"], r["run_id"], r["block_id"], r["type"], r["section"],
          r["page"], r["index"],
          json.dumps(r["boxes"][0] if len(r["boxes"]) == 1 else r["boxes"]) if r["boxes"] else None,
+         json.dumps(r["box_pages"]) if len(r["box_pages"]) > 1 else None,
          r["text"], r["source_hash"], r["asset"])
         for r in rows
     ]
     with db.write() as c:
         c.executemany(
             "INSERT OR REPLACE INTO blocks(paper_id,parse_run_id,block_id,type,section_path,"
-            "page_index,block_index,bbox,text,source_hash,asset_path) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "page_index,block_index,bbox,bbox_pages,text,source_hash,asset_path) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             db_rows,
         )
     return len(db_rows)

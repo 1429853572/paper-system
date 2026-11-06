@@ -205,14 +205,14 @@ def bilingual_pairs(paper_id: str, run_id: str, cache_key: str | None = None) ->
     }
     pairs = []
     for r in db.all(
-        "SELECT block_id, type, section_path, text, page_index, asset_path FROM blocks "
+        "SELECT block_id, type, section_path, text, page_index, asset_path, bbox, bbox_pages FROM blocks "
         "WHERE parse_run_id=? ORDER BY page_index, block_index",
         (run_id,),
     ):
         pairs.append({
             "block_id": r["block_id"], "type": r["type"], "section_path": r["section_path"],
             "page_index": r["page_index"], "en": r["text"], "zh": zh_map.get(r["block_id"], ""),
-            "asset_path": r["asset_path"],
+            "asset_path": r["asset_path"], "bbox": r["bbox"], "bbox_pages": r["bbox_pages"],
         })
     return pairs
 

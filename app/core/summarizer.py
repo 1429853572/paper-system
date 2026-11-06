@@ -151,10 +151,13 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
     evidence_out = [e for e in evidence if e["evidence_id"] in cited]
 
     cache_key = compute_key(run["id"], cfg.model)
+    # 证据一并落库：导读重新加载后引用仍可点击跳转（此前只存 sections，
+    # 刷新页面后 [n] 变成死文本、下方证据列表也消失）。
     with db.write() as c:
         cur = c.execute(
             "INSERT INTO summaries(paper_id,cache_key,content,model,created_by) VALUES(?,?,?,?,?)",
-            (paper_id, cache_key, json.dumps({"sections": by_key}, ensure_ascii=False),
+            (paper_id, cache_key,
+             json.dumps({"sections": by_key, "evidence": evidence_out}, ensure_ascii=False),
              cfg.model, user["id"]),
         )
         sid = cur.lastrowid
