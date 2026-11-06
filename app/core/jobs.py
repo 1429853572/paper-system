@@ -506,7 +506,7 @@ class Scheduler:
         log.info("每日备份完成: db/papers 各保留 %d 份", keep)
 
     def hard_delete_paper(self, paper_id: str) -> None:
-        """彻底删除：文件 + 级联行（FK ON DELETE CASCADE 处理表内引用）。"""
+        """彻底删除：文件 + 级联行（FK CASCADE 之外的无外键表显式清理）。"""
         import shutil
 
         d = ingest.PAPERS_DIR / paper_id
@@ -515,7 +515,12 @@ class Scheduler:
         with db.write() as c:
             c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (paper_id,))
             c.execute("DELETE FROM llm_calls WHERE paper_id=?", (paper_id,))
+            # 无外键的两张表：孤儿行会永久泄漏并污染统计
+            c.execute("DELETE FROM section_summaries WHERE paper_id=?", (paper_id,))
+            c.execute("DELETE FROM jobs WHERE paper_id=?", (paper_id,))
             c.execute("DELETE FROM papers WHERE id=?", (paper_id,))
+        from .retrieval import invalidate_vec_cache
+        invalidate_vec_cache()
 
     # ---- 管理 ----
     def pause_resume(self, job_type: str, pause: bool) -> None:

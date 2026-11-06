@@ -315,9 +315,16 @@ class Database:
             elif row["version"] < SCHEMA_VERSION:
                 self._migrate(c, row["version"])
             self._ensure_columns(c)   # 幂等兜底：任何形态的库都补齐列（新装/老库/中途版本）
-            # 部分索引依赖 deleted_at，放在列补齐之后建（任意形态旧库都不炸）
+            # 依赖兜底列的索引放在列补齐之后建（任意形态旧库都不炸）
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_hash "
                       "ON papers(file_hash) WHERE deleted_at IS NULL")
+            # 高频查询索引：文库列表排序 / statuses 按论文聚合 / 用量按论文聚合
+            c.execute("CREATE INDEX IF NOT EXISTS idx_papers_list "
+                      "ON papers(deleted_at, created_at DESC)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_paper "
+                      "ON jobs(paper_id, job_type, status)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_llm_calls_paper "
+                      "ON llm_calls(paper_id)")
             # WAL 常开
             c.execute("PRAGMA journal_mode=WAL")
 
@@ -353,9 +360,19 @@ class Database:
 
     # ---- 备份（在线一致性快照） ----
     def backup_to(self, dest: Path) -> None:
+        """独立连接 + sqlite3 backup API：不占全局写锁（VACUUM INTO 会在
+        写锁内执行，备份的数十秒里所有业务写全部阻塞）。"""
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with self.write() as c:
-            c.execute("VACUUM INTO ?", (str(dest),))
+        src = sqlite3.connect(self._path, timeout=30)
+        try:
+            src.execute("PRAGMA busy_timeout=10000")
+            dst = sqlite3.connect(str(dest))
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
 
     # ---- 常用辅助 ----
     def one(self, sql: str, args: tuple = ()) -> sqlite3.Row | None:

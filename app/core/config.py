@@ -40,6 +40,7 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "fulltext_max_tokens": 200000,
         "multi_paper_max": 10,
         "context_char_budget": 90000,
+        "smart_top_sections": 3,   # smart 模式喂入的命中章节数
     },
     "retention": {"trash_days": 30, "backup_keep": 7},
     "rerank": {"enabled": False, "base_url": "http://xinference:9997",

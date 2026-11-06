@@ -1534,6 +1534,10 @@ def reindex_paper(paper_id: str, request: Request):
     _require_owner(u, p)   # 重建索引会重建 parse_run 结构
     try:
         n_blocks, n_chunks = ingest.rebuild_from_stored(paper_id)
+        from core.retrieval import invalidate_vec_cache
+        from core.translator import invalidate_block_cache
+        invalidate_vec_cache()   # chunks 已重建，向量矩阵缓存作废
+        invalidate_block_cache()  # rebuild 复用同一 run_id 重建 blocks → 可翻译块缓存作废
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"重建失败：{e}")
     scheduler.enqueue(u["id"], "embed_backfill", paper_id, {}, priority="background")

@@ -36,8 +36,25 @@ def compute_cache_key(source_hashes: str, model: str, gl_ver: str, lang: str = "
     return h.hexdigest()
 
 
+_tb_cache: dict[str, list[dict]] = {}   # run_id → 可翻译块（done run 的 blocks 不可变，可长期缓存）
+
+
+def invalidate_block_cache(run_id: str | None = None) -> None:
+    """rebuild_from_stored 复用 run_id 重建 blocks 后调用（reindex 端点）。"""
+    if run_id is None:
+        _tb_cache.clear()
+    else:
+        _tb_cache.pop(run_id, None)
+
+
 def _translatable_blocks(paper_id: str, run_id: str) -> list[dict]:
-    """取可翻译块：跳过公式/图片；References 小节之后跳过。"""
+    """取可翻译块：跳过公式/图片；References 小节之后跳过。
+
+    jobstate 轮询/批量翻译会高频调用——按 run_id 缓存（blocks 随 run 不可变）。
+    """
+    hit = _tb_cache.get(run_id)
+    if hit is not None:
+        return hit
     rows = db.all(
         "SELECT block_id, type, section_path, text, source_hash FROM blocks "
         "WHERE parse_run_id=? ORDER BY page_index, block_index",
@@ -57,6 +74,7 @@ def _translatable_blocks(paper_id: str, run_id: str) -> list[dict]:
         if b["type"] == "title" and not b["text"].strip():
             continue
         out.append(b)
+    _tb_cache[run_id] = out
     return out
 
 
@@ -157,7 +175,6 @@ def translate_paper(user_id: int, paper_id: str, run_id: str,
     batches = _build_batches(blocks)
     gl_block = glossary_block()
     done = 0
-    rows: list[tuple] = []
     for bi, batch in enumerate(batches):
         if cancel_check and cancel_check():
             break  # 外部取消：保留已完成段落，退出
@@ -175,20 +192,19 @@ def translate_paper(user_id: int, paper_id: str, run_id: str,
                 import logging
                 logging.getLogger("translator").warning(
                     "段落未获得译文（保留原文）: %s", b["block_id"])
-        for b in batch:
-            zh = got.get(b["block_id"], "")
-            rows.append((paper_id, run_id, cache_key, b["block_id"], zh,
-                         cfg.model, user_id))
+        # 每批立即落库（INSERT OR REPLACE 幂等）：中途异常/重启不丢已完成批次
+        rows = [(paper_id, run_id, cache_key, b["block_id"], got.get(b["block_id"], ""),
+                 cfg.model, user_id) for b in batch]
+        with db.write() as c:
+            c.executemany(
+                "INSERT OR REPLACE INTO translations(paper_id,parse_run_id,cache_key,block_id,"
+                "text_zh,model,created_by) VALUES(?,?,?,?,?,?,?)",
+                rows,
+            )
         done += len(batch)
         if progress_cb:
             progress_cb(done, len(blocks))
 
-    with db.write() as c:
-        c.executemany(
-            "INSERT OR REPLACE INTO translations(paper_id,parse_run_id,cache_key,block_id,text_zh,"
-            "model,created_by) VALUES(?,?,?,?,?,?,?)",
-            rows,
-        )
     return done
 
 

@@ -43,11 +43,14 @@ def _estimate_tokens(text: str | int) -> int:
     return int(n / 3.5)
 
 
-def _build_context(mode: str, papers: list[dict], question: str,
-                   user: dict) -> tuple[str, list[dict], bool]:
+def _build_context(mode: str, papers: list[dict], question: str, user: dict,
+                   blocks_by_paper: dict[str, list[dict]] | None = None,
+                   qvec=None) -> tuple[str, list[dict], bool]:
     """返回 (context_text, evidence_list, truncated)。
 
     evidence: [{evidence_id, paper_id, title, page_index, block_id, text}]
+    blocks_by_paper: 调用方已加载的 blocks 缓存（避免一次提问重复全量加载）；
+    qvec: 问题向量（多篇 smart 模式只算一次 embedding）。
     """
     budget = int(config.get("qa", "context_char_budget"))
     if mode == "fulltext":
@@ -58,30 +61,72 @@ def _build_context(mode: str, papers: list[dict], question: str,
     parts: list[str] = []
     used = 0
     truncated = False
+    blocks_by_paper = blocks_by_paper or {}
+
+    def _blocks(pid: str) -> list[dict]:
+        blocks = blocks_by_paper.get(pid)
+        if blocks is None:
+            blocks = _paper_blocks(pid)
+            blocks_by_paper[pid] = blocks
+        return blocks
+
+    def _add(p: dict, page_index: int, block_id: str, line: str, text: str) -> bool:
+        """追加一条证据；超预算返回 False（调用方停止本篇）。"""
+        nonlocal used
+        eid = len(evidence) + 1
+        evidence.append({
+            "evidence_id": eid, "paper_id": p["id"], "title": p["title"],
+            "page_index": page_index, "block_id": block_id,
+            "text": text,
+        })
+        parts.append(line)
+        used += len(line)
+        return True
 
     if mode == "fulltext":
         for p in papers:
-            blocks = _paper_blocks(p["id"])
-            paper_used = 0
-            paper_parts = [f"=== 论文: {p['title']} (paper_id={p['id']}) ==="]
-            for b in blocks:
+            parts.append(f"=== 论文: {p['title']} (paper_id={p['id']}) ===")
+            for b in _blocks(p["id"]):
                 t = b["text"].strip()
                 if not t:
                     continue
                 line = f"[{p['id']}|p{b['page_index'] + 1}|{b['block_id']}] ({b['section_path']}) {t}"
-                if used + paper_used + len(line) > budget:
+                if used + len(line) > budget:
                     truncated = True
                     break
-                eid = len(evidence) + 1
-                evidence.append({
-                    "evidence_id": eid, "paper_id": p["id"], "title": p["title"],
-                    "page_index": b["page_index"], "block_id": b["block_id"],
-                    "text": t,   # 全文保留（done 事件只下发被引用项；数字接地需要全文）
-                })
-                paper_parts.append(line)
-                paper_used += len(line)
-            parts.extend(paper_parts)
-            used += paper_used
+                # 全文保留（done 事件只下发被引用项；数字接地需要全文）
+                _add(p, b["page_index"], b["block_id"], line, t)
+    elif mode == "smart":
+        # 两段式：章节摘要定位 → 只喂命中章节的原文（质量≈全文，token≈检索）。
+        # 注意 pick_relevant_sections 只查最新 done run 的摘要。
+        from .summarizer import pick_relevant_sections
+        top_secs = int(config.get("qa", "smart_top_sections") or 3)
+        for p in papers:
+            blocks = _blocks(p["id"])
+            secs = pick_relevant_sections(p["id"], question, top_k=top_secs, qvec=qvec)
+            chosen = {s["section_path"] for s in secs}
+            sel = [b for b in blocks if (b["section_path"] or "").strip() in chosen]
+            if not sel:   # 无命中章节（太短被跳过等）→ 单篇检索兜底
+                hits = search(question, user_id=user["id"],
+                              is_admin=user["role"] == "admin", paper_ids=[p["id"]], top_k=6)
+                parts.append(f"=== 论文: {p['title']} (paper_id={p['id']}) ===")
+                for h in hits:
+                    line = f"[{p['id']}|p{h['page_index'] + 1}|{json.loads(h['block_ids'])[0]}] {h['text'][:800]}"
+                    if used + len(line) > budget:
+                        truncated = True
+                        break
+                    _add(p, h["page_index"], json.loads(h["block_ids"])[0], line, h["text"])
+                continue
+            parts.append(f"=== 论文: {p['title']} (paper_id={p['id']}) ===")
+            for b in sel:
+                t = b["text"].strip()
+                if not t:
+                    continue
+                line = f"[{p['id']}|p{b['page_index'] + 1}|{b['block_id']}] ({b['section_path']}) {t}"
+                if used + len(line) > budget:
+                    truncated = True
+                    break
+                _add(p, b["page_index"], b["block_id"], line, t)
     else:  # retrieval
         paper_ids = [p["id"] for p in papers]
         per_paper = max(3, 12 // max(1, len(papers)))
@@ -156,6 +201,7 @@ def answer(user: dict, question: str, paper_ids: list[str], mode: str = "auto") 
         raise ValueError(f"跨论文对比最多 {multi_max} 篇")
 
     papers = []
+    blocks_by_paper: dict[str, list[dict]] = {}
     for pid in paper_ids:
         p = db.one(
             "SELECT id, title, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL",
@@ -165,22 +211,39 @@ def answer(user: dict, question: str, paper_ids: list[str], mode: str = "auto") 
             raise ValueError(f"论文 {pid} 不存在")
         if p["visibility"] == "private" and p["owner_id"] != user["id"] and user["role"] != "admin":
             raise ValueError(f"无权访问论文 {pid}")
-        if not _paper_blocks(pid):
+        blocks = _paper_blocks(pid)
+        if not blocks:
             raise ValueError(f"论文 {p['title']} 尚未解析完成")
+        blocks_by_paper[pid] = blocks   # 一次加载，存在性检查/估算/构建上下文三处复用
         papers.append(dict(p))
 
-    from .summarizer import pick_relevant_sections
     if mode == "auto":
-        # 两段式优先（有章节摘要 → 只喂命中章节，省 60~80% token）；
+        # 两段式优先（最新 done run 有章节摘要 → 只喂命中章节，省 60~80% token）；
         # 无摘要则全文直读（整体理解最好）；总量超预算再降级为检索取证
-        has_sum = bool(pick_relevant_sections(papers[0]["id"], "warmup", top_k=1)) if papers else False
+        latest_run = db.one(
+            "SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
+            "ORDER BY created_at DESC LIMIT 1", (papers[0]["id"],))
+        has_sum = bool(latest_run and db.one(
+            "SELECT 1 FROM section_summaries WHERE paper_id=? AND run_id=? LIMIT 1",
+            (papers[0]["id"], latest_run["id"])))
         mode = "smart" if has_sum else "fulltext"
     if mode == "fulltext":
-        total = sum(len(b["text"]) for p2 in papers for b in _paper_blocks(p2["id"]))
+        total = sum(len(b["text"]) for pid in paper_ids for b in blocks_by_paper[pid])
         if _estimate_tokens(total) > int(config.get("qa", "fulltext_max_tokens")):
             mode = "retrieval"
 
-    context, evidence, truncated = _build_context(mode, papers, question, user)
+    qvec = None
+    if mode == "smart":
+        # 问题向量只算一次（多篇共享）；embedding 不可用 → 降级检索
+        try:
+            import numpy as np
+            from .retrieval import embed_texts
+            qvec = np.array(embed_texts([question])[0], dtype=np.float32)
+        except Exception:  # noqa: BLE001
+            mode = "retrieval"
+
+    context, evidence, truncated = _build_context(mode, papers, question, user,
+                                                  blocks_by_paper, qvec)
     # 多篇 → 附对比规则（副本，避免污染模块常量）
     system = SYSTEM + (COMPARE_ADDENDUM if len(papers) >= 2 else "")
     return {"cfg": cfg, "mode": mode, "context": context, "evidence": evidence,

@@ -8,11 +8,13 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
 import struct
+import time
 from typing import Any
 
 import httpx
@@ -143,7 +145,40 @@ def backfill_embeddings(paper_id: str, progress_cb=None) -> int:
         done += len(part)
         if progress_cb:
             progress_cb(done, len(rows))
+    invalidate_vec_cache()
     return done
+
+
+# ---- 向量矩阵缓存（检索热路径：免每次全库 SELECT + 逐条 unpack） ----
+# key → (monotonic时间, 归一化矩阵, chunk_ids)；embedding 只在回填/重建时变化，
+# TTL 兜底 + backfill/reindex 主动失效。
+_vec_cache: dict[str, tuple[float, np.ndarray, np.ndarray]] = {}
+_VEC_TTL = 600.0
+
+
+def invalidate_vec_cache() -> None:
+    """embedding 数据变化后调用，下次检索重建矩阵缓存。"""
+    _vec_cache.clear()
+
+
+def _load_matrix(scope_key: str, sql: str, args: tuple) -> tuple[np.ndarray, np.ndarray]:
+    """按 scope 缓存归一化向量矩阵。返回 (ids, mat)。维度不符的行（换模型残留）跳过。"""
+    hit = _vec_cache.get(scope_key)
+    now = time.monotonic()
+    if hit and now - hit[0] < _VEC_TTL:
+        return hit[1], hit[2]
+    rows = db.all(sql, args)
+    kept_rows = [r for r in rows if len(r["embedding"]) == EMBED_DIMS * 4]
+    if kept_rows:
+        ids = np.array([int(r["id"]) for r in kept_rows], dtype=np.int64)
+        mat = np.stack([np.frombuffer(r["embedding"], dtype="<f4") for r in kept_rows])
+        mat = np.ascontiguousarray(mat, dtype=np.float32)
+        mat = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9)
+    else:
+        ids = np.array([], dtype=np.int64)
+        mat = np.zeros((0, EMBED_DIMS), dtype=np.float32)
+    _vec_cache[scope_key] = (now, mat, ids)
+    return mat, ids
 
 
 # ---- 检索 ----
@@ -188,22 +223,23 @@ def search(query: str, *, user_id: int, is_admin: bool,
     except Exception:
         fts_ids = []
 
-    # 2) 向量余弦
+    # 2) 向量余弦（矩阵缓存：同 scope 重复查询免反序列化）
     vec_ids: list[int] = []
     try:
         qvec = np.array(embed_texts([query])[0], dtype=np.float32)
         qn = qvec / (np.linalg.norm(qvec) + 1e-9)
-        rows = db.all(
+        scope_src = ("all" if is_admin else f"u{user_id}") + "|" + ",".join(sorted(paper_ids or []))
+        scope_key = hashlib.md5(scope_src.encode()).hexdigest()
+        mat, ids = _load_matrix(
+            scope_key,
             "SELECT c.id, c.embedding FROM chunks c JOIN papers p ON p.id=c.paper_id "
             f"WHERE c.embedding IS NOT NULL{vis_clause.replace('visibility', 'p.visibility').replace('owner_id', 'p.owner_id')}{paper_clause}",
             (*vis_args, *paper_args),
         )
-        if rows:
-            mat = np.stack([_unpack(r["embedding"]) for r in rows])
-            mat = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9)
+        if len(ids) and mat.shape[1] == len(qn):
             sims = mat @ qn
             order = np.argsort(-sims)[:k]
-            vec_ids = [int(rows[i]["id"]) for i in order]
+            vec_ids = [int(ids[i]) for i in order]
     except Exception:
         vec_ids = []
 

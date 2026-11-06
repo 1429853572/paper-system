@@ -501,7 +501,12 @@ $('#batch-move').onchange = async e => {
 };
 
 /* 搜索 + 快捷范围 chips */
-$('#lib-search').oninput = e => { state.q = e.target.value; loadPapers(); };
+let _libSearchTimer = 0;
+$('#lib-search').oninput = e => {   // 300ms 防抖：大库逐键触发全文检索会请求风暴
+  state.q = e.target.value;
+  clearTimeout(_libSearchTimer);
+  _libSearchTimer = setTimeout(loadPapers, 300);
+};
 $$('#scope-chips .chip-btn').forEach(b => b.addEventListener('click', () => {
   const s = b.dataset.scope;
   state.scope = state.scope === s ? '' : s;      // 再点取消
@@ -567,11 +572,12 @@ async function openPaper(id) {
   state._metaEdit = false;   // 文献信息卡的内联编辑态
   state.showLayout = false; $('#layout-btn')?.classList.remove('on');   // 布局框不跨篇残留
   refreshJobState();   // 先取完整标志
-  loadBilingual(id).then(() => {   // 翻译完成才默认双语；未完成/未开始停在原文
+  loadBilingual(id, false).then(() => {   // 翻译完成才默认双语；未完成/未开始停在原文
+    // 渲染只此一次（原先 openPaper 链路全量渲染 ×3：loadBilingual 内、then 内、下方直调）
     if (state.translatedComplete && state.view === 'orig') switchView('read', 'bilingual');
     else renderContentView();
     restorePos(id);
-  });
+  }).catch(() => {});
   renderContentView();
   refreshJobState();          // 解析/翻译控制按钮状态
   // 问答 scope 跟随当前论文（用户显式多选了其他论文则保留）
@@ -778,14 +784,18 @@ function parseBoxes(bbox) {
   return v.filter(b => Array.isArray(b) && b.length >= 4);
 }
 /* 带页码的框：跨页段落有多个框、分属不同页（bbox_pages 与 bbox 一一对应）。
-   bbox_pages 缺省时所有框都落在 block.page_index。 */
+   bbox_pages 缺省时所有框都落在 block.page_index。
+   结果 memo 在块对象上（drawOverlays 每页×每块高频调用，免重复 JSON.parse）。 */
 function parseBoxPages(bbox, bboxPages, blk) {
+  if (blk && blk._boxes) return blk._boxes;
   const boxes = parseBoxes(bbox);
   let pages = null;
   if (bboxPages) { try { pages = JSON.parse(bboxPages); } catch { pages = null; } }
   if (!Array.isArray(pages)) pages = null;
   const dflt = blk && Number.isFinite(+blk.page_index) ? +blk.page_index : 0;
-  return boxes.map((b, i) => ({box: b, page: (pages && pages[i] != null) ? +pages[i] : dflt}));
+  const out = boxes.map((b, i) => ({box: b, page: (pages && pages[i] != null) ? +pages[i] : dflt}));
+  if (blk) blk._boxes = out;
+  return out;
 }
 function pdfScrollToPage(n, noFollow) {
   const wrap = _pdfBuilt?.wraps?.get(n - 1);
@@ -844,12 +854,12 @@ function highlightBlockOnPdf(blkEl) {
 
 /* 内容视图（统一走 switchView，保证 mainView/view 两级状态一致） */
 $$('.view-tabs [data-v]').forEach(b => b.onclick = () => switchView(b.dataset.v));
-async function loadBilingual(id) {
+async function loadBilingual(id, render = true) {
   try {
     const d = await api(`/api/papers/${id}/bilingual`);
     state.pairs = d.pairs; state.versions = d.versions;
     $('#version-select').hidden = true;   // 只展示最新一份（历史版本保留在库，不占界面）
-    renderContentView();
+    if (render) renderContentView();
   } catch { state.pairs = []; }
 }
 $('#version-select').onchange = e => {
@@ -988,6 +998,61 @@ function switchView(v, s) {
   $$('.r-subtabs [data-s]').forEach(x => x.classList.toggle('on', x.dataset.s === state.view));
   renderContentView();
 }
+/* 行 HTML 生成（renderContentView 与增量追加共用，避免追加时全量重渲染） */
+const CHROME_TYPES = ['page_number', 'footer', 'header'];   // 页眉/页码是版面噪声，正文流不显示
+
+function blockRowHtml(b) {
+  const aux = ['aside_text', 'page_footnote'].includes(b.type) ? ' blk-aux' : '';
+  return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' data-bbox-pages='${esc(b.bbox_pages ?? '')}'>
+    ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
+  </div>`;
+}
+
+function pairRowsHtml(p) {
+  const enHtml = renderBlockBody(p);
+  const attrs = `data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'`;
+  if (p.type === 'image' || p.type === 'equation') {
+    // 图/公式无对应译文行，只出一份（在 en 行）
+    return enHtml ? [`<div class="pair en blk" ${attrs}>${enHtml}</div>`] : [];
+  }
+  if (!p.zh) return [];   // 未翻译段：不渲染空壳
+  const isTitle = p.type === 'title';
+  return [`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" ${attrs}>${enHtml}</div>`,
+    `<div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" ${attrs}>${katexify(esc(p.zh))}</div>`];
+}
+
+function loadHintHtml(txt) {
+  return `<p id="load-more-hint" class="muted" style="text-align:center;padding:10px">继续下滑加载更多…（已加载 ${txt}）</p>`;
+}
+
+/* 增量追加：只把新行插到容器尾部，不重建已渲染内容（长论文滚动不再 O(n²)） */
+function appendRows(rowsHtml, hasMore, hintTxt) {
+  const el = $('#content-view');
+  $('#load-more-hint')?.remove();
+  const wrap = $('.pairs', el);
+  (state.view === 'bilingual' && wrap ? wrap : el).insertAdjacentHTML('beforeend', rowsHtml);
+  if (hasMore) el.insertAdjacentHTML('beforeend', loadHintHtml(hintTxt));
+  bindBlkClicks(el);
+  figCropPass();   // 幂等（dataset.done 守卫），只处理新图
+  // 追加后仍在底部附近 → 续拉（一次追加可能没填满视口）
+  if (hasMore && el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
+    (state.view === 'bilingual' || state.view === 'zh' ? loadMorePairs : loadMoreBlocks)();
+  }
+}
+
+function bindBlkClicks(el) {
+  // 段落点击 → 跳页 + 高亮（重复绑定无害：onclick 覆盖式赋值）
+  $$('.blk', el).forEach(x => x.onclick = e => {
+    $$('.blk.active').forEach(y => { y.classList.remove('active'); y.style.removeProperty('--hlc'); });
+    applyActiveStyle(x);
+    const page = parseInt(x.dataset.page ?? '0') + 1;
+    if (state.pdfDoc && page >= 1 && page <= state.pdfDoc.numPages) {
+      state.pageNum = page; renderPage();
+    }
+    highlightBlockOnPdf(x);   // 右侧 → PDF：立刻在该页画出高亮框
+  });
+}
+
 function renderContentView() {
   const el = $('#content-view');
   if (!state.current) { el.innerHTML = '<p class="muted">选择左侧论文开始阅读</p>'; return; }
@@ -1013,22 +1078,9 @@ function renderContentView() {
       </div>`;
       return;
     }
-    // 双语渲染：图表/公式只出一份（在 en 行）；无译文的行整行跳过——不留空壳占位
-    const rows = [];
-    for (const p of state.pairs) {
-      const enHtml = renderBlockBody(p);
-      if (p.type === 'image' || p.type === 'equation') {
-        if (enHtml) rows.push(`<div class="pair en blk" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${enHtml}</div>`);
-        continue;   // 图/公式无对应译文行
-      }
-      if (!p.zh) continue;   // 未翻译段：不渲染空壳
-      const isTitle = p.type === 'title';
-      rows.push(`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${renderBlockBody(p)}</div>
-        <div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${katexify(esc(p.zh))}</div>`);
-    }
+    const rows = state.pairs.flatMap(pairRowsHtml);
     el.innerHTML = '<div class="pairs">' + rows.join('') + '</div>' +
-      (state._biOffset < (state._biTotal || 0)
-        ? `<p class="muted" style="text-align:center;padding:10px">继续下滑加载更多…（已加载 ${state._biOffset}/${state._biTotal}）</p>` : '');
+      (state._biOffset < (state._biTotal || 0) ? loadHintHtml(`${state._biOffset}/${state._biTotal}`) : '');
   } else if (state.view === 'zh') {
     if (!state.translatedComplete) {
       el.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px">
@@ -1042,15 +1094,8 @@ function renderContentView() {
       `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${esc(p.zh)}</div>`).join('')
       : '<p class="muted">尚无中文译文。</p>';
   } else {  // orig
-    // 页眉/页码是版面噪声（MinerU 官网 markdown 同样不带），正文流里不显示
-    const CHROME = ['page_number', 'footer', 'header'];
-    el.innerHTML = state.blocks.filter(b => !CHROME.includes(b.type)).map(b => {
-      const aux = ['aside_text', 'page_footnote'].includes(b.type) ? ' blk-aux' : '';
-      return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' data-bbox-pages='${esc(b.bbox_pages ?? '')}'>
-        ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
-      </div>`;}).join('') +
-      (state._blkOffset < (state._blkTotal || 0)
-        ? `<p class="muted" style="text-align:center;padding:10px">继续下滑加载更多…（已加载 ${state._blkOffset}/${state._blkTotal}）</p>` : '');
+    el.innerHTML = state.blocks.filter(b => !CHROME_TYPES.includes(b.type)).map(blockRowHtml).join('') +
+      (state._blkOffset < (state._blkTotal || 0) ? loadHintHtml(`${state._blkOffset}/${state._blkTotal}`) : '');
   }
 
   figCropPass();   // PDF 原图裁剪（异步，pdfDoc 未就绪则跳过）
@@ -1061,16 +1106,7 @@ function renderContentView() {
       else loadMoreBlocks();
     }
   };
-  // 段落点击 → 跳页 + 高亮
-  $$('.blk', el).forEach(x => x.onclick = e => {
-    $$('.blk.active').forEach(y => { y.classList.remove('active'); y.style.removeProperty('--hlc'); });
-    applyActiveStyle(x);
-    const page = parseInt(x.dataset.page ?? '0') + 1;
-    if (state.pdfDoc && page >= 1 && page <= state.pdfDoc.numPages) {
-      state.pageNum = page; renderPage();
-    }
-    highlightBlockOnPdf(x);   // 右侧 → PDF：立刻在该页画出高亮框
-  });
+  bindBlkClicks(el);
 }
 
 /* 阅读子页签（原文/双语/中文） */
@@ -1139,6 +1175,7 @@ window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method:
 setInterval(refreshQueueBadge, 8000);
 
 /* SSE 实时进度 */
+let _sseCollectionsAt = 0;   // 批量任务事件风暴节流（3s 内只重建一次文库页）
 async function watchJobs() {
   const es = new EventSource('/api/jobs/stream');
   es.onmessage = e => {
@@ -1158,9 +1195,12 @@ async function watchJobs() {
       });
     }
     refreshQueueBadge();
-    // 文库管理页打开时同步行内状态
+    // 文库管理页打开时同步行内状态（批量导入时每块一事件，全量重建需节流）
     const cp = $('#page-collections');
-    if (cp && cp.style.display !== 'none') renderCollectionsPage();
+    if (cp && cp.style.display !== 'none' && Date.now() - _sseCollectionsAt > 3000) {
+      _sseCollectionsAt = Date.now();
+      renderCollectionsPage();
+    }
   };
 }
 
@@ -3187,24 +3227,43 @@ window.exportBibtex = () => {
   toast('开始下载 BibTeX（Zotero/EndNote 可直接导入）');
 };
 
-/* 增量加载解析块（滚动到底自动续拉） */
+/* 增量加载解析块（滚动到底自动续拉；只追加新行，不全量重渲染） */
 window.loadMoreBlocks = async () => {
   if (!state.current || state._blkOffset >= (state._blkTotal || 0)) return;
-  const id = state.current.id;
-  const d = await api(`/api/papers/${id}?offset=${state._blkOffset}&limit=${state._blkPage}`);
-  if (!d.blocks.length) { state._blkTotal = state._blkOffset; return; }
-  state.blocks = state.blocks.concat(d.blocks);
-  state._blkOffset += d.blocks.length;
-  renderContentView();
+  if (state._blkLoading) return;   // 防滚动事件重复触发
+  state._blkLoading = true;
+  try {
+    const id = state.current.id;
+    const d = await api(`/api/papers/${id}?offset=${state._blkOffset}&limit=${state._blkPage}`);
+    if (!d.blocks.length) { state._blkTotal = state._blkOffset; $('#load-more-hint')?.remove(); return; }
+    state.blocks = state.blocks.concat(d.blocks);
+    state._blkOffset += d.blocks.length;
+    if (state.view === 'orig') {
+      const hasMore = state._blkOffset < (state._blkTotal || 0);
+      appendRows(d.blocks.filter(b => !CHROME_TYPES.includes(b.type)).map(blockRowHtml).join(''),
+                 hasMore, `${state._blkOffset}/${state._blkTotal}`);
+    } else {
+      renderContentView();
+    }
+  } finally { state._blkLoading = false; }
 };
 window.loadMorePairs = async () => {
   if (!state.current || !(state._biTotal > state._biOffset)) return;
-  const id = state.current.id;
-  const d = await api(`/api/papers/${id}/bilingual?offset=${state._biOffset}&limit=40`);
-  if (!d.pairs.length) { state._biTotal = state._biOffset; return; }
-  state.pairs = state.pairs.concat(d.pairs);
-  state._biOffset += d.pairs.length;
-  renderContentView();
+  if (state._biLoading) return;
+  state._biLoading = true;
+  try {
+    const id = state.current.id;
+    const d = await api(`/api/papers/${id}/bilingual?offset=${state._biOffset}&limit=40`);
+    if (!d.pairs.length) { state._biTotal = state._biOffset; $('#load-more-hint')?.remove(); return; }
+    state.pairs = state.pairs.concat(d.pairs);
+    state._biOffset += d.pairs.length;
+    if (state.view === 'bilingual') {
+      const hasMore = state._biOffset < (state._biTotal || 0);
+      appendRows(d.pairs.flatMap(pairRowsHtml).join(''), hasMore, `${state._biOffset}/${state._biTotal}`);
+    } else {
+      renderContentView();   // zh 视图整表依赖 pairs 过滤，全量重建（纯文本，代价低）
+    }
+  } finally { state._biLoading = false; }
 };
 
 /* ================= 文库管理：第一层 = 库列表 ================= */

@@ -45,13 +45,11 @@ def get_latest(paper_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def mark_stale(paper_id: str) -> None:
-    """重解析后标记导读过期（新增 parse_run 使旧 run 的导读不再对应）。"""
-    with db.write() as c:
-        c.execute(
-            "UPDATE summaries SET content=content WHERE paper_id=? AND id IN ("
-            "SELECT id FROM summaries WHERE paper_id=? LIMIT 0)", (paper_id, paper_id),
-        )
+def latest_run_id(paper_id: str) -> str | None:
+    row = db.one(
+        "SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
+        "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    return row["id"] if row else None
 
 
 def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, dict]:
@@ -199,14 +197,12 @@ def generate_section_summaries(user: dict, paper_id: str) -> int:
     from .llm import LLMClient, resolve_llm
 
     cfg = resolve_llm(user["id"], "chat")
-    run = db.one(
-        "SELECT id FROM parse_runs WHERE paper_id=? AND status='done' ORDER BY created_at DESC LIMIT 1",
-        (paper_id,))
-    if run is None:
+    run_id = latest_run_id(paper_id)
+    if run_id is None:
         raise ValueError("论文尚未解析完成")
     blocks = db.all(
         "SELECT block_id, section_path, page_index, text FROM blocks WHERE parse_run_id=? "
-        "ORDER BY page_index, block_index", (run["id"],))
+        "ORDER BY page_index, block_index", (run_id,))
     groups = _sections_of(blocks)
     if not groups:
         return 0
@@ -229,14 +225,17 @@ def generate_section_summaries(user: dict, paper_id: str) -> int:
         except Exception:  # noqa: BLE001
             continue
         if summary:
-            rows.append((paper_id, run["id"], path, 1, summary))
+            rows.append((paper_id, run_id, path, 1, summary))
     if rows:
         with db.write() as c:
+            # 旧 run 的章节摘要一并清除（重解析后 section_path/内容可能变化，混喂会错配）
+            c.execute("DELETE FROM section_summaries WHERE paper_id=? AND run_id<>?",
+                      (paper_id, run_id))
             c.executemany(
                 "INSERT OR REPLACE INTO section_summaries"
                 "(paper_id,run_id,section_path,level,summary,embedding) VALUES(?,?,?,?,?,NULL)",
                 rows)
-        _embed_section_summaries(paper_id, run["id"])
+        _embed_section_summaries(paper_id, run_id)
     return len(rows)
 
 
@@ -262,19 +261,31 @@ def _embed_section_summaries(paper_id: str, run_id: str) -> None:
                 (struct.pack(f"<{len(v)}f", *v), r["paper_id"], run_id, r["section_path"]))
 
 
-def pick_relevant_sections(paper_id: str, question: str, top_k: int = 2) -> list[dict]:
-    """按问题向量选最相关的章节（无摘要时返回空 → 调用方回退全文直读）。"""
+def pick_relevant_sections(paper_id: str, question: str, top_k: int = 2,
+                           qvec=None) -> list[dict]:
+    """按问题向量选最相关的章节（无摘要时返回空 → 调用方回退）。
+
+    只查最新 done run 的摘要（旧 run 残留会在 generate_section_summaries 时清除）。
+    qvec: 调用方已算好的问题向量（多篇共享，免重复 embedding）。
+    """
     import numpy as np
 
     from .retrieval import embed_texts
 
+    run_id = latest_run_id(paper_id)
+    if run_id is None:
+        return []
     rows = db.all(
         "SELECT section_path, summary, embedding FROM section_summaries "
-        "WHERE paper_id=? AND level=1 AND embedding IS NOT NULL", (paper_id,))
+        "WHERE paper_id=? AND run_id=? AND level=1 AND embedding IS NOT NULL",
+        (paper_id, run_id))
     if not rows:
         return []
     try:
-        qv = np.array(embed_texts([question])[0], dtype=np.float32)
+        if qvec is None:
+            qv = np.array(embed_texts([question])[0], dtype=np.float32)
+        else:
+            qv = np.asarray(qvec, dtype=np.float32)
     except Exception:  # noqa: BLE001
         return []
     qn = qv / (np.linalg.norm(qv) + 1e-9)
