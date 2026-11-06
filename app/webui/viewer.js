@@ -1807,8 +1807,34 @@ $('#qa-open').onclick = () => { switchPage('reader'); openQaDock(); };   // 顶�
 async function boot() {
   try { state.me = await api('/api/me'); }
   catch { return; }
-  $('#who').textContent = state.me.username + (state.me.role === 'admin' ? ' · 管理员' : '');
-  $('#logout-btn').onclick = async () => { await fetch('/api/logout', {method: 'POST'}); location.href = '/login'; };
+  // 账号信息渲染进头像菜单（旧的 #who 已移除）
+  const ai = $('#acc-initial'); if (ai) ai.textContent = (state.me.username || '?').trim()[0].toUpperCase();
+  const an = $('#acc-name'); if (an) an.textContent = state.me.username;
+  const ar = $('#acc-role'); if (ar) ar.textContent = state.me.role === 'admin' ? '管理员' : '成员';
+  // 账号头像菜单
+  const accPop = $('#acc-pop');
+  $('#acc-btn').onclick = e => {
+    e.stopPropagation();
+    accPop.hidden = !accPop.hidden;
+    if (!accPop.hidden) {
+      $('#acc-name').textContent = state.me.username;
+      $('#acc-role').textContent = state.me.role === 'admin' ? '管理员' : '成员';
+      $('#acc-initial').textContent = (state.me.username || '?').trim()[0].toUpperCase();
+    }
+  };
+  document.addEventListener('click', e => {
+    if (!accPop.hidden && !accPop.contains(e.target) && e.target.id !== 'acc-btn') accPop.hidden = true;
+  });
+  accPop.onclick = async e => {
+    const item = e.target.closest('.acc-item');
+    if (!item) return;
+    accPop.hidden = true;
+    const act = item.dataset.act;
+    if (act === 'logout') { await fetch('/api/logout', {method: 'POST'}); location.href = '/login'; }
+    else if (act === 'settings') switchPage('settings');
+    else if (act === 'trash') switchPage('trash');
+    else if (act === 'usage') { switchPage('settings'); setTimeout(() => $('#usage-zone')?.scrollIntoView({block: 'center'}), 300); }
+  };
   // 未配置 key 提示横幅
   if (!state.me.llm_configured.chat) {
     $('.main').insertAdjacentHTML('afterbegin',
@@ -2318,9 +2344,7 @@ async function renderCollectionsPage(preset = null) {
       <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 顶层库</button>
       <button class="btn" onclick="exportBibtex()" title="导出全库为 BibTeX（Zotero/EndNote 可直接导入）">⬇ BibTeX</button>
     </div>
-    <div class="lib-mgr">
-      ${sideTree}
-      <div class="lib-main" id="lib-main-drop">
+    <div class="lib-main" id="lib-main-drop">
         <div class="lib-head">
           <h2 style="margin:0;flex:1">${sel ? icon('folder') : icon('library')} ${esc(scopeName)}
             <span class="muted" style="font-size:12px">${papers.length} 篇${scopeIds.length > 1 ? '（含子库）' : ''} · 译${doneTr}/${papers.length} · ${totTok.toLocaleString()}tok</span></h2>

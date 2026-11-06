@@ -715,3 +715,25 @@ table.list input[type=checkbox] { width: auto; }
                     cursor: pointer; font-size: var(--fs-base); padding: 2px 3px; border-radius: var(--r-xs); }
 .side-rail button:hover { color: var(--primary); background: var(--tint-primary); }
 .tp-item.on { background: var(--tint-primary); color: var(--primary); font-weight: 600; }
+/* ===== 账号头像菜单 ===== */
+.acc-btn { width: 26px; height: 24px; border-radius: 50%; border: 1px solid var(--border);
+           background: var(--primary); color: #fff; font-size: 12px; font-weight: 600;
+           cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.acc-btn:hover { background: var(--primary-dark); }
+.acc-pop { position: absolute; top: 46px; right: 12px; z-index: 60; min-width: 176px;
+           background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+           box-shadow: 0 10px 32px rgba(0,0,0,.16); padding: 6px; }
+.acc-head { padding: 8px 10px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
+            display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.acc-head span:first-child { font-weight: 600; }
+.acc-head .muted { font-size: 11px; }
+.acc-item { padding: 7px 10px; border-radius: 7px; font-size: 13px; cursor: pointer; }
+.acc-item:hover { background: #f0f3fc; }
+.acc-item.danger { color: var(--err); }
+.acc-item.danger:hover { background: #fdeaea; }
+.acc-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.sidebar header { position: relative; }
+
+/* ===== 管理页：单列（去掉重复左树） ===== */
+.lib-mgr { display: block; }
+.lib-side { display: none; }

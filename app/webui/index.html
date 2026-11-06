@@ -15,11 +15,18 @@
   <!-- ======= 文库侧栏 ======= -->
   <aside class="sidebar">
     <header>
-      <span class="title"><svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 13.5V3.5M6.3 13.5V3.5M9.6 13.5V3.5M2 13.5h12"/></svg> 我的文库</span>
+      <span class="title" id="lib-title">文献库</span>
       <span id="health-dot" class="health-dot bad" title="服务状态"></span>
-      <span id="who" class="muted" style="font-size:12px"></span>
       <button class="btn small ic-only" id="theme-btn" title="切换深色/浅色" aria-label="切换深色/浅色"></button>
-      <button class="btn small ic-only" id="logout-btn" title="退出登录" aria-label="退出登录"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 13.5H3.5a1 1 0 01-1-1v-9a1 1 0 011-1H6M9.5 11L13.5 8l-4-3M13.5 8H6"/></svg></button>
+      <button class="acc-btn" id="acc-btn" title="账号菜单" aria-label="账号菜单"><span id="acc-initial">·</span></button>
+      <div class="acc-pop" id="acc-pop" hidden>
+        <div class="acc-head"><span id="acc-name">—</span><span id="acc-role" class="muted"></span></div>
+        <div class="acc-item" data-act="settings">⚙️ 我的设置</div>
+        <div class="acc-item" data-act="usage">📊 我的用量</div>
+        <div class="acc-item" data-act="trash">🗑 回收站</div>
+        <div class="acc-sep"></div>
+        <div class="acc-item danger" data-act="logout">↩ 退出登录</div>
+      </div>
       <button class="side-collapse" id="side-collapse" title="收起侧栏（文库）" aria-label="收起侧栏"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M7.5 4L3.5 8l4 4M11.5 4l-4 4 4 4"/></svg></button>
     </header>
     <div class="collections" id="collections"></div>
@@ -85,7 +92,7 @@
         <button data-page="trash"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 9.5h5.8l.6-9.5"/></svg> 回收站</button>
         <button data-page="settings"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 5h10M3 11h10"/><circle cx="6" cy="5" r="1.8"/><circle cx="10" cy="11" r="1.8"/></svg> 设置</button>
         <button class="btn small" id="queue-btn" hidden><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5V8l2.5 1.5"/></svg> 队列 <span class="qbadge" id="qbadge">0</span></button>
-        <button class="btn small primary" id="qa-open" title="聚焦问答框"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 5A1.5 1.5 0 014 3.5h8A1.5 1.5 0 0113.5 5v4A1.5 1.5 0 0112 10.5H7.5L4.5 13v-2.5H4A1.5 1.5 0 012.5 9V5z"/></svg> 问答</button>
+                <button class="btn small primary" id="qa-open" title="向当前论文提问（Ctrl+Q）">✍️ 提问</button>
       </div>
     </nav>
 
