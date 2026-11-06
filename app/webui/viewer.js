@@ -27,9 +27,11 @@ async function api(path, opts = {}) {
   }
   return r.json();
 }
+let _toastTimer = 0;
 function toast(msg, ms = 2500) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), ms);
+  clearTimeout(_toastTimer);   // 连续触发时旧 timer 会让后一条提前消失
+  _toastTimer = setTimeout(() => t.classList.remove('show'), ms);
 }
 function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
 
@@ -938,14 +940,6 @@ async function startTranslate() {
   refreshJobState();
 }
 window.startTranslate = startTranslate;
-async function retranslate() {
-  const js = await api(`/api/papers/${state.current.id}/jobstate`);
-  if (!confirm(`已有完整译文（${js.translated_model}）。\n用当前模型/术语表重新翻译生成新版本？（消耗 token）`)) return;
-  await api('/api/papers/translate', {method: 'POST',
-    body: JSON.stringify({paper_ids: [state.current.id], force_new_version: true})});
-  toast('重译任务已入队（生成新版本，完成后版本下拉可切换）');
-  refreshJobState();
-}
 async function cancelTranslate() {
   if (!confirm('取消翻译当前论文？（已完成段落会保留）')) return;
   await api(`/api/papers/${state.current.id}/cancel-translate`, {method: 'POST'});
@@ -953,25 +947,31 @@ async function cancelTranslate() {
   refreshJobState();
 }
 window.cancelTranslate = cancelTranslate;
-/* 翻译进行中轮询：完成自动刷新视图 */
+/* 翻译进行中轮询：完成自动刷新视图（循环内存活检查——切论文即终止） */
 let watching = null;
+let watchingPid = null;
 function watchTranslation() {
   clearInterval(watching);
+  watchingPid = state.current?.id ?? null;
   watching = setInterval(async () => {
-    if (!state.current) { clearInterval(watching); return; }
-    const js = await api(`/api/papers/${state.current.id}/jobstate`);
-    state.translatingNow = js.translating;
-    if (!js.translating && js.translated) {   // 真正完成（非部分译文）
-      clearInterval(watching); toast('翻译完成 ✓');
-      state.translatedComplete = true;
-      const d = await api(`/api/papers/${state.current.id}/bilingual`);
-      state.versions = d.versions; state.pairs = d.pairs;
-      if (state.view !== 'zh') switchView('read', 'bilingual'); else renderContentView();
+    if (!state.current || state.current.id !== watchingPid) {   // 已切到别的论文 → 停止轮询
+      clearInterval(watching); watchingPid = null; return;
     }
-    refreshJobState();
+    try {
+      const js = await api(`/api/papers/${watchingPid}/jobstate`);
+      if (!state.current || state.current.id !== watchingPid) return;
+      state.translatingNow = js.translating;
+      if (!js.translating && js.translated) {   // 真正完成（非部分译文）
+        clearInterval(watching); toast('翻译完成 ✓');
+        state.translatedComplete = true;
+        const d = await api(`/api/papers/${watchingPid}/bilingual`);
+        state.versions = d.versions; state.pairs = d.pairs;
+        if (state.view !== 'zh') switchView('read', 'bilingual'); else renderContentView();
+      }
+      refreshJobState();
+    } catch { /* 网络/会话抖动：下轮再试 */ }
   }, 4000);
 }
-const _tb = $('#translate-btn'); if (_tb) _tb.onclick = startTranslate;   // 按钮已移除，兼容空值
 window.updateQaBtn = () => {
   const b = $('#qa-open');
   if (!b) return;
@@ -1558,6 +1558,7 @@ window.genSumBubble = async pid => {
     const jobId = d.job_id;
     for (let i = 0; i < 150; i++) {          // 轮询任务状态（导读单并发，排队可能较久）
       await new Promise(r => setTimeout(r, 2000));
+      if (state.current?.id !== pid) return;   // 已切到别的论文 → 停止轮询
       const js = await api(`/api/jobs/${jobId}`).catch(() => null);
       if (!js) continue;
       if (js.status === 'done') break;
@@ -1680,10 +1681,6 @@ function renderQaScope() {
   }
 }
 window.qaRemove = pid => { state.qaPapers.delete(pid); renderQaScope(); renderSumBubble(); renderQaTab(); };
-window.qaAddCurrent = () => {
-  if (!state.current) { toast('当前没有打开的论文'); return; }
-  state.qaPapers.add(state.current.id); renderQaScope(); renderSumBubble();
-};
 window.askPreset = q => { $('#qa-text').value = q; sendQa(); };
 /* 推荐问题：展开/收起（默认收起，避免长期占用阅读空间） */
 function togglePresetList(force) {
@@ -1846,19 +1843,9 @@ function sendQa() {
         }
       }
     }
+  }).catch(e => {   // 网络/解析失败：不再让气泡永远停在"…"
+    if (live.isConnected) live.textContent = '请求失败：' + e.message + '（检查网络后重试）';
   });
-}
-async function renderSummaryTab() {
-  const pid = state.current?.id;
-  if (!pid) { $('#content-view').innerHTML = '<p class="muted">选择论文后生成导读（也可先用上方选文）</p>'; return; }
-  const d = await api(`/api/papers/${pid}/summary`);
-  if (!d.summary) {
-    $('#content-view').innerHTML = `<div class="card">
-      <p>基于左侧全文生成科研导读（研究问题 / 核心思想 / 方法 / …，带页码证据）。</p>
-      <button class="btn primary" onclick="genSumBubble('${pid}')">${icon('star')} 生成导读</button></div>`;
-    return;
-  }
-  drawSummary(d.summary, pid);
 }
 $('#menu-toggle').onclick = () => document.querySelector('.sidebar').classList.toggle('open');
 document.addEventListener('click', e => {
@@ -3153,7 +3140,6 @@ window.flashRefBlock = async blockId => {
 window.linkDiag = () => {
   const d = {
     当前视图: state.view, 主视图: state.mainView,
-    块观察器: state._blkObs ? '挂载中' : '未挂载',
     PDF页观察器: state._pdfPageObs ? '挂载中' : '未挂载',
     PDF连续视图: _pdfBuilt ? `已建 ${_pdfBuilt.wraps.size} 页` : '未建',
     当前页: state.pageNum, 抑制回环: !!state._suppressFollow,
@@ -3172,6 +3158,17 @@ document.addEventListener('keydown', e => {
     switchPage('reader');
     openQaDock();
   }
+});
+// Esc 统一关闭所有浮层（原先只有灯箱响应 Esc）
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  let closed = false;
+  for (const sel of ['#acc-pop', '#filter-pop', '#upload-pop', '#download-pop',
+                     '#queue-pop', '#qa-picker-pop', '#col-new-form']) {
+    const el = document.querySelector(sel);
+    if (el && !el.hidden) { el.hidden = true; closed = true; }
+  }
+  if (closed) e.stopPropagation();
 });
 
 /* ---- 深色模式切换 ---- */
