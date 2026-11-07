@@ -997,3 +997,18 @@ table.list input[type=checkbox] { width: auto; }
 .syn-item:last-child { border-bottom: none; }
 .syn-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .syn-item-main b { font-size: var(--fs-sm); }
+
+/* ---- 勾选面板：库树形分组 + 已选定视图 ---- */
+.bpp-viewseg { display: flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+.bpp-viewseg button { border: none; background: var(--panel-soft); padding: 5px 10px; font-size: var(--fs-xs);
+                      cursor: pointer; color: var(--muted); }
+.bpp-viewseg button.on { background: var(--primary); color: #fff; }
+.bpp-group { margin-bottom: 2px; }
+.bpp-group-head { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer;
+                  background: var(--panel-soft); border-radius: var(--r-xs); position: sticky; top: 0;
+                  font-size: var(--fs-sm); }
+.bpp-group-head:hover { background: var(--hover); }
+.bpp-group-head b { font-size: var(--fs-sm); }
+.bpp-group-head .spacer { flex: 1; }
+.bpp-caret { color: var(--muted); display: inline-flex; }
+.bpp-list { max-height: 46vh; overflow-y: auto; }

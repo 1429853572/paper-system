@@ -1518,31 +1518,26 @@ async function renderBatchPage() {
           <div class="bp-sources">
             <button class="btn small" id="bp-sel" title="载入文库管理页勾选的论文">我的勾选（<span id="bp-sel-n">${state.selected.size}</span>）</button>
             <button class="btn small" id="bp-list" title="载入侧栏当前筛选下的列表">当前列表（<span id="bp-list-n">${state.papers.length}</span>）</button>
-            <select id="bp-col" style="width:auto;font-size:12px" title="整库圈定（含子库）">
-              <option value="">按库圈定…</option>
-              ${cols.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
-            </select>
           </div>
           <div class="bp-picker" id="bp-picker">
             <div class="bpp-tools">
-              <input id="bpp-search" placeholder="搜索标题…" style="flex:1">
-              <select id="bpp-lib" title="按库缩小勾选范围" style="width:auto;font-size:12px">
-                <option value="">全部库</option>
-                ${cols.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+              <input id="bpp-search" placeholder="搜索标题 / 作者…" style="flex:1;min-width:130px">
+              <select id="bpp-year" title="按年份筛选" style="width:auto;font-size:12px">
+                <option value="">全部年份</option>
               </select>
-              <button class="btn small" id="bpp-all" title="勾上本页全部">全选本页</button>
-              <button class="btn small" id="bpp-none" title="取消本页全部">本页取消</button>
+              <button class="btn small" id="bpp-reload" title="重新加载论文与库结构">${icon('retry')}</button>
+            </div>
+            <div class="bpp-viewseg">
+              <button id="bpp-v-all" class="on">📂 按库浏览</button>
+              <button id="bpp-v-sel">✅ 已选定（<span id="bpp-v-n">${state.batchSel.size}</span>）</button>
             </div>
             <div class="bpp-list" id="bpp-list"><p class="muted" style="padding:10px">加载中…</p></div>
             <div class="bpp-foot">
-              <button class="btn small" id="bpp-prev" disabled>‹ 上一页</button>
-              <span class="muted" id="bpp-page" style="font-size:11px">第 1 页</span>
-              <button class="btn small" id="bpp-next" disabled>下一页 ›</button>
+              <span class="muted" id="bpp-stat" style="font-size:11px"></span>
               <span class="spacer"></span>
               <span class="muted" id="bpp-selcount" style="font-size:11px"></span>
             </div>
           </div>
-          <div class="bp-detail" id="bp-detail" hidden></div>
         </div>
         <div class="batch-right">
           <div class="bp-head2">② 选择操作 <span class="muted" style="font-weight:400;font-size:11px">未圈定时操作卡置灰</span></div>
@@ -1576,34 +1571,16 @@ async function renderBatchPage() {
   $('#bp-sel').onclick = () => setBatchSel(new Set(state.selected), '我的勾选');
   $('#bp-list').onclick = () => setBatchSel(new Set(state.papers.map(p => p.id)), '当前列表');
   $('#bp-clear').onclick = () => { setBatchSel(new Set(), ''); renderBpPicker(); };
-  $('#bp-col').onchange = async e => {
-    const cid = e.target.value;
-    if (!cid) return;
-    try {
-      const scope = [cid, ...colDescendants(cid)].join(',');
-      const d = await api('/api/papers?collection_id=' + encodeURIComponent(scope) + '&page_size=300');
-      state._batchPapers = d.papers;
-      setBatchSel(new Set(d.papers.map(p => p.id)),
-        (state.collections.find(c => c.id === cid) || {}).name || '文献库');
-    } catch (err) { toast('圈定失败: ' + err.message); }
-    e.target.value = '';
-  };
-  /* 自由勾选面板常驻：服务端分页 + 搜索 + 库筛选，逐条复选实时计入圈定 */
-  state._bpp = {page: 1, q: '', lib: '', hasMore: false, items: []};
-  $('#bpp-lib').onchange = e => {
-    state._bpp.lib = e.target.value;
-    state._bpp.page = 1;
-    loadBpPicker();
-  };
-  let _bppTimer = 0;
+  /* 勾选面板：库树形分组浏览（搜索/年份筛选/已选定视图/整组全选） */
+  state._bpp = {q: '', year: '', view: 'all', papers: [], fold: new Set()};
   $('#bpp-search').oninput = e => {
-    clearTimeout(_bppTimer);
-    _bppTimer = setTimeout(() => { state._bpp.q = e.target.value.trim(); state._bpp.page = 1; loadBpPicker(); }, 300);
+    clearTimeout(state._bpp._t);
+    state._bpp._t = setTimeout(() => { state._bpp.q = e.target.value.trim(); renderBpPicker(); }, 250);
   };
-  $('#bpp-all').onclick = () => { toggleBpPage(true); };
-  $('#bpp-none').onclick = () => { toggleBpPage(false); };
-  $('#bpp-prev').onclick = () => { if (state._bpp.page > 1) { state._bpp.page--; loadBpPicker(); } };
-  $('#bpp-next').onclick = () => { if (state._bpp.hasMore) { state._bpp.page++; loadBpPicker(); } };
+  $('#bpp-year').onchange = e => { state._bpp.year = e.target.value; renderBpPicker(); };
+  $('#bpp-reload').onclick = () => loadBpPicker();
+  $('#bpp-v-all').onclick = () => { state._bpp.view = 'all'; renderBpPicker(); };
+  $('#bpp-v-sel').onclick = () => { state._bpp.view = 'sel'; renderBpPicker(); };
   if (state._batchPreset) {
     const preset = state._batchPreset;
     state._batchPreset = null;
@@ -1669,113 +1646,165 @@ function setBatchSel(ids, srcName) {
   if (!cnt) return;
   cnt.textContent = `${ids.size} 篇` + (srcName ? `（来自${srcName}）` : '');
   $('#bp-clear').hidden = !ids.size;
-  renderBpDetail();
-  const sc = $('#bpp-selcount');
-  if (sc) sc.textContent = ids.size ? `已圈定 ${ids.size} 篇` : '';
+  updateBatchOpsState();
+  renderBpPicker();
 }
-
-function renderBpDetail() {
-  const det = $('#bp-detail');
-  if (!det) return;
-  const ids = state.batchSel;
-  if (!ids.size) { det.hidden = true; det.innerHTML = ''; return; }
-  const byId = new Map([...state.papers, ...state._batchPapers, ...(state.qaAllPapers || [])]
-    .map(p => [p.id, p]));
-  const colName2 = cid => (state.collections || []).find(c => c.id === cid)?.name || '未分库';
-  const items = [...ids].map(id => {
-    const p = byId.get(id);
-    return `<label class="bp-row" title="取消勾选即移出圈定">
-      <input type="checkbox" checked data-un="${esc(id)}">
-      <span class="bp-row-main">${esc(p ? (p.title || p.id) : id)}
-        <span class="muted" style="font-size:11px"> · ${esc(colName2(p?.collection_id))}</span></span>
-    </label>`;
-  }).join('');
-  det.innerHTML = `<div class="bp-rows" id="bp-rows">${items}</div>`;   // 超 5 行滚动，无折叠钮
-  det.hidden = false;
-  // 明细里直接取消勾选 → 移出圈定（勾选面板/计数同步）
-  $$('input[data-un]', det).forEach(cb => cb.onchange = e => {
-    if (e.target.checked) return;
-    state.batchSel.delete(e.target.dataset.un);
-    renderBpPicker();
-    syncBpCount();
-  });
-}
-
-/* ---- 自由勾选面板（服务端分页 20/页 + 标题搜索 + 本页全选/取消） ---- */
-const BPP_PAGE_SIZE = 20;
 
 async function loadBpPicker() {
-  const bp = state._bpp;
-  const list = $('#bpp-list');
-  if (!list) return;
+  const el = $('#bpp-list');
+  if (!el) return;
   try {
-    const params = new URLSearchParams({q: bp.q, page: bp.page, page_size: BPP_PAGE_SIZE});
-    if (bp.lib) params.set('collection_id', [bp.lib, ...colDescendants(bp.lib)].join(','));
-    const d = await api('/api/papers?' + params);
-    bp.items = d.papers;
-    bp.hasMore = !!d.has_more;
-    state._batchPapers = [...state._batchPapers.filter(x => !d.papers.some(p => p.id === x.id)), ...d.papers];
+    const out = [];
+    for (let page = 1; page <= 40; page++) {
+      const d = await api('/api/papers?page=' + page + '&page_size=500');
+      out.push(...d.papers);
+      if (!d.has_more) break;
+    }
+    state._bpp.papers = out;
+    state._batchPapers = out;
   } catch (e) {
-    list.innerHTML = `<p class="muted" style="padding:10px">加载失败: ${esc(e.message)}</p>`;
+    el.innerHTML = `<p class="muted" style="padding:10px">加载失败: ${esc(e.message)}</p>`;
     return;
   }
   renderBpPicker();
+}
+
+/* 勾选面板：按库树形分组浏览 + 已选定视图 */
+function bppFiltered() {
+  const bp = state._bpp;
+  const q = bp.q.toLowerCase();
+  return bp.papers.filter(p =>
+    (!q || (p.title || '').toLowerCase().includes(q) || (p.authors || '').toLowerCase().includes(q)) &&
+    (!bp.year || (p.year || '') === bp.year));
 }
 
 function renderBpPicker() {
   const bp = state._bpp;
   const list = $('#bpp-list');
   if (!list) return;
-  if (!bp.items.length) {
-    list.innerHTML = `<p class="muted" style="padding:10px">${bp.q ? '没有匹配的论文' : '库中还没有论文'}</p>`;
-  } else {
-    const colName = cid => (state.collections || []).find(c => c.id === cid)?.name || '';
-    list.innerHTML = bp.items.map(p => `
-      <label class="bpp-row ${state.batchSel.has(p.id) ? 'on' : ''}" data-id="${esc(p.id)}">
-        <input type="checkbox" ${state.batchSel.has(p.id) ? 'checked' : ''}>
+  // 年份筛选选项（随数据变化重建；保住当前选择）
+  const years = [...new Set(bp.papers.map(p => (p.year || '').trim()).filter(Boolean))].sort().reverse();
+  const ysel = $('#bpp-year');
+  if (ysel && ysel.dataset.years !== String(years.length)) {
+    ysel.dataset.years = String(years.length);
+    ysel.innerHTML = '<option value="">全部年份</option>' +
+      years.map(y => `<option value="${esc(y)}">${esc(y)}</option>`).join('');
+    ysel.value = bp.year;
+  }
+  const vAll = $('#bpp-v-all'), vSel = $('#bpp-v-sel'), vN = $('#bpp-v-n');
+  if (vAll) { vAll.classList.toggle('on', bp.view === 'all'); vSel.classList.toggle('on', bp.view === 'sel'); }
+  if (vN) vN.textContent = state.batchSel.size;
+
+  if (bp.view === 'sel') {
+    // 已选定视图：只看勾选的（含库名），取消勾选即移出
+    const byId = new Map(bp.papers.map(p => [p.id, p]));
+    const colName = cid => (state.collections || []).find(c => c.id === cid)?.name || '未分库';
+    const rows = [...state.batchSel].map(id => {
+      const p = byId.get(id);
+      return `<label class="bpp-row on" data-id="${esc(id)}">
+        <input type="checkbox" checked>
         <span class="bpp-main">
-          <span class="bpp-title">${esc(p.title || p.id)}</span>
-          <span class="bpp-meta">
-            <span class="bp-lib" title="所属文献库">${icon('folder', 11)} ${esc(colName(p.collection_id) || '未分库')}</span>
-            ${p.year ? `<span>${esc(p.year)}</span>` : ''}
-            ${p.page_count ? `<span>${p.page_count} 页</span>` : ''}
-          </span>
+          <span class="bpp-title">${esc(p ? (p.title || id) : id)}</span>
+          <span class="bpp-meta"><span class="bp-lib">${icon('folder', 11)} ${esc(colName(p?.collection_id))}</span>
+            ${p?.year ? `<span>${esc(p.year)}</span>` : ''}</span>
         </span>
-        ${statusBadge(p)}
-      </label>`).join('');
-    $$('input[type=checkbox]', list).forEach(cb => cb.onchange = e => {
-      const id = e.target.closest('.bpp-row').dataset.id;
-      if (e.target.checked) state.batchSel.add(id);
-      else state.batchSel.delete(id);
-      e.target.closest('.bpp-row').classList.toggle('on', e.target.checked);
+      </label>`;
+    }).join('');
+    list.innerHTML = rows || '<p class="muted" style="padding:10px">还没有勾选——切回「按库浏览」勾选论文</p>';
+  } else {
+    // 按库树形分组：库 → 子库 → 文件；整组全选/取消；未分库兜底组
+    const papers = bppFiltered();
+    const byCol = new Map();
+    for (const p of papers) {
+      const k = p.collection_id || '__none__';
+      (byCol.get(k) || byCol.set(k, []).get(k)).push(p);
+    }
+    const cols = state.collections || [];
+    // DFS：父库在前、子库缩进随后；孤儿库（父已删）挂顶层
+    const ordered = [];
+    const seen = new Set();
+    const walk = (parent, depth) => {
+      for (const c of cols.filter(c => (c.parent_id || null) === parent)) {
+        seen.add(c.id);
+        ordered.push({ c, depth });
+        walk(c.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    for (const c of cols) if (!seen.has(c.id)) ordered.push({ c, depth: 0 });
+    const groups = ordered.map(({ c, depth }) => ({
+      id: c.id, name: c.name, depth,
+      papers: byCol.get(c.id) || [],
+    })).filter(g => g.papers.length || !bp.q);   // 搜索时空组隐藏（无筛选时保留结构全貌）
+    const none = byCol.get('__none__') || [];
+    if (none.length || !bp.q) groups.push({ id: '__none__', name: '未分库', depth: 0, papers: none });
+
+    list.innerHTML = (groups.map(g => {
+      const folded = bp.fold.has(g.id);
+      const allOn = g.papers.length && g.papers.every(p => state.batchSel.has(p.id));
+      return `<div class="bpp-group">
+        <div class="bpp-group-head" data-gid="${esc(g.id)}" style="padding-left:${8 + g.depth * 16}px">
+          <span class="bpp-caret">${folded ? icon('chevR', 11) : icon('chevD', 11)}</span>
+          ${icon('folder', 12)} <b>${esc(g.name)}</b>
+          <span class="muted" style="font-size:11px">${g.papers.length} 篇</span>
+          <span class="spacer"></span>
+          ${g.papers.length ? `<button class="btn small bpp-gsel" data-gid="${esc(g.id)}" data-on="${allOn ? '' : '1'}">${allOn ? '取消本库' : '全选本库'}</button>` : ''}
+        </div>
+        ${folded ? '' : g.papers.map(p => `
+          <label class="bpp-row ${state.batchSel.has(p.id) ? 'on' : ''}" data-id="${esc(p.id)}" style="margin-left:${16 + g.depth * 16}px">
+            <input type="checkbox" ${state.batchSel.has(p.id) ? 'checked' : ''}>
+            <span class="bpp-main">
+              <span class="bpp-title">${esc(p.title || p.id)}</span>
+              <span class="bpp-meta">${p.year ? `<span>${esc(p.year)}</span>` : ''}${p.page_count ? `<span>${p.page_count} 页</span>` : ''}</span>
+            </span>
+            ${statusBadge(p)}
+          </label>`).join('') || '<p class="muted" style="padding:2px 16px 6px;font-size:11px">（空库）</p>'}
+      </div>`;
+    }).join('') || `<p class="muted" style="padding:10px">${bp.q || bp.year ? '没有匹配的论文' : '库中还没有论文'}</p>`);
+
+    // 事件：组折叠 / 整组全选（勾选事件在函数尾部对两个视图统一绑定）
+    $$('.bpp-group-head', list).forEach(h => h.onclick = e => {
+      if (e.target.closest('.bpp-gsel')) return;
+      const gid = h.dataset.gid;
+      bp.fold.has(gid) ? bp.fold.delete(gid) : bp.fold.add(gid);
+      renderBpPicker();
+    });
+    $$('.bpp-gsel', list).forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      const g = groups.find(x => x.id === b.dataset.gid);
+      const on = b.dataset.on === '1';
+      for (const p of g.papers) on ? state.batchSel.add(p.id) : state.batchSel.delete(p.id);
+      renderBpPicker();
       syncBpCount();
     });
   }
-  const pg = $('#bpp-page');
-  const libName = bp.lib ? ((state.collections || []).find(c => c.id === bp.lib)?.name || '') : '';
-  if (pg) pg.textContent = `第 ${bp.page} 页${libName ? ` · ${libName}` : ''}${bp.q ? ` · 搜“${bp.q}”` : ''}`;
-  $('#bpp-prev').disabled = bp.page <= 1;
-  $('#bpp-next').disabled = !bp.hasMore;
+  // 统计脚
+  const stat = $('#bpp-stat');
+  if (stat) stat.textContent = `库 ${new Set((state.collections || []).map(c => c.id)).size} 个 · 论文 ${bp.papers.length} 篇`;
   const sc = $('#bpp-selcount');
   if (sc) sc.textContent = state.batchSel.size ? `已圈定 ${state.batchSel.size} 篇` : '';
+  // 勾选事件：两个视图统一绑定（sel 视图取消勾选后行即移出）
+  $$('input[type=checkbox]', list).forEach(cb => cb.onchange = e => {
+    const row = e.target.closest('.bpp-row');
+    if (!row) return;
+    const id = row.dataset.id;
+    if (e.target.checked) state.batchSel.add(id);
+    else {
+      state.batchSel.delete(id);
+      syncBpCount();
+      if (state._bpp.view === 'sel') renderBpPicker();   // 已选定视图：行即移出
+      return;
+    }
+    row.classList.toggle('on', e.target.checked);
+    syncBpCount();
+  });
 }
 
-function toggleBpPage(on) {
-  const bp = state._bpp;
-  for (const p of bp.items) {
-    if (on) state.batchSel.add(p.id);
-    else state.batchSel.delete(p.id);
-  }
-  renderBpPicker();
-  syncBpCount();
-}
-
-/* 勾选变化后同步顶部计数与明细（轻量：不重建勾选面板本身） */
+/* 勾选变化后同步顶部计数与操作卡置灰 */
 function syncBpCount() {
   const cnt = $('#bp-count');
   if (cnt) cnt.textContent = `${state.batchSel.size} 篇`;
   $('#bp-clear').hidden = !state.batchSel.size;
-  renderBpDetail();
   updateBatchOpsState();
 }
 
