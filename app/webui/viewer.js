@@ -1170,7 +1170,10 @@ function switchView(v, s) {
   state.mainView = v;
   state.view = v === 'read' ? (s || state.rpane.readingView || 'orig') : v;
   $$('.view-tabs [data-v]').forEach(x => x.classList.toggle('on', x.dataset.v === v));
-  $('#r-subtabs').hidden = v !== 'read';
+  // 次级工具条：阅读=原文/双语/中文；图表=图表/公式（同一行、同尺寸，紧贴上沿）
+  $('#r-subtabs').hidden = v !== 'read' && v !== 'assets';
+  $('#read-subtabs').hidden = v !== 'read';
+  $('#assets-subtabs').hidden = v !== 'assets';
   // 问答 dock 只在阅读主视图常驻；其他视图整栏给内容
   const isRead = v === 'read';
   $('#qa-dock').hidden = !isRead;
@@ -2595,11 +2598,13 @@ async function renderAssets() {
 
   const tab = state.assetsTab || 'figs';
   const figsN = merged.length, eqsN = formulas.length;
+  // 页签在次级工具条上（与原文/双语/中文同一行、同尺寸），这里只刷新计数与态
+  $$('#assets-subtabs .asset-sub').forEach(b => {
+    b.classList.toggle('on', b.dataset.at === tab);
+    b.textContent = b.dataset.at === 'figs' ? `图表 (${figsN})` : `公式 (${eqsN})`;
+    b.onclick = () => { state.assetsTab = b.dataset.at; renderAssets(); };
+  });
   $('#content-view').innerHTML = `
-    <div class="asset-tabs">
-      <button class="asset-tab ${tab === 'figs' ? 'on' : ''}" data-at="figs">图表 (${figsN})</button>
-      <button class="asset-tab ${tab === 'eqs' ? 'on' : ''}" data-at="eqs">公式 (${eqsN})</button>
-    </div>
     ${tab === 'figs'
       ? (merged.length ? groups.map(g => `
           <div class="asset-page">
@@ -2614,8 +2619,7 @@ async function renderAssets() {
           </div>`).join('')
         : '<p class="muted" style="padding:12px">未提取到公式</p>')}
   `;
-  // 页签切换 + 题注展开/收起
-  $$('.asset-tab', $('#content-view')).forEach(b => b.onclick = () => { state.assetsTab = b.dataset.at; renderAssets(); });
+  // 题注展开/收起
   $$('.asset-cap-toggle', $('#content-view')).forEach(a => a.onclick = e => {
     e.preventDefault();
     const cap = $(`#${a.dataset.cap}`);

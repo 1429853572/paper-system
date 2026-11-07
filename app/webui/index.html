@@ -153,10 +153,16 @@
             <button class="tab-collapse" id="rpane-collapse" title="收起右栏（只留 PDF；再点可展开）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.5 4l4 4-4 4M4.5 4l4 4-4 4"/></svg></button>
           </div>
           <div class="view-tabs r-subtabs" id="r-subtabs">
-            <button id="toc-btn" class="aux" title="章节目录导航"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg></button>
-            <button data-s="orig" class="on">原文</button>
-            <button data-s="bilingual">双语对照</button>
-            <button data-s="zh">中文</button>
+            <span id="read-subtabs">
+              <button id="toc-btn" class="aux" title="章节目录导航"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg></button>
+              <button data-s="orig" class="on">原文</button>
+              <button data-s="bilingual">双语对照</button>
+              <button data-s="zh">中文</button>
+            </span>
+            <span id="assets-subtabs" hidden>
+              <button class="asset-sub on" data-at="figs">图表</button>
+              <button class="asset-sub" data-at="eqs">公式</button>
+            </span>
             <span class="spacer"></span>
             <button class="btn small" id="download-btn" title="下载原文/译文/PDF/ZIP">⬇ 下载</button>
             <div class="tool-pop dl-pop" id="download-pop" hidden>

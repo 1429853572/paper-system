@@ -355,11 +355,7 @@ table.list th { color: var(--muted); font-weight: 500; }
 .asset { margin-bottom: 16px; cursor: pointer; border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px; }
 .asset:hover { border-color: var(--primary); }
 .asset img { max-width: 100%; display: block; margin: 0 auto 6px; }
-/* IvySCI 式图表页：二级页签 + 按页分组 + 题注可展开 */
-.asset-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 12px; position: sticky; top: 0; background: var(--bg); z-index: 2; }
-.asset-tab { border: none; background: none; padding: 8px 16px; font-size: var(--fs-sm); color: var(--muted);
-             border-bottom: 2px solid transparent; cursor: pointer; }
-.asset-tab.on { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+/* IvySCI 式图表页：页签在次级工具条（与原文/双语/中文同款同位），内容区只有按页分组 */
 .asset-page { margin-bottom: 18px; }
 .asset-page-head { display: flex; align-items: center; gap: 5px; font-size: var(--fs-sm); font-weight: 600;
                    color: var(--text-2); padding: 6px 2px; cursor: pointer; border-bottom: 1px dashed var(--line-soft); margin-bottom: 10px; }
