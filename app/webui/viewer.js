@@ -3811,7 +3811,6 @@ window.exportChat = exportChat;   // 兼容内联 onclick 调用
 
 /* ---- 📚 文库管理页（左库树 + 右条目 + 详情，参考 Zotero/EndNote 的下钻式） ---- */
 state.libSel = localStorage.getItem('ps-lib-sel') || '';   // '' = 全部文献
-state.libPaper = '';                                        // 详情面板选中的论文
 state.scope = '';                                           // 侧栏快捷范围筛选
 state.libQuery = '';                                        // 管理页搜索词
 state.libLevel = 1;                                         // 管理页层级: 1=库列表 2=库内
@@ -3826,21 +3825,15 @@ function libDescendants(cid, list) {   // 含自身 + 全部子孙
 }
 window.selectLib = cid => {
   state.libSel = cid;
-  state.libPaper = '';
-  state.libLevel = 2;                 // 进第二层：库内（子库+论文）
+    state.libLevel = 2;                 // 进第二层：库内（子库+论文）
   localStorage.setItem('ps-lib-sel', cid);
   renderCollectionsPage();
 };
 window.libGoL1 = () => {              // 返回第一层：库列表
-  state.libLevel = 1; state.libSel = ''; state.libPaper = '';
-  renderCollectionsPage();
+  state.libLevel = 1; state.libSel = '';   renderCollectionsPage();
 };
 window.libOpenLib = cid => {          // 第一层点库 → 进第二层
-  state.libSel = cid; state.libPaper = ''; state.libLevel = 2;
-  renderCollectionsPage();
-};
-window.selectLibPaper = pid => {
-  state.libPaper = state.libPaper === pid ? '' : pid;
+  state.libSel = cid; state.libLevel = 2;
   renderCollectionsPage();
 };
 
@@ -3890,7 +3883,7 @@ async function renderCollectionsPage(preset = null) {
       : tj?.status === 'failed' ? "<span class=\"badge err\">译" + icon('close') + "</span>" : '<span class="muted">—</span>';
     const tk = s.tokens;
     const owner = d.collections.find(c => c.id === p.collection_id);
-    return `<tr class="lib-paper-row ${state.libPaper === p.id ? 'on' : ''}" onclick="selectLibPaper('${p.id}')">
+    return `<tr class="lib-paper-row" onclick="viewPaper('${p.id}')">
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${state.selected.has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
           ${esc(p.title || p.id)}
@@ -3904,31 +3897,6 @@ async function renderCollectionsPage(preset = null) {
             <option value="">移入…</option>${moveOpts(p.collection_id)}</select>
           <button class="btn small danger" onclick="delPaperFromLib('${p.id}')">删</button>
         </td></tr>`;}).join('');
-
-  // ---- 详情面板（选中论文的完整元数据）----
-  const pd = state.libPaper ? papers.find(p => p.id === state.libPaper) : null;
-  const detail = pd ? (() => {
-    const s = st[pd.id] || {};
-    const tj = s.translate_job;
-    const kv = [
-      ['作者', pd.authors], ['年份', pd.year], ['期刊', pd.journal], ['DOI', pd.doi],
-      ['关键词', pd.keywords], ['页数', pd.page_count], ['大小', pd.file_size ? (pd.file_size / 1048576).toFixed(1) + ' MB' : ''],
-      ['可见性', pd.visibility === 'private' ? icon('lock') + " 仅自己可见" : icon('globe') + " 共享"],
-      ['解析', pd.parse_status], ['翻译', tj?.status === 'done' ? `已完成（${tj.model || ''}）` : (tj?.status || '未翻译')],
-      ['所属库', d.collections.find(c => c.id === pd.collection_id)?.name || '—'],
-      ['加入时间', (pd.created_at || '').slice(0, 16)], ['ID', pd.id],
-    ].filter(x => x[1]);
-    return `<div class="lib-detail">
-      <div class="ld-title">${esc(pd.title || pd.id)}</div>
-      <div class="muted" style="font-size:11px;margin-bottom:6px">当前选中</div>
-      <div class="ld-kv">${kv.map(([k, v]) =>
-        `<div><span class="ld-k">${k}</span><span class="ld-v">${esc(String(v))}</span></div>`).join('')}</div>
-      ${pd.abstract ? `<div class="ld-sec">摘要</div><div class="ld-abs">${esc(pd.abstract)}</div>` : ''}
-      <div class="ld-actions">
-        <button class="btn small primary" onclick="viewPaper('${pd.id}')">${icon('book')} 阅读</button>
-        <button class="btn small" onclick="copyCite('${pd.id}')">复制引用</button>
-      </div></div>`;
-  })() : '';
 
   // ---- 组装 ----
   const selName = sel ? (d.collections.find(c => c.id === sel)?.name || '') : '';
@@ -3979,14 +3947,9 @@ async function renderCollectionsPage(preset = null) {
           <button class="btn small primary" onclick="libToBatchCenter('${scopeKey}')" title="带勾选进批量中心（批次进度/综述报告视图）">批量中心 »</button>
           <button class="btn small" onclick="libClearSel('${scopeKey}')">清空</button>
         </div>
-        <div class="lib-split">
-          <div class="lib-list">
-            <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
-              ${paperRows || `<tr><td colspan="6" class="muted">${q ? '没有匹配的论文' : '空库'}</td></tr>`}</table>
-          </div>
-          <aside class="lib-side-detail">
-            ${detail || '<p class="muted" style="padding:12px">点击左侧论文行查看详情</p>'}
-          </aside>
+        <div class="lib-list">
+          <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
+            ${paperRows || `<tr><td colspan="6" class="muted">${q ? '没有匹配的论文' : '空库'}</td></tr>`}</table>
         </div>
       </div>`;
 

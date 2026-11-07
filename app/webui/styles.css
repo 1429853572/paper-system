@@ -687,10 +687,6 @@ table.list input[type=checkbox] { width: auto; }
 .lib-head { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
 .lib-table tbody tr, .lib-table tr.lib-paper-row { cursor: pointer; }
 .lib-paper-row.on { background: var(--tint-primary); }
-.lib-detail { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--r-lg); padding: 12px 14px; background: var(--panel-soft); }
-.ld-title { font-weight: 600; font-size: var(--fs-md); margin-bottom: 8px; }
-.ld-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 16px; font-size: var(--fs-sm); }
-.ld-kv > div { display: flex; gap: 6px; min-width: 0; }
 .ld-k { color: var(--muted); flex: none; width: 52px; }
 .ld-v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ld-sec { margin: 10px 0 4px; font-size: var(--fs-sm); color: var(--muted); font-weight: 600; }
@@ -774,11 +770,7 @@ table.list input[type=checkbox] { width: auto; }
 .lib-crumb a { color: var(--primary); cursor: pointer; text-decoration: none; }
 .lib-crumb a:hover { text-decoration: underline; }
 .lib-crumb a.cur { font-weight: 600; color: var(--text); }
-.lib-split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
 .lib-list { overflow-x: auto; }   /* 125%/150% 缩放下表格不撑破 */
-.lib-side-detail { position: sticky; top: 8px; background: var(--panel); border: 1px solid var(--border);
-                   border-radius: 10px; padding: 12px; max-height: 70vh; overflow-y: auto; }
-@media (max-width: 1100px) { .lib-split { grid-template-columns: 1fr; } }
 
 /* ===== 文库管理 第一层：库列表 ===== */
 .lib-l1-head { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
