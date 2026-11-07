@@ -25,6 +25,7 @@ const DATA = {
     { id: 'p2', title: 'Paper Two', parse_status: 'failed', visibility: 'shared', owner_id: 1, page_count: 12, file_size: 2048 },
   ] },
   '/api/statuses': { statuses: {} },
+  '/api/mcp/pending': { pending: [] },
   '/api/health': { db: true, mineru: true, ai: true, trash_days: 30 },
   '/api/batches': { batches: [
     { batch_id: 'live1', job_type: 'translate', total: 2, done: 0, failed: 0, canceled: 0, active: 2,

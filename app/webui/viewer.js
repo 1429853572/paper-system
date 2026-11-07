@@ -1418,7 +1418,9 @@ function switchPage(page) {
 }
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
 
-/* ---------------- 队列浮层（替代任务中心页） ---------------- */
+/* ---------------- 任务中心（合并进批量中心 ③ 区块） ----------------
+   顶栏「队列」按钮 = 角标提醒；点击跳批量中心任务进度区。批次任务、无批次的
+   单篇任务、MCP 待确认写操作、批量暂停/恢复 全部在 ③ 区块内统一展示与操作。 */
 let _badgeAt = 0;
 async function refreshQueueBadge() {
   if (Date.now() - _badgeAt < 3000) return;   // SSE 事件风暴节流（3s）
@@ -1434,58 +1436,31 @@ async function _refreshQueueBadge() {
     const btn = $('#queue-btn'), badge = $('#qbadge');
     btn.hidden = !active.length && !pend.length;
     badge.textContent = active.length + pend.length;
-    if (!$('#queue-pop').hidden) renderQueueList(d.jobs);
+    // 批量中心打开时：任务区随事件实时刷新
+    if ($('#page-batch')?.style.display !== 'none' && Date.now() - _batchSseAt > 2000) {
+      _batchSseAt = Date.now();
+      renderBatchPanel();
+      renderSynList();
+    }
   } catch {}
 }
-async function renderQueueList(all) {
-  const jobs = all || (await api('/api/jobs?limit=200')).jobs;
-  const st = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
-              failed: '失败', canceled: '已取消'};
-  let pendHtml = '';
-  try {
-    const pend = (await api('/api/mcp/pending')).pending;
-    if (pend.length) pendHtml = '<div class="qp-mcp-head">MCP 待确认写操作（外部 AI 客户端发起）</div>' +
-      pend.map(p => `
-      <div class="qp-row">
-        <span class="badge run">待确认</span>
-        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.summary || p.tool)}</span>
-        <button class="btn small primary" onclick="mcpConfirm('${esc(p.action_id)}',true)">执行</button>
-        <button class="btn small danger" onclick="mcpConfirm('${esc(p.action_id)}',false)">丢弃</button>
-      </div>`).join('');
-  } catch { /* 忽略 */ }
-  const live = jobs.filter(j => ['queued', 'pending_gate', 'running', 'failed'].includes(j.status)).slice(0, 30);
-  $('#queue-list').innerHTML = pendHtml + live.map(j => `
-    <div class="qp-row">
-      <span class="badge ${j.status === 'failed' ? 'err' : 'run'}">${st[j.status] || j.status}</span>
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.title || j.paper_id || '')}</span>
-      <span class="muted" style="font-size:11px">${j.job_type}${j.progress_total ? ' ' + j.progress_done + '/' + j.progress_total : ''}</span>
-      ${['failed', 'canceled'].includes(j.status) ? `<button class="btn small" onclick="retryJob(${j.id})">重试</button>` : ''}
-      ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" onclick="cancelJob(${j.id})">取消</button>` : ''}
-      ${j.error ? `<div class="muted" style="font-size:11px;width:100%">${esc(j.error.slice(0, 90))}</div>` : ''}
-    </div>`).join('') || '<p class="muted" style="padding:10px">无进行中任务</p>';
-}
-window.toggleQueue = async show => {
-  const pop = $('#queue-pop');
-  pop.hidden = show === undefined ? !pop.hidden : !show;
-  if (!pop.hidden) renderQueueList();
-};
-$('#queue-btn').onclick = e => { e.stopPropagation(); toggleQueue(); };
-document.addEventListener('click', e => {
-  const pop = $('#queue-pop');
-  if (!pop.hidden && !pop.contains(e.target) && e.target.id !== 'queue-btn') pop.hidden = true;
-});
-window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderQueueList(); refreshQueueBadge(); };
+window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderBatchPanel(); refreshQueueBadge(); };
+window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderBatchPanel(); refreshQueueBadge(); };
 window.mcpConfirm = async (id, approve) => {
   try {
     const r = await api('/api/mcp/confirm', {method: 'POST', body: JSON.stringify({action_id: id, approve})});
     toast(r.ok ? (r.executed ? '✓ 已执行' + (r.summary ? '：' + r.summary : '') : '已丢弃') : (r.message || '失败'));
   } catch (e) { toast('操作失败: ' + e.message); }
-  renderQueueList();
+  renderBatchPanel();
   refreshQueueBadge();
 };
-window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderQueueList(); refreshQueueBadge(); };
-window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: 'POST'}); toast('批量已暂停（手动任务不受影响）'); };
-window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); };
+window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: 'POST'}); toast('批量已暂停（手动任务不受影响）'); renderBatchPanel(); };
+window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); renderBatchPanel(); };
+// 顶栏「队列」按钮 → 批量中心任务进度区
+$('#queue-btn').onclick = () => {
+  switchPage('batch');
+  setTimeout(() => $('#batch-panel')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
+};
 setInterval(refreshQueueBadge, 8000);
 
 /* ---------------- 批量中心 ----------------
@@ -1563,8 +1538,11 @@ async function renderBatchPage() {
         <div id="syn-list"><p class="muted" style="padding:8px 16px">加载中…</p></div>
       </div>
       <div class="card batch-prog">
-        <div class="bp-head"><b>③ 批次进度</b>
-          <span class="muted" style="font-size:11px">点击批次展开逐篇状态；失败项可单独重试</span></div>
+        <div class="bp-head"><b>③ 任务进度</b>
+          <span class="muted" style="font-size:11px">批次 + 单篇任务统一在此；失败项可单独重试；MCP 写操作在此确认</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="qp-pause" title="暂停批量解析队列（手动任务不受影响）">⏸ 暂停批量</button>
+          <button class="btn small" id="qp-resume">▶ 恢复</button></div>
         <div id="batch-panel"><p class="muted" style="padding:8px">加载中…</p></div>
       </div>
     </div>`;
@@ -1586,6 +1564,8 @@ async function renderBatchPage() {
     state._batchPreset = null;
     setBatchSel(preset, preset.size ? '我的勾选' : '');
   }
+  $('#qp-pause').onclick = () => pauseQueue();
+  $('#qp-resume').onclick = () => resumeQueue();
   loadBpPicker();          // 勾选面板常驻，进页即加载
   await renderBatchPanel();
   renderSynList();
@@ -1891,18 +1871,19 @@ const BATCH_ST = {queued: '排队', pending_gate: '等GPU', running: '进行中'
 async function renderBatchPanel() {
   const el = $('#batch-panel');
   if (!el) return;
-  let bs;
+  let bs = [], loose = [], pend = [];
   try {
     bs = (await api('/api/batches?limit=20')).batches;
+    const jd = await api('/api/jobs?limit=200');
+    loose = (jd.jobs || []).filter(j => !j.batch_id)
+      .filter(j => ['queued', 'pending_gate', 'running', 'failed', 'canceled'].includes(j.status))
+      .slice(0, 12);
+    try { pend = (await api('/api/mcp/pending')).pending || []; } catch { /* 忽略 */ }
   } catch (e) {
     el.innerHTML = `<p class="muted" style="padding:8px 0">加载失败: ${esc(e.message)}</p>`;
     return;
   }
-  if (!bs.length) {
-    el.innerHTML = '<p class="muted" style="padding:8px 0">还没有批次——发起批量操作后，这里会实时显示进度</p>';
-    return;
-  }
-  // 语义：进行中（实时刷新、自动展开）置顶；已结束只保留最近 5 条折叠回看，更早的看「队列」浮层
+  pend = Array.isArray(pend) ? pend : [];
   const active = bs.filter(b => b.active > 0);
   const settled = bs.filter(b => b.active === 0).slice(0, 5);
   active.forEach(b => state._batchOpen.add(b.batch_id));   // 活跃批次默认展开
@@ -1928,10 +1909,36 @@ async function renderBatchPanel() {
     </div>`;
   };
 
+  const st = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
+              failed: '失败', canceled: '已取消'};
+  const jobRow = j => `
+    <div class="bpanel-row sub">
+      <span class="badge ${j.status === 'failed' ? 'err' : j.status === 'done' ? 'ok' : 'run'}">${st[j.status] || esc(j.status)}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.title || j.paper_id || '')}</span>
+      <span class="muted" style="font-size:11px">${esc(j.job_type)}${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
+      ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
+      ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
+    </div>${j.error ? `<div class="bpanel-err">${esc(j.error.slice(0, 140))}</div>` : ''}`;
+
+  const pendHtml = pend.length
+    ? `<div class="bp-sec-title">MCP 待确认写操作（外部 AI 客户端发起）</div>` +
+      pend.map(p => `
+      <div class="bpanel-batch"><div class="bpanel-row head">
+        <span class="badge run">待确认</span>
+        <span style="flex:1;min-width:0">${esc(p.summary || p.tool)}</span>
+        <button class="btn small primary" onclick="mcpConfirm('${esc(p.action_id)}',true)">执行</button>
+        <button class="btn small danger" onclick="mcpConfirm('${esc(p.action_id)}',false)">丢弃</button>
+      </div></div>`).join('')
+    : '';
+
   el.innerHTML = `
-    <div class="bp-sec-title">进行中${active.length ? `（${active.length}）` : ''}</div>
+    ${pendHtml}
+    <div class="bp-sec-title">进行中的批次${active.length ? `（${active.length}）` : ''}</div>
     ${active.length ? active.map(row).join('') : '<p class="muted" style="padding:2px 0 8px">没有进行中的批次</p>'}
-    ${settled.length ? `<div class="bp-sec-title">最近完成（保留 5 条，更早的看「队列」浮层）</div>${settled.map(row).join('')}` : ''}`;
+    <div class="bp-sec-title">单篇任务（解析 / 翻译 / 导读等，非批量发起）</div>
+    ${loose.length ? `<div class="bpanel-batch">${loose.map(jobRow).join('')}</div>`
+      : '<p class="muted" style="padding:2px 0 8px">没有进行中的单篇任务</p>'}
+    ${settled.length ? `<div class="bp-sec-title">最近完成的批次（保留 5 条）</div>${settled.map(row).join('')}` : ''}`;
   for (const bid of state._batchOpen) {
     const box = el.querySelector(`[data-jobs="${bid}"]`);
     if (box && !box.hidden) renderBatchJobs(bid, box);
@@ -4670,7 +4677,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   let closed = false;
   for (const sel of ['#acc-pop', '#filter-pop', '#upload-pop', '#download-pop',
-                     '#queue-pop', '#col-new-form', '#health-pop', '#sort-pop']) {
+                     '#discover-pop', '#col-new-form', '#health-pop', '#sort-pop']) {
     const el = document.querySelector(sel);
     if (el && !el.hidden) { el.hidden = true; closed = true; }
   }
