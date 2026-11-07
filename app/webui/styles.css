@@ -886,3 +886,28 @@ table.list input[type=checkbox] { width: auto; }
 .syn-report h4 { margin: 18px 0 8px; font-size: var(--fs-lg); }
 .syn-report .tbl-md { margin: 10px 0; }
 @media (max-width: 900px) { .syn-body { grid-template-columns: 1fr; } .syn-nav { position: static; } }
+
+/* 引用跳转源句闪烁（2.2s 后自动移除 class） */
+.blk-flash { animation: blkflash 2.1s ease-out 1; border-radius: var(--r-xs); }
+@keyframes blkflash {
+  0%, 40% { background: var(--tint-primary); box-shadow: inset 0 0 0 2px var(--primary); }
+  100% { background: transparent; box-shadow: none; }
+}
+
+/* ---- 找相关浮层（S2 排卡） ---- */
+.discover-pop { position: absolute; top: 38px; right: 12px; z-index: 70; width: 440px; max-width: 92vw;
+                display: flex; flex-direction: column; }
+.dp-tabs { display: flex; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--border); align-items: center; }
+.dp-tab { border: none; background: none; padding: 4px 10px; cursor: pointer; border-radius: var(--r-sm);
+          font-size: var(--fs-sm); color: var(--muted); }
+.dp-tab.on { background: var(--tint-primary); color: var(--primary); font-weight: 600; }
+.dp-list { max-height: 46vh; overflow: auto; }
+.dp-item { display: flex; gap: 8px; padding: 9px 12px; border-bottom: 1px dashed var(--line-soft); cursor: pointer; }
+.dp-item:hover { background: var(--hover); }
+.dp-item.have { opacity: .62; }
+.dp-item input { width: auto; margin-top: 3px; flex: none; }
+.dp-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.dp-body b { font-size: var(--fs-sm); line-height: 1.45; }
+.dp-abs { font-size: var(--fs-xs); color: var(--muted); display: -webkit-box;
+          -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dp-foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }

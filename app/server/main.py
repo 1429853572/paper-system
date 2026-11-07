@@ -2051,6 +2051,97 @@ def paper_cite(paper_id: str, request: Request):
     }
 
 
+# ---------------- 找相关（Semantic Scholar 三模式） ----------------
+@app.get("/api/papers/{paper_id}/discover")
+def paper_discover(paper_id: str, request: Request, mode: str = "rec", limit: int = 20):
+    """相关文献发现：rec=相关推荐 / refs=参考文献 / cites=引证。结果带 in_library 标记。"""
+    u = require(request)
+    p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    if p is None:
+        raise HTTPException(404, "论文不存在")
+    _require_visible(u, p)
+    from core import discover as _disc
+    try:
+        items = _disc.discover(dict(p), mode, limit)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Semantic Scholar 不可达: {e}")
+    out = []
+    for it in items:
+        dup = None
+        if it["doi"]:
+            dup = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL", (it["doi"],))
+        if dup is None and it["title"]:
+            dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL",
+                         (it["title"].lower(),))
+        out.append({**it, "in_library": dup["id"] if dup else None})
+    return {"items": out, "mode": mode}
+
+
+@app.post("/api/papers/discover-import")
+async def discover_import(request: Request):
+    """导入「找相关」勾选的论文：DOI/标题查重 → URL 导入（复用 import-url 链路）→ 元数据先行回填。
+
+    仅接受带公开 PDF 的条目（无 pdf_url 的返回 no_pdf）。
+    """
+    u = require(request)
+    body = await request.json()
+    items = [x for x in (body.get("items") or []) if isinstance(x, dict)][:20]
+    if not items:
+        raise HTTPException(400, "items 为空")
+    out = []
+    imported = 0
+    for it in items:
+        title = (it.get("title") or "").strip()
+        url = (it.get("pdf_url") or "").strip()
+        if not title:
+            continue
+        dup = None
+        if it.get("doi"):
+            dup = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL", (it["doi"],))
+        if dup is None:
+            dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL",
+                         (title.lower(),))
+        if dup:
+            out.append({"title": title, "status": "duplicate", "paper_id": dup["id"]})
+            continue
+        if not url.startswith(("http://", "https://")):
+            out.append({"title": title, "status": "no_pdf"})
+            continue
+        from core.discover import resolve_direct_pdf
+        url = resolve_direct_pdf(url)   # doi.org 落地页 → 直链 PDF（MinerU 不跟 302）
+        try:
+            _assert_public_url(url)
+        except HTTPException:
+            out.append({"title": title, "status": "no_pdf"})
+            continue
+        file_hash = "url:" + ingest.sha256_bytes(url.encode())
+        exist = db.one("SELECT id FROM papers WHERE file_hash=? AND deleted_at IS NULL", (file_hash,))
+        if exist:
+            out.append({"title": title, "status": "duplicate", "paper_id": exist["id"]})
+            continue
+        name = Path(url.split("?")[0]).name or "document.pdf"
+        if "." not in name:
+            name += ".pdf"
+        paper_id, _ = ingest.create_paper(u["id"], file_hash, 0, 0,
+                                          body.get("visibility", "shared"), name)
+        cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+        with db.write() as c:
+            c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
+            # 元数据先行：S2 已给全，MinerU 解析完成后的标题提取会再校准一次
+            c.execute("UPDATE papers SET title=?, authors=?, year=?, journal=?, doi=? WHERE id=?",
+                      (title, it.get("authors") or "", it.get("year") or "",
+                       it.get("venue") or "", it.get("doi") or "", paper_id))
+        scheduler.enqueue(u["id"], "parse", paper_id, {"tier": "standard", "url": url},
+                          priority="interactive")
+        out.append({"title": title, "status": "queued", "paper_id": paper_id})
+        imported += 1
+    if imported:
+        audit(u["id"], "discover-import", f"{imported} 篇")
+    return {"results": out}
+
+
 @app.get("/api/papers/{paper_id}/bilingual")
 def get_bilingual(paper_id: str, request: Request, cache_key: str = "",
                   offset: int = 0, limit: int = 0):

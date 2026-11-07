@@ -804,6 +804,8 @@ function dprFor(cssW, cssH, budget) {
 
 async function openPaper(id) {
   const PAGE = 40;
+  const dp = $('#discover-pop');
+  if (dp) dp.hidden = true;   // 切论文关掉「找相关」浮层，避免新论文配旧数据
   const d = await api(`/api/papers/${id}?offset=0&limit=${PAGE}`);
   state.current = d.paper; state.blocks = d.blocks;
   state._blkTotal = d.total ?? d.blocks.length;
@@ -1801,6 +1803,117 @@ setInterval(() => {
 
 let _batchSseAt = 0;
 
+/* ---------------- 找相关（Semantic Scholar 三模式排卡，llm-for-zotero /discover_related 式） ----
+   推荐/参考文献/引证三页签；勾选一键导入（DOI/标题自动查重，无公开 PDF 不可导）。 */
+state._discover = {};        // paper_id → {mode: items | null(失败) | []（加载中）}
+state._discMode = 'rec';
+state._discSel = new Set();
+
+function discoverCache() {
+  return (state._discover[state.current?.id] ||= {});
+}
+
+async function openDiscover() {
+  const p = state.current;
+  if (!p) { toast('先选择论文'); return; }
+  const pop = $('#discover-pop');
+  pop.hidden = !pop.hidden;
+  if (pop.hidden) return;
+  const r = $('#discover-btn').getBoundingClientRect();
+  pop.style.position = 'fixed';
+  pop.style.top = (r.bottom + 6) + 'px';
+  pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
+  pop.style.left = 'auto';
+  state._discSel = new Set();
+  renderDiscover();
+  await loadDiscover();
+}
+
+async function loadDiscover() {
+  const pid = state.current?.id;
+  const mode = state._discMode;
+  const cache = discoverCache();
+  if (cache[mode] !== undefined) { renderDiscover(); return; }
+  cache[mode] = [];   // 占位防重复拉
+  try {
+    const d = await api(`/api/papers/${pid}/discover?mode=${mode}&limit=20`);
+    cache[mode] = d.items;
+  } catch (e) {
+    cache[mode] = null;
+    toast('找相关失败: ' + e.message);
+  }
+  if (state.current?.id === pid) renderDiscover();
+}
+
+const DISC_LABELS = {rec: '相关推荐', refs: '参考文献', cites: '引证'};
+
+function renderDiscover() {
+  const pop = $('#discover-pop');
+  if (!pop || pop.hidden) return;
+  const mode = state._discMode;
+  const items = discoverCache()[mode];
+  const body = items === undefined || items === null ? '' : items.length ? items.map((it, i) => `
+    <label class="dp-item ${it.in_library ? 'have' : ''}">
+      <input type="checkbox" data-di="${i}" ${it.in_library || !it.pdf_url ? 'disabled' : ''}>
+      <span class="dp-body">
+        <b>${esc(it.title)}</b>
+        <span class="muted">${esc([it.year, it.venue, it.citation_count ? '被引 ' + it.citation_count : ''].filter(Boolean).join(' · '))}</span>
+        ${it.in_library ? '<span class="badge ok">已在库</span>' : !it.pdf_url ? '<span class="badge priv">无公开PDF</span>' : ''}
+        ${it.abstract ? `<span class="dp-abs">${esc(it.abstract)}</span>` : ''}
+      </span>
+    </label>`).join('') : '<p class="muted" style="padding:14px">该模式下没有结果</p>';
+  const foot = items && items.length ? `
+    <div class="dp-foot">
+      <span class="muted" style="font-size:11px">勾选一键导入（自动查重）</span>
+      <span class="spacer"></span>
+      <button class="btn small primary" id="dp-import">导入所选（<span id="dp-n">0</span>）</button>
+    </div>` : '';
+  pop.innerHTML = `
+    <div class="dp-tabs">
+      ${Object.entries(DISC_LABELS).map(([k, v]) =>
+        `<button class="dp-tab ${k === mode ? 'on' : ''}" data-dm="${k}">${v}</button>`).join('')}
+      <span class="spacer"></span>
+      <button class="btn small" id="dp-close" aria-label="关闭">${icon('close')}</button>
+    </div>
+    <div class="dp-list">${items === null ? '<p class="muted" style="padding:14px">加载失败，请稍后重试</p>'
+      : items === undefined ? '<p class="muted" style="padding:14px">加载中…</p>' : body}</div>${foot}`;
+  $$('.dp-tab', pop).forEach(b => b.onclick = e2 => {
+    e2.stopPropagation();   // 处理器内重建了浮层内容，放行冒泡会让 document 的外点关闭逻辑误判（target 已脱离 DOM）
+    state._discMode = b.dataset.dm;
+    state._discSel = new Set();
+    renderDiscover();
+    loadDiscover();
+  });
+  $('#dp-close').onclick = () => { pop.hidden = true; };
+  $$('input[data-di]', pop).forEach(cb => cb.onchange = () => {
+    if (cb.checked) state._discSel.add(cb.dataset.di);
+    else state._discSel.delete(cb.dataset.di);
+    const n = $('#dp-n');
+    if (n) n.textContent = state._discSel.size;
+  });
+  $('#dp-import')?.addEventListener('click', async () => {
+    const items2 = discoverCache()[state._discMode] || [];
+    const sel = [...state._discSel].map(i => items2[+i]).filter(Boolean);
+    if (!sel.length) { toast('先勾选要导入的论文'); return; }
+    try {
+      const d = await api('/api/papers/discover-import', {method: 'POST',
+        body: JSON.stringify({items: sel, collection_id: state.currentCollection || null})});
+      const q = d.results.filter(x => x.status === 'queued').length;
+      const dup = d.results.filter(x => x.status === 'duplicate').length;
+      const nopdf = d.results.filter(x => x.status === 'no_pdf').length;
+      toast(`已导入 ${q} 篇并开始解析` +
+            (dup ? `，${dup} 篇已在库跳过` : '') + (nopdf ? `，${nopdf} 篇无公开 PDF` : ''));
+      pop.hidden = true;
+      loadPapers();
+    } catch (e) { toast('导入失败: ' + e.message); }
+  });
+}
+$('#discover-btn')?.addEventListener('click', e => { e.stopPropagation(); openDiscover(); });
+document.addEventListener('click', e => {
+  const pop = $('#discover-pop');
+  if (pop && !pop.hidden && !pop.contains(e.target) && !e.target.closest('#discover-btn')) pop.hidden = true;
+});
+
 /* SSE 实时进度 */
 let _sseCollectionsAt = 0;   // 批量任务事件风暴节流（3s 内只重建一次文库页）
 async function watchJobs() {
@@ -2708,14 +2821,20 @@ window.jumpToEvidence = async e => {
       $$('#content-view .blk').forEach(x => { x.classList.remove('active'); x.style.removeProperty('--hlc'); });
       applyActiveStyle(blkEl);
       blkEl.scrollIntoView({block: 'center', behavior: 'smooth'});
+      // 源句闪烁（llm-for-zotero/zotero-mcp 式）：跳到后 2 秒内一眼锁定引用原文
+      blkEl.classList.remove('blk-flash');
+      void blkEl.offsetWidth;   // 强制 reflow 重启动画
+      blkEl.classList.add('blk-flash');
+      setTimeout(() => blkEl.classList.remove('blk-flash'), 2200);
     }
     // PDF：滚到块所在页并闪烁高亮框（跨页段落每页各画一个）
     if (state.pdfDoc) state.pageNum = blk.page_index + 1;
     await pdfFlashBlock(blk);
     return;
   }
-  // 找不到块（跨论文证据 / 块已重建）→ 至少跳到对应页
+  // 找不到块（跨论文证据 / 块已重建）→ 至少跳到对应页；保守提示而非静默
   if (state.pdfDoc) { state.pageNum = e.page_index + 1; renderPage(); }
+  toast('该引用的原文段落未精确定位（块可能已重建），已跳到所在页');
 };
 window.jumpEvidence = page => { switchPage('reader'); if (state.pdfDoc) { state.pageNum = page + 1; renderPage(); } };
 
