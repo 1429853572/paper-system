@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""宿主浏览器采集服务（中文文献获取）。
+
+为什么在宿主跑：知网/chinaxiv/期刊官网普遍软封（403「系统正在维护中」、
+滑块验证码、CAJ 私有格式），纯 HTTP 拿不到；真实浏览器 + 人工过一次验证码
++ Cookie 复用是唯一可行路径。容器内不装 Chromium（避免 1GB 镜像与慢构建），
+与 render-service.py 完全同构。
+
+启动: python3 scripts/acquire-service.py --port 8802
+接口（均需 X-Acquire-Token 头，与 render-service 同款鉴权）：
+  POST /search   {"site":"cnki|chinaxiv|nstl", "query":"...", "page":1, "limit":20}
+                → {"results":[{"title","authors","year","venue","doi","url","pdf_url","summary"}]}
+  POST /fetch    {"url":"https://..."}          → 下载任意 URL（走浏览器会话，带 Cookie）
+                → {"content_base64","content_type","filename"}
+  GET  /status                           → {"browser":true,"playwright":true,"cookie":bool}
+鉴权：设置 PAPERSYS_ACQUIRE_TOKEN（.env，经 systemd EnvironmentFile 注入）时，
+      请求必须带同值 X-Acquire-Token 头——否则局域网内任何人可驱动宿主浏览器
+      访问任意站点（SSRF/内网探测跳板）。未设置时保持无鉴权（向后兼容）。
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import re
+import threading
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+ACQUIRE_TOKEN = ""
+CHROME = "/usr/bin/google-chrome"
+STATE_FILE = os.path.expanduser("~/.cnki_acquire_state.json")
+
+# Playwright 的同步 API 只能在创建它的线程里用。本服务用「单线程 HTTPServer +
+# 常驻浏览器」：请求串行处理（采集是低频重活，串行足够），浏览器只启动一次，
+# 登录态靠 Cookie 持久化（STATE_FILE）跨进程复用。
+# （早期版本用 ThreadingHTTPServer + 每请求建浏览器：Playwright 的 greenlet
+#   事件循环在请求线程结束时被销毁，会连带静默杀掉整个服务进程。）
+_lock = threading.Lock()   # 防御性：保证同一时刻只有一个浏览器操作
+_pw = None                 # playwright 实例
+_browser = None            # 常驻浏览器
+_context = None            # 常驻上下文（Cookie 复用）
+
+
+def _playwright():
+    """返回（必要时启动）playwright 实例。"""
+    global _pw
+    if _pw is None:
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as e:
+            raise RuntimeError("宿主未安装 playwright：pip install playwright") from e
+        _pw = sync_playwright().start()
+    return _pw
+
+
+def _browser_ctx(pw, headless: bool = True):
+    """返回（必要时创建）常驻浏览器上下文：复用已保存 Cookie。"""
+    global _browser, _context
+    if _context is not None:
+        return _browser, _context
+    # 复用系统已装的 Chrome，不必让 playwright 再下 300MB Chromium
+    launch = {"headless": headless, "args": ["--no-sandbox", "--disable-dev-shm-usage",
+                                           "--disable-blink-features=AutomationControlled"]}
+    if os.path.exists(CHROME):
+        launch["executable_path"] = CHROME
+    _browser = pw.chromium.launch(**launch)
+    _context = _browser.new_context(
+        user_agent=("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"),
+        locale="zh-CN",
+        accept_downloads=True,
+    )
+    if os.path.exists(STATE_FILE):
+        try:
+            _context.add_cookies(json.load(open(STATE_FILE, encoding="utf-8")))
+        except Exception:  # noqa: BLE001
+            pass
+    return _browser, _context
+
+
+def save_state(ctx) -> None:
+    try:
+        json.dump(ctx.cookies(), open(STATE_FILE, "w", encoding="utf-8"), ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------- 各站点的检索/解析 ----------------
+
+def _search_chinaxiv(ctx, query: str, page: int, limit: int) -> list[dict]:
+    """中国科学院科技论文预印本平台（chinaxiv）：中文预印本免费全文 + BibTeX。"""
+    url = "https://chinaxiv.org/user/search.htm?" + urllib.parse.urlencode(
+        {"search": query, "page": page})
+    pg = ctx.new_page()
+    pg.goto(url, wait_until="domcontentloaded", timeout=45000)
+    pg.wait_for_timeout(1500)
+    # 用 DOM 抽取（正则对中文期刊页的层级太脆）：标题/分类/提交时间/作者/摘要
+    items = pg.evaluate(
+        """(limit) => {
+      const out = [];
+      for (const li of document.querySelectorAll('li')) {
+        const h3 = li.querySelector('h3');
+        const absA = h3 && h3.querySelector('a');
+        const dlA = li.querySelector('a[href*="download.htm"]');
+        if (!absA || !dlA) continue;
+        const abs = absA.getAttribute('href');
+        const uuid = (dlA.getAttribute('href') || '').match(/uuid=([0-9a-f]+)/);
+        if (!uuid) continue;
+        const full = li.innerText || '';
+        // 按行取（知网预印本页是「标签：值」逐行结构，正则跨行易错）
+        const lines = full.split('\\n').map(s => s.trim()).filter(Boolean);
+        const after = (label) => {
+          for (let i = 0; i < lines.length; i++) {
+            const l = lines[i];
+            if (l.startsWith(label)) {
+              const inline = l.slice(label.length).replace(/^\\s*[:：]\\s*/, '').trim();
+              if (inline) return inline;
+              return (lines[i + 1] || '').trim();
+            }
+          }
+          return '';
+        };
+        // 作者：页面用 <span class="name"> 承载（无标签文本）
+        const nameEl = li.querySelector('span.name, .name');
+        const authors = nameEl ? (nameEl.innerText || '').replace(/\s+/g, ' ').trim() : after('作者');
+        const summary = after('摘要');
+        const cat = after('分类');
+        const tm = full.match(/提交时间\\s*[:：]?\\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/);
+        out.push({title: (absA.textContent || '').trim(),
+                  abs_url: 'https://chinaxiv.org' + abs,
+                  pdf_url: 'https://chinaxiv.org/user/download.htm?uuid=' + uuid[1],
+                  bib_url: 'https://chinaxiv.org/user/download.htm?uuid=' + uuid[1] + '&filetype=bib',
+                  authors: authors, summary: summary, category: cat,
+                  year: tm ? tm[1].slice(0, 4) : '',
+                  venue: 'ChinaXiv 预印本', source: 'chinaxiv', doi: ''});
+        if (out.length >= limit) break;
+      }
+      return out;
+    }""", limit)
+    pg.close()
+    return items
+
+
+def _search_cnki(ctx, query: str, page: int, limit: int) -> list[dict]:
+    """知网 kns8s 检索（浏览器会话，人工过一次滑块后 Cookie 复用）。
+
+    仅做「列表页解析」；下载走 dbname+filename 直链模式（与 jasminum 同思路）。
+    """
+    url = "https://kns.cnki.net/kns8s/defaultresult/index?" + urllib.parse.urlencode(
+        {"kw": query, "korder": "TI", "page": page})
+    pg = ctx.new_page()
+    pg.goto(url, wait_until="domcontentloaded", timeout=60000)
+    pg.wait_for_timeout(2500)
+    html = pg.content()
+    if "验证码" in html or "滑块" in html:
+        save_state(ctx)
+        pg.close()
+        raise RuntimeError("知网要求滑块验证码——请在有头模式下人工完成一次后再试")
+    out = []
+    for m in re.finditer(
+            r'<a class="fz14" href="[^"]*?dbcode=([A-Z]+)&filename=([0-9A-Za-z_\-]+)"[^>]*>(.*?)</a>',
+            html, re.S):
+        dbcode, filename, title = m.group(1), m.group(2), re.sub(r"<[^>]+>", "", m.group(3))
+        title = title.strip()
+        if not title:
+            continue
+        out.append({"title": title, "dbcode": dbcode, "filename": filename,
+                    "pdf_url": (f"https://kns.cnki.net/KXReader/Detail?dbcode={dbcode}"
+                                f"&filename={filename}&uid=&p=&cflag=overlay"),
+                    "source": "cnki"})
+        if len(out) >= limit:
+            break
+    pg.close()
+    return out
+
+
+SEARCHERS = {"chinaxiv": _search_chinaxiv, "cnki": _search_cnki}
+
+
+def do_search(site: str, query: str, page: int, limit: int) -> list[dict]:
+    fn = SEARCHERS.get(site)
+    if fn is None:
+        raise ValueError(f"不支持的站点: {site}（可用: {', '.join(SEARCHERS)}）")
+    with _lock:
+        pw = _playwright()
+        _browser, ctx = _browser_ctx(pw)
+        return fn(ctx, query, page, limit)
+
+
+def do_fetch(url: str, timeout: int = 90) -> tuple[bytes, str, str]:
+    """经浏览器会话下载 URL（带 Cookie / 反爬头），返回 (内容, content_type, 文件名)。"""
+    with _lock:
+        pw = _playwright()
+        _browser, ctx = _browser_ctx(pw)
+        pg = ctx.new_page()
+        try:
+            # ①页面内 fetch：带完整浏览器指纹 + Cookie，是唯一能过软封的路径
+            #   （ctx.request 无指纹 → 403；页面导航会触发下载事件 → goto 抛错）
+            origin = urllib.parse.urlparse(url)
+            try:
+                pg.goto(origin.scheme + "://" + origin.netloc + "/", wait_until="domcontentloaded",
+                        timeout=timeout * 1000)
+                res = pg.evaluate(
+                    """async (u) => {
+                      const r = await fetch(u, {credentials: 'include'});
+                      const buf = await r.arrayBuffer();
+                      const u8 = new Uint8Array(buf);
+                      let bin = '';
+                      const CH = 0x8000;
+                      for (let i = 0; i < u8.length; i += CH)
+                        bin += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+                      return {status: r.status, ct: r.headers.get('content-type') || '',
+                              len: u8.length, b64: btoa(bin)};
+                    }""", url)
+                if res and res.get("status") == 200 and res.get("len"):
+                    data = base64.b64decode(res["b64"])
+                    name = os.path.basename(origin.path) or "download.bin"
+                    if "uuid" in (origin.query or ""):
+                        name = "download.pdf"
+                    return data, res.get("ct") or "application/octet-stream", name
+            except Exception as e:  # noqa: BLE001 —— 回退到导航下载
+                log_msg = f"[acquire] 页面 fetch 失败，回退导航: {str(e)[:120]}"
+                print(log_msg, flush=True)
+            # ②回退：导航下载事件
+            with pg.expect_download(timeout=timeout * 1000) as dl_info:
+                pg.goto(url, wait_until="commit", timeout=timeout * 1000)
+            path = dl_info.value.path()
+            data = Path(path).read_bytes()
+            name = dl_info.value.suggested_filename or os.path.basename(path)
+            return data, "application/pdf", name
+        finally:
+            pg.close()
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code: int, body: bytes, ctype: str):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _auth(self) -> bool:
+        if ACQUIRE_TOKEN and self.headers.get("X-Acquire-Token") != ACQUIRE_TOKEN:
+            self._send(401, json.dumps({"error": "invalid token"}).encode(), "application/json")
+            return False
+        return True
+
+    def do_POST(self):  # noqa: N802
+        if not self._auth():
+            return
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            req = json.loads(self.rfile.read(n) or b"{}")
+            if self.path == "/search":
+                res = do_search(req.get("site") or "chinaxiv", req.get("query") or "",
+                                int(req.get("page") or 1), int(req.get("limit") or 20))
+                out = json.dumps({"results": res}, ensure_ascii=False).encode()
+                self._send(200, out, "application/json; charset=utf-8")
+                return
+            if self.path == "/fetch":
+                data, ctype, name = do_fetch(req.get("url") or "")
+                out = json.dumps({"content_base64": base64.b64encode(data).decode(),
+                                  "content_type": ctype, "filename": name}).encode()
+                self._send(200, out, "application/json; charset=utf-8")
+                return
+            self._send(404, json.dumps({"error": "not found"}).encode(), "application/json")
+        except Exception as e:  # noqa: BLE001
+            self._send(502, json.dumps({"error": str(e)[:400]}).encode(),
+                        "application/json; charset=utf-8")
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/status":
+            has_cookie = os.path.exists(STATE_FILE)
+            out = json.dumps({"browser": os.path.exists(CHROME),
+                              "playwright": _playwright_ok(),
+                              "cookie_state": has_cookie,
+                              "sites": list(SEARCHERS)}).encode()
+            self._send(200, out, "application/json; charset=utf-8")
+            return
+        self._send(404, b"not found", "text/plain")
+
+    def log_message(self, fmt, *args):  # 降噪
+        print("[acquire] " + fmt % args, flush=True)
+
+
+def _playwright_ok() -> bool:
+    try:
+        import playwright.sync_api  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def main() -> None:
+    global ACQUIRE_TOKEN
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=8802)
+    ap.add_argument("--token", default="")   # 缺省读 PAPERSYS_ACQUIRE_TOKEN
+    args = ap.parse_args()
+    ACQUIRE_TOKEN = args.token or os.environ.get("PAPERSYS_ACQUIRE_TOKEN", "")
+    srv = HTTPServer(("0.0.0.0", args.port), Handler)   # 单线程：Playwright sync API 只能在创建它的线程用
+    print(f"[acquire] 采集服务启动 http://0.0.0.0:{args.port} "
+          f"（鉴权{'开' if ACQUIRE_TOKEN else '关'}）", flush=True)
+    srv.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

@@ -1046,3 +1046,19 @@ table.list input[type=checkbox] { width: auto; }
 /* 目录批量导入（上传弹层内） */
 .dir-import { padding: 4px 12px 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .dir-import select { max-width: 190px; }
+
+/* ---- 采集弹层（中文文献检索→下载入库） ---- */
+.acq-pop { position: absolute; z-index: 92; width: 560px; max-width: 94vw; display: flex; flex-direction: column; }
+.acq-tabs { display: flex; align-items: center; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.acq-search { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.acq-list { max-height: 46vh; overflow-y: auto; }
+.acq-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px dashed var(--line-soft); cursor: pointer; }
+.acq-item:hover { background: var(--hover); }
+.acq-item.have { opacity: .6; }
+.acq-item input { width: auto; flex: none; margin-top: 3px; }
+.acq-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.acq-body b { font-size: var(--fs-sm); line-height: 1.4; }
+.acq-abs { font-size: var(--fs-xs); color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical; overflow: hidden; }
+.acq-foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
+.acq-foot .spacer { flex: 1; }

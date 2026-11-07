@@ -1703,6 +1703,108 @@ def _safe_import_dir(rel: str) -> Path:
     return target
 
 
+# ---------------- 文献采集（宿主浏览器服务；中文文献获取主路径） ----------------
+@app.get("/api/acquire/status")
+def acquire_status(request: Request):
+    """采集服务可用性（前端置灰/提示用）。"""
+    require(request)
+    from core import acquire
+    return acquire.service_status()
+
+
+@app.post("/api/acquire/search")
+async def acquire_search(request: Request):
+    """检索候选（site: cnki|chinaxiv）。走宿主浏览器会话，绕开知网/预印本软封。"""
+    require(request)
+    body = await request.json()
+    site = (body.get("site") or "chinaxiv").strip()
+    query = (body.get("query") or "").strip()
+    if not query:
+        raise HTTPException(400, "query 必填")
+    from core import acquire
+    try:
+        items = acquire.search(site, query, int(body.get("page") or 1),
+                               min(int(body.get("limit") or 20), 50))
+    except ValueError as e:
+        raise HTTPException(502, str(e))
+    # 已在库的标记（按标题粗匹配，防重复下载）
+    titles = {row[0].lower() for row in db.all("SELECT title FROM papers WHERE deleted_at IS NULL")}
+    for it in items:
+        it["in_library"] = (it.get("title") or "").strip().lower() in titles
+    return {"items": items, "site": site}
+
+
+@app.post("/api/acquire/import")
+async def acquire_import(request: Request):
+    """下载勾选的候选并入库（复用 upload→MinerU 管线），返回批次号。"""
+    u = require(request)
+    body = await request.json()
+    picks = [x for x in (body.get("items") or []) if isinstance(x, dict)][:30]
+    if not picks:
+        raise HTTPException(400, "items 为空")
+    is_admin = u["role"] == "admin"
+    overrides = _quota_overrides(u["id"])
+    from core import acquire, caj as caj_mod
+
+    batch_id = uuid.uuid4().hex[:12]
+    queued, skipped = [], []
+    for it in picks:
+        url = (it.get("pdf_url") or it.get("url") or "").strip()
+        title = (it.get("title") or "").strip() or "未命名"
+        if not url.startswith(("http://", "https://")):
+            skipped.append({"title": title, "reason": "无可下载链接"})
+            continue
+        try:
+            data, ctype, fname = acquire.fetch(url)
+        except ValueError as e:
+            skipped.append({"title": title, "reason": str(e)[:150]})
+            continue
+        if not data:
+            skipped.append({"title": title, "reason": "下载内容为空"})
+            continue
+        if data[:5] != b"%PDF-":     # 非 PDF（CAJ 等）→ 尝试转换
+            try:
+                data = caj_mod.convert_bytes(data, fname)
+            except caj_mod.ConvertError as e:
+                skipped.append({"title": title, "reason": f"非 PDF 且转换失败: {str(e)[:110]}"})
+                continue
+        try:
+            pages, _k = ingest.preflight_doc(data, fname or "paper.pdf",
+                                             is_admin=is_admin, overrides=overrides)
+        except ingest.PreflightError as e:
+            skipped.append({"title": title, "reason": str(e)})
+            continue
+        file_hash = ingest.sha256_bytes(data)
+        paper_id, dup = ingest.create_paper(u["id"], file_hash, pages, len(data),
+                                            body.get("visibility", "shared"), fname or "paper.pdf")
+        if dup:
+            skipped.append({"title": title, "reason": "已在库中（内容重复）"})
+            continue
+        cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+        with db.write() as c:
+            c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
+            c.execute("UPDATE papers SET title=COALESCE(NULLIF(title,''),?) WHERE id=?", (title, paper_id))
+            # 溯源：来源站点 + 外部链接（评审的可追溯要求）
+            c.execute("UPDATE papers SET meta_source=COALESCE(meta_source,?) WHERE id=?",
+                      (it.get("source") or "acquire", paper_id))
+            c.execute("UPDATE papers SET doi=COALESCE(NULLIF(doi,''),?) WHERE id=?",
+                      (it.get("doi") or "", paper_id))
+            if it.get("authors"):
+                c.execute("UPDATE papers SET authors=? WHERE id=?", (it["authors"][:500], paper_id))
+            if it.get("year"):
+                c.execute("UPDATE papers SET year=? WHERE id=?", (it["year"][:10], paper_id))
+            if it.get("summary"):
+                c.execute("UPDATE papers SET abstract=? WHERE id=?", (it["summary"][:3000], paper_id))
+        ingest.store_pdf(paper_id, data, "original.pdf")
+        scheduler.enqueue(u["id"], "parse", paper_id,
+                          {"tier": "standard", "original_name": fname or "paper.pdf",
+                           "source_url": url, "batch_id": batch_id},
+                          priority="background")
+        queued.append({"title": title, "paper_id": paper_id})
+    audit(u["id"], "acquire-import", f"{len(queued)} 入库 / {len(skipped)} 跳过")
+    return {"batch_id": batch_id, "queued": queued, "skipped": skipped}
+
+
 @app.get("/api/import-dirs")
 def list_import_dirs(request: Request):
     """列出可导入的目录（inbox 下，含子目录与文件数）。"""

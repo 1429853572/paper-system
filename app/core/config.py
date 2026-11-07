@@ -85,6 +85,10 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
 EASYSCHOLAR_KEY = os.environ.get("EASYSCHOLAR_KEY", "")
 S2_API_KEY = os.environ.get("S2_API_KEY", "")
+
+# 宿主浏览器采集服务（中文文献获取：知网/chinaxiv 等，容器内不装浏览器）
+ACQUIRE_SERVICE_URL = os.environ.get("ACQUIRE_SERVICE_URL", "http://host.docker.internal:8802")
+ACQUIRE_TOKEN = os.environ.get("PAPERSYS_ACQUIRE_TOKEN", "")
 EASYSCHOLAR_URL = os.environ.get("EASYSCHOLAR_URL", "https://www.easyscholar.cc/open/getRank")
 EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "1024"))
 

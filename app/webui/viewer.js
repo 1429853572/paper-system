@@ -1975,6 +1975,7 @@ async function runBatchAction(act, anchor) {
   if (!state.selected.size) { toast('请先在上方圈定论文'); return; }
   const ids = [...state.selected];
   if (act === 'review') { await runSynthesis(anchor, ids); return; }
+  if (act === 'acquire') { openAcquirePop(); return; }
   if (act === 'bibtex') { downloadBibtex(ids); return; }
   if (act === 'delete') {
     if (!(await uiConfirm(`将圈定的 ${ids.length} 篇移入回收站？（${state.health.trash_days || 30} 天内可恢复）`,
@@ -2020,6 +2021,109 @@ function downloadBibtex(ids) {
       toast(`已导出 ${ids.length} 篇 BibTeX`);
     })
     .catch(e => toast('导出失败: ' + e.message));
+}
+
+/* ---- 采集弹层：检索中文文献 → 勾选 → 批量下载入库 ---- */
+function openAcquirePop() {
+  const pop = $('#acq-pop');
+  if (!pop) return;
+  pop.hidden = false;
+  const r = $('#acq-btn').getBoundingClientRect();
+  pop.style.position = 'fixed';
+  pop.style.top = (r.bottom + 6) + 'px';
+  pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
+  pop.style.left = 'auto';
+  state._acq = state._acq || {site: 'chinaxiv', q: '', items: [], sel: new Set()};
+  renderAcquirePop();
+}
+function renderAcquirePop() {
+  const pop = $('#acq-pop');
+  const a = state._acq;
+  pop.innerHTML = `
+    <div class="acq-tabs">
+      <button class="dp-tab ${a.site === 'chinaxiv' ? 'on' : ''}" data-as="chinaxiv">中国科学院预印本</button>
+      <button class="dp-tab ${a.site === 'cnki' ? 'on' : ''}" data-as="cnki">中国知网</button>
+      <span class="spacer"></span><button class="btn small" id="acq-close">✕</button>
+    </div>
+    <div class="acq-search">
+      <input id="acq-q" placeholder="关键词（中文标题/主题）" value="${esc(a.q)}" style="flex:1">
+      <button class="btn small primary" id="acq-go">检索</button>
+    </div>
+    <div class="acq-list">${a.items.length ? a.items.map((it, i) => `
+      <label class="acq-item ${it.in_library ? 'have' : ''}">
+        <input type="checkbox" data-ai="${i}" ${it.in_library || !it.pdf_url ? 'disabled' : ''}>
+        <span class="acq-body">
+          <b>${esc(it.title || '')}</b>
+          <span class="muted">${esc([it.authors, it.year, it.venue].filter(Boolean).join(' · ').slice(0, 70))}</span>
+          ${it.summary ? `<span class="acq-abs">${esc(it.summary)}</span>` : ''}
+        </span>
+        ${it.in_library ? '<span class="badge ok">已在库</span>' : !it.pdf_url ? '<span class="badge priv">无下载</span>' : ''}
+      </label>`).join('') : '<p class="muted" style="padding:12px">输入关键词检索（需宿主采集服务在运行）</p>'}</div>
+    <div class="acq-foot">
+      <span class="muted" style="font-size:11px" id="acq-stat"></span>
+      <span class="spacer"></span>
+      <button class="btn small" id="acq-all">全选</button>
+      <button class="btn small primary" id="acq-import">下载并入库（<span id="acq-n">0</span>）</button>
+    </div>`;
+  $$('.dp-tab', pop).forEach(b => b.onclick = () => { a.site = b.dataset.as; a.items = []; renderAcquirePop(); });
+  $('#acq-close').onclick = () => { pop.hidden = true; };
+  $('#acq-go').onclick = doAcquireSearch;
+  $('#acq-q').onkeydown = e => { if (e.key === 'Enter') doAcquireSearch(); };
+  $$('input[data-ai]', pop).forEach(cb => cb.onchange = e => {
+    const i = +cb.dataset.ai;
+    if (e.target.checked) a.sel.add(i); else a.sel.delete(i);
+    syncAcqCount();
+  });
+  $('#acq-all').onclick = () => {
+    const all = a.items.every((it, i) => it.in_library || !it.pdf_url || a.sel.has(i));
+    a.items.forEach((it, i) => { if (it.in_library || !it.pdf_url) return; all ? a.sel.delete(i) : a.sel.add(i); });
+    renderAcquirePop();
+  };
+  $('#acq-import').onclick = doAcquireImport;
+  syncAcqCount();
+}
+function syncAcqCount() {
+  const n = document.querySelector('#acq-n');
+  if (n) n.textContent = state._acq.sel.size;
+  const s = document.querySelector('#acq-stat');
+  if (s) s.textContent = state._acq.items.length ? `共 ${state._acq.items.length} 条候选` : '';
+}
+async function doAcquireSearch() {
+  const q = $('#acq-q').value.trim();
+  const a = state._acq;
+  a.q = q;
+  if (!q) { toast('输入关键词'); return; }
+  const list = document.querySelector('.acq-list');
+  if (list) list.innerHTML = '<p class="muted" style="padding:12px">检索中…（浏览器会话，稍等）</p>';
+  try {
+    const d = await api('/api/acquire/search', {method: 'POST',
+      body: JSON.stringify({site: a.site, query: q, limit: 20})});
+    a.items = d.items || [];
+    a.sel = new Set();
+    renderAcquirePop();
+    if (!a.items.length) toast('没有候选结果');
+  } catch (e) {
+    if (list) list.innerHTML = `<p class="muted" style="padding:12px">检索失败：${esc(e.message)}</p>`;
+    toast('检索失败: ' + e.message, 4000);
+  }
+}
+async function doAcquireImport() {
+  const a = state._acq;
+  const sel = [...a.sel].map(i => a.items[i]).filter(Boolean);
+  if (!sel.length) { toast('先勾选要采集的文献'); return; }
+  const btn = document.querySelector('#acq-import');
+  if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
+  try {
+    const d = await api('/api/acquire/import', {method: 'POST', body: JSON.stringify({
+      items: sel, collection_id: state.currentCollection || null,
+      visibility: state.uploadPrivate ? 'private' : 'shared'})});
+    const q = d.queued.length, sk = d.skipped.length;
+    toast(`已采集 ${q} 篇${sk ? `，跳过 ${sk} 篇` : ''}——解析进度见「任务」页`, 4000);
+    $('#acq-pop').hidden = true;
+    a.sel = new Set();
+    await refreshLib();
+  } catch (e) { toast('采集失败: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = '下载并入库（0）'; syncAcqCount(); }
 }
 
 async function runSynthesis(anchor, ids = null) {

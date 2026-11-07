@@ -266,11 +266,34 @@ TimeoutStartSec=1800
 [Install]
 WantedBy=multi-user.target
 EOF
+    # 采集服务单元（中文文献获取；需宿主 playwright + 系统 Chrome）
+    cat > deploy/systemd/papersystem-acquire.service <<EOF
+[Unit]
+Description=paper-system host browser acquisition service (Chinese literature)
+After=network.target
+
+[Service]
+EnvironmentFile=${SH}/.env
+ExecStart=/usr/bin/python3 ${SH}/scripts/acquire-service.py --port 8802
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
     if [ -x /usr/bin/google-chrome ] || command -v google-chrome >/dev/null; then
         cp -f deploy/systemd/papersystem-render.service /etc/systemd/system/
+        cp -f deploy/systemd/papersystem-acquire.service /etc/systemd/system/
         systemctl daemon-reload
         systemctl enable --now papersystem-render 2>/dev/null || true
         info "papersystem-render 已安装并启动（PDF 导出依赖）"
+        # 采集服务需宿主 playwright（复用系统 Chrome，无需再下 Chromium）
+        if python3 -c "import playwright.sync_api" 2>/dev/null; then
+            systemctl enable --now papersystem-acquire 2>/dev/null || true
+            info "papersystem-acquire 已安装并启动（中文文献采集）"
+        else
+            info "宿主未装 playwright——采集服务未启用（pip install playwright 可开启）"
+        fi
     else
         cp -f deploy/systemd/papersystem-render.service /etc/systemd/system/ 2>/dev/null || true
         systemctl daemon-reload
