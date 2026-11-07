@@ -1807,7 +1807,7 @@ window.genSumBubble = async pid => {
 
 /* ---- 上下分栏：拖动调占比；问答可整体关闭/重开回默认位 ---- */
 state.rpane = { top: parseFloat(localStorage.getItem('ps-rpane-top') || '55'), readingView: 'orig', split: true };
-state.qaOpen = localStorage.getItem('ps-qa-open') !== '0';
+state.qaOpen = localStorage.getItem('ps-qa-open') === '1';   // 默认收起：手动打开过（'1'）才记住展开
 window.applyQaLayout = () => {
   const top = $('#rpane-top'), dock = $('#qa-dock'), handle = $('#rpane-handle');
   if (state.qaOpen) {

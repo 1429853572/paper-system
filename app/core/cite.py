@@ -91,17 +91,23 @@ def _vol_issue_pages(p: dict) -> tuple[str, str, str]:
 
 
 def _gbt7714(p: dict) -> list[tuple[str, bool]]:
-    """GB/T 7714-2015：主要责任者. 题名[J]. 刊名, 年, 卷(期): 页码. DOI."""
+    """GB/T 7714-2015：主要责任者. 题名[J]. 刊名, 年, 卷(期): 页码. DOI.
+
+    省略词随文献语种：中文文献用"等"，外文文献用"et al."（GB/T 7714-2015 示例口径）。
+    语种以责任者字符串是否含 CJK 判定——中文作者发表的英文文献也应著录 et al.。
+    """
+    raw_authors = p.get("authors") or ""
+    cjk = bool(re.search(r"[一-鿿]", raw_authors))
     names = []
-    for a in _split_authors(p.get("authors") or ""):
+    for a in _split_authors(raw_authors):
         fam, given = _name_parts(a)
         if re.search(r"[一-鿿]", a):
             names.append(fam or a)                 # 中文名原样
         else:
             names.append((fam + " " + _initials(given)).strip())
     if len(names) > 3:
-        names = names[:3] + ["等"]
-    seg = ", ".join(names) if names else "佚名"
+        names = names[:3] + ["等" if cjk else "et al."]
+    seg = ", ".join(names) if names else ("佚名" if cjk else "Anon.")
     if seg.endswith("."):                 # 末位作者缩写自带句点，别再补一个
         seg = seg[:-1]
     out = f"{seg}. {p.get('title') or '（无标题）'}[J]. "

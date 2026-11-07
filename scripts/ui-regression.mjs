@@ -139,16 +139,16 @@ else {
   const inReader = !!qaBtn.closest('#page-reader');
   results.push(`提问按钮位置: ${inTop ? '顶栏' : inReader ? '阅读页' : '未知'}`);
   if (inTop) errors.push('提问按钮应在阅读页内，不该在顶栏');
-  // 提问键 = 开关：阅读页内点一下关、再点一下开
+  // 提问键 = 开关，默认收起：第一次点开、第二次关（qaOpen 由 localStorage 记忆）
   qaBtn.click();
   await new Promise((r) => setTimeout(r, 100));
-  const closedAfterFirst = window.__T.state.qaOpen === false;
+  const openAfterFirst = window.__T.state.qaOpen === true;
   qaBtn.click();
   await new Promise((r) => setTimeout(r, 100));
-  const openAfterSecond = window.__T.state.qaOpen === true;
-  results.push(`提问键开关: 第一次关=${closedAfterFirst} 第二次开=${openAfterSecond}`);
-  if (!closedAfterFirst) errors.push('提问键第一次点击应关闭问答框');
-  if (!openAfterSecond) errors.push('提问键第二次点击应打开问答框');
+  const closedAfterSecond = window.__T.state.qaOpen === false;
+  results.push(`提问键开关(默认收起): 第一次开=${openAfterFirst} 第二次关=${closedAfterSecond}`);
+  if (!openAfterFirst) errors.push('提问键第一次点击应打开问答框（默认收起语义）');
+  if (!closedAfterSecond) errors.push('提问键第二次点击应关闭问答框');
   // 可视化修正：admin 打开论文后，正文块应出现行尾编辑图标
   const editBtns = doc.querySelectorAll('#paper-list, #content-view').length
     ? doc.querySelectorAll('#content-view .blk-edit')
