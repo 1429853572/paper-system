@@ -88,6 +88,14 @@
         <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
           <input type="checkbox" id="upload-private" style="width:auto"> 仅自己可见
         </label>
+        <div class="tp-item" id="pf-adv-toggle" style="cursor:pointer">⚙ 解析过滤（高级）<span class="muted" id="pf-adv-hint" style="font-size:10px;margin-left:6px"></span></div>
+        <div id="pf-adv" hidden style="padding:2px 12px 8px;display:flex;flex-direction:column;gap:6px">
+          <label style="font-size:11px;display:flex;align-items:center;gap:6px">页数上限
+            <input id="pf-max" type="number" min="0" max="2000" style="width:64px">（0=不限）</label>
+          <label style="font-size:11px;display:flex;align-items:center;gap:6px">排除文件名
+            <input id="pf-exclude" placeholder="supplement, /翻译/" style="flex:1"></label>
+          <span class="muted" style="font-size:10px">逗号分隔子串或 /正则/；超页数入库但不自动解析，可手动重解析</span>
+        </div>
       </div>
       <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
     </div>

@@ -429,6 +429,7 @@ async function loadPapers(append = false) {
   renderPapers();
 }
 function statusBadge(p) {  if (p.deleted_at) return '<span class="badge err">回收站</span>';
+  if (p.parse_status === 'skipped') return '<span class="badge priv" title="超页数上限未自动解析，可手动重解析">已跳过</span>';
   if (p.parse_status === 'pending') return '<span class="badge run">排队中</span>';
   if (p.parse_status === 'parsing') {
     const pr = (state.parseProg || {})[p.id];
@@ -573,6 +574,29 @@ $('#ident-btn').onclick = async () => {
   btn.disabled = false; btn.textContent = '导入';
 };
 $('#ident-input').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) $('#ident-btn').click(); };
+/* 解析过滤器（llm4z 式：页数上限 + 文件名排除；服务端上传时执行，设置跟随账号） */
+$('#pf-adv-toggle').onclick = () => { $('#pf-adv').hidden = !$('#pf-adv').hidden; };
+async function loadParseFilter() {
+  try {
+    const d = await api('/api/settings/parse-filter');
+    $('#pf-max').value = d.max_pages || 0;
+    $('#pf-exclude').value = d.exclude || '';
+    $('#pf-adv-hint').textContent =
+      d.max_pages || d.exclude ? `（≤${d.max_pages || '∞'}页${d.exclude ? '·排除' + d.exclude.split(',')[0] : ''}）` : '';
+  } catch { /* ignore */ }
+}
+$('#pf-max').onchange = saveParseFilter;
+$('#pf-exclude').onchange = saveParseFilter;
+async function saveParseFilter() {
+  try {
+    const d = await api('/api/settings/parse-filter', {method: 'PUT', body: JSON.stringify({
+      max_pages: +$('#pf-max').value || 0, exclude: $('#pf-exclude').value.trim()})});
+    $('#pf-adv-hint').textContent =
+      d.max_pages || d.exclude ? `（≤${d.max_pages || '∞'}页${d.exclude ? '·排除' + d.exclude.split(',')[0] : ''}）` : '';
+    toast('解析过滤规则已保存');
+  } catch (e) { toast('保存失败: ' + e.message); }
+}
+loadParseFilter();
 // 论文列表区 = 拖放上传目标
 const plist = $('#paper-list');
 ['dragover', 'dragenter'].forEach(ev => plist.addEventListener(ev, e => {
@@ -1468,9 +1492,11 @@ async function _refreshQueueBadge() {
   try {
     const d = await api('/api/jobs?limit=200');
     const active = d.jobs.filter(j => ['queued', 'pending_gate', 'running'].includes(j.status));
+    let pend = [];
+    try { pend = (await api('/api/mcp/pending')).pending; } catch { /* 忽略 */ }
     const btn = $('#queue-btn'), badge = $('#qbadge');
-    btn.hidden = !active.length;
-    badge.textContent = active.length;
+    btn.hidden = !active.length && !pend.length;
+    badge.textContent = active.length + pend.length;
     if (!$('#queue-pop').hidden) renderQueueList(d.jobs);
   } catch {}
 }
@@ -1478,8 +1504,20 @@ async function renderQueueList(all) {
   const jobs = all || (await api('/api/jobs?limit=200')).jobs;
   const st = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
               failed: '失败', canceled: '已取消'};
+  let pendHtml = '';
+  try {
+    const pend = (await api('/api/mcp/pending')).pending;
+    if (pend.length) pendHtml = '<div class="qp-mcp-head">MCP 待确认写操作（外部 AI 客户端发起）</div>' +
+      pend.map(p => `
+      <div class="qp-row">
+        <span class="badge run">待确认</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.summary || p.tool)}</span>
+        <button class="btn small primary" onclick="mcpConfirm('${esc(p.action_id)}',true)">执行</button>
+        <button class="btn small danger" onclick="mcpConfirm('${esc(p.action_id)}',false)">丢弃</button>
+      </div>`).join('');
+  } catch { /* 忽略 */ }
   const live = jobs.filter(j => ['queued', 'pending_gate', 'running', 'failed'].includes(j.status)).slice(0, 30);
-  $('#queue-list').innerHTML = live.map(j => `
+  $('#queue-list').innerHTML = pendHtml + live.map(j => `
     <div class="qp-row">
       <span class="badge ${j.status === 'failed' ? 'err' : 'run'}">${st[j.status] || j.status}</span>
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.title || j.paper_id || '')}</span>
@@ -1500,6 +1538,14 @@ document.addEventListener('click', e => {
   if (!pop.hidden && !pop.contains(e.target) && e.target.id !== 'queue-btn') pop.hidden = true;
 });
 window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderQueueList(); refreshQueueBadge(); };
+window.mcpConfirm = async (id, approve) => {
+  try {
+    const r = await api('/api/mcp/confirm', {method: 'POST', body: JSON.stringify({action_id: id, approve})});
+    toast(r.ok ? (r.executed ? '✓ 已执行' + (r.summary ? '：' + r.summary : '') : '已丢弃') : (r.message || '失败'));
+  } catch (e) { toast('操作失败: ' + e.message); }
+  renderQueueList();
+  refreshQueueBadge();
+};
 window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderQueueList(); refreshQueueBadge(); };
 window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: 'POST'}); toast('批量已暂停（手动任务不受影响）'); };
 window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); };
@@ -2029,6 +2075,7 @@ async function renderMeta() {
         <button class="btn small" onclick="cancelMeta()">取消</button>`
         : `<button class="btn small" onclick="editMeta('${pid}')">${icon('edit')} 编辑</button>`}
         <button class="btn small" onclick="extractMeta('${pid}')" title="用 AI 补全缺失字段（作者/摘要/关键词）">${icon('bolt')} AI 补全</button>
+        ${/[\u4e00-\u9fff]/.test(paper.title || '') ? `<button class="btn small" onclick="cnkiCalibrate('${pid}')" title="知网搜索候选，人工确认后写入">🇨🇳 中文源校准</button>` : ''}
       </div>
     </div>
     <div class="card cite-card">
@@ -2118,13 +2165,68 @@ window.reindexPaper = async (pid) => {
   toast(`已重建 ${r.blocks} 块 / ${r.chunks} 分块，向量回填中`);
 };
 window.verifyMeta = async (pid) => {
-  toast('联网校准中…（arXiv/CrossRef，只发送标题）');
+  toast('联网校准中…（arXiv/S2/CrossRef，只发送标题）');
   try {
-    const r = await api(`/api/papers/${pid}/verify-meta`, {method: 'POST'});
-    if (r.verified) toast(`✓ 已按 ${r.candidate.source} 校准（标题相似度 ${r.candidate.match}）`);
-    else toast('⚠ ' + r.message);
-    openPaper(pid); renderMeta();
+    const r = await api(`/api/papers/${pid}/verify-meta`, {method: 'POST', body: JSON.stringify({})});
+    if (!r.verified) { toast('⚠ ' + r.message); return; }
+    const c = r.candidate;
+    const cur = state.current || {};
+    const diff = [
+      ['作者', cur.authors, c.authors], ['期刊', cur.journal, c.journal],
+      ['年份', cur.year, c.year], ['DOI', cur.doi, c.doi],
+      ['卷', cur.volume, c.volume || ''], ['期', cur.issue, c.issue || ''], ['页码', cur.pages, c.pages || ''],
+    ].filter(([, a, b]) => (b || '') && (a || '') !== (b || ''));
+    if (!diff.length) { toast('✓ 元数据已与 ' + c.source + ' 一致，无需改动'); return; }
+    const msg = '以下字段将被更新（来源 ' + c.source + '，标题相似度 ' + c.match + '）：\n' +
+      diff.map(([k, a, b]) => `· ${k}: ${a || '（空）'} → ${b}`).join('\n');
+    if (!(await uiConfirm(msg, {title: '确认写入校准结果', okText: '写入'}))) return;
+    const r2 = await api(`/api/papers/${pid}/verify-meta`,
+                         {method: 'POST', body: JSON.stringify({apply: true, candidate: c})});
+    toast(r2.applied ? '✓ 元数据已更新' : '写入失败');
+    await openPaper(pid);
+    renderMeta();
   } catch (e) { toast('校准失败: ' + e.message); }
+};
+/* 中文源校准（jasminum 式）：知网搜索候选人工确认（best-effort，反爬拦截时明确提示） */
+window.cnkiCalibrate = async (pid) => {
+  const cur = state.current || {};
+  if (!cur.title) { toast('缺少标题'); return; }
+  toast('知网检索中…');
+  let cands;
+  try {
+    cands = await api('/api/meta/cnki-search?title=' + encodeURIComponent(cur.title));
+  } catch (e) { toast('知网检索失败: ' + e.message); return; }
+  if (!cands.candidates.length) { toast('知网未找到候选，可试「联网校准」的 CrossRef 中文分支'); return; }
+  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
+  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop'});
+  pop.innerHTML = `
+    <div class="ui-pop-title">中文源候选（知网）——选最匹配的一条</div>
+    <div class="cnki-list">${cands.candidates.map((c, i) => `
+      <label class="cnki-item"><input type="radio" name="cnki" value="${i}">
+        <span><b>${esc(c.title)}</b><br><span class="muted" style="font-size:11px">${esc([c.authors, c.journal, c.year].filter(Boolean).join(' · '))}</span></span>
+      </label>`).join('')}</div>
+    <div class="ui-pop-foot">
+      <button class="btn small" data-cancel>取消</button>
+      <button class="btn small primary" data-ok>写入</button></div>`;
+  backdrop.appendChild(pop);
+  document.body.appendChild(backdrop);
+  const close = () => { pop.remove(); backdrop.remove(); };
+  backdrop.onclick = e => { if (e.target === backdrop) close(); };
+  pop.querySelector('[data-cancel]').onclick = close;
+  pop.querySelector('[data-ok]').onclick = async () => {
+    const pick = pop.querySelector('input[name=cnki]:checked');
+    if (!pick) { toast('先选一条候选'); return; }
+    const c = cands.candidates[+pick.value];
+    try {
+      await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({
+        authors: c.authors || cur.authors || '', journal: c.journal || cur.journal || '',
+        year: c.year || cur.year || '', title: c.title || cur.title})});
+      toast('✓ 已按知网候选更新元数据');
+      close();
+      await openPaper(pid);
+      renderMeta();
+    } catch (e) { toast('写入失败: ' + e.message); }
+  };
 };
 window.loadRank = async (pid) => {
   const el = $('#m-rank');

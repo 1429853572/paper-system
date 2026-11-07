@@ -208,8 +208,13 @@ def _verify_crossref(title: str) -> dict | None:
             "title": cand_title, "match": round(ratio, 2)}
 
 
-def verify_meta_online(paper_id: str) -> dict:
-    """联网校准元数据：arXiv 优先（预印本），否则 CrossRef。标题匹配≥0.75 才写入。"""
+def verify_meta_online(paper_id: str, apply: bool = True,
+                       candidate: dict | None = None) -> dict:
+    """联网校准元数据：arXiv 优先（预印本），否则 S2/CrossRef。标题匹配≥0.75 才写入。
+
+    apply=False 只出候选不写库（jasminum 式：先看改前→改后，人工确认再落）；
+    candidate 传入时跳过外网解析直接用（确认写入的回传路径）。
+    """
     paper = db.one("SELECT title FROM papers WHERE id=?", (paper_id,))
     if paper is None:
         raise ValueError("论文不存在")
@@ -217,26 +222,29 @@ def verify_meta_online(paper_id: str) -> dict:
     if not title:
         raise ValueError("缺少标题，无法校准")
 
-    candidate = None
-    arxiv_id = _find_arxiv_id(paper_id)
-    if arxiv_id:
-        try:
-            candidate = _verify_arxiv(arxiv_id, title)
-        except httpx.HTTPError:
-            candidate = None
     if candidate is None:
-        try:
-            candidate = _verify_s2(title)
-        except httpx.HTTPError:
-            candidate = None
+        candidate = None
+        arxiv_id = _find_arxiv_id(paper_id)
+        if arxiv_id:
+            try:
+                candidate = _verify_arxiv(arxiv_id, title)
+            except httpx.HTTPError:
+                candidate = None
+        if candidate is None:
+            try:
+                candidate = _verify_s2(title)
+            except httpx.HTTPError:
+                candidate = None
+        if candidate is None:
+            try:
+                candidate = _verify_crossref(title)
+            except httpx.HTTPError:
+                candidate = None
     if candidate is None:
-        try:
-            candidate = _verify_crossref(title)
-        except httpx.HTTPError:
-            candidate = None
-    if candidate is None:
-        return {"verified": False, "message": "未在 arXiv/CrossRef 匹配到该论文（标题相似度<0.75），未改动本地元数据"}
+        return {"verified": False, "message": "未在 arXiv/S2/CrossRef 匹配到该论文（标题相似度<0.75），未改动本地元数据"}
 
+    if not apply:
+        return {"verified": True, "candidate": candidate, "applied": False}
     with db.write() as c:
         c.execute(
             "UPDATE papers SET authors=?, journal=?, year=?, doi=?, "
@@ -248,7 +256,7 @@ def verify_meta_online(paper_id: str) -> dict:
              candidate["doi"], candidate.get("volume", ""), candidate.get("issue", ""),
              candidate.get("pages", ""), candidate["source"], paper_id),
         )
-    return {"verified": True, "candidate": candidate}
+    return {"verified": True, "candidate": candidate, "applied": True}
 
 
 def canonical_name(paper) -> str:

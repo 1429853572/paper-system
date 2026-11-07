@@ -936,3 +936,7 @@ table.list input[type=checkbox] { width: auto; }
 .ident-import { padding: 4px 12px 8px; display: flex; gap: 6px; align-items: flex-end; }
 .ident-import textarea { flex: 1; font-size: var(--fs-xs); resize: vertical; min-height: 38px;
                          max-height: 90px; }
+
+/* MCP 待确认区块（队列浮层内） */
+.qp-mcp-head { padding: 8px 10px 4px; font-size: var(--fs-xs); color: var(--warn-ink, #8a6116);
+               font-weight: 600; }

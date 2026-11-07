@@ -375,13 +375,24 @@ async def upload_papers(request: Request, files: list[UploadFile]):
     batch = len(files) > 3  # >3 篇视为批量 → background
 
     results = []
+    flt = _get_parse_filter(u["id"])
     for f in files:
+        fname = f.filename or "untitled"
+        # 解析过滤器·文件名排除（llm4z 式：逗号子串或 /正则/）——命中不入库
+        hit = _filter_name_hit(fname, flt.get("exclude") or "")
+        if hit:
+            results.append({"name": fname, "status": "rejected",
+                            "reason": f"命中解析过滤规则「{hit}」，未上传（可在上传弹层调整规则）"})
+            continue
         data = await f.read()
         try:
-            pages, _kind = ingest.preflight_doc(data, f.filename or "", is_admin=is_admin, overrides=overrides)
+            pages, _kind = ingest.preflight_doc(data, fname, is_admin=is_admin, overrides=overrides)
         except ingest.PreflightError as e:
-            results.append({"name": f.filename, "status": "rejected", "reason": str(e)})
+            results.append({"name": fname, "status": "rejected", "reason": str(e)})
             continue
+        # 解析过滤器·页数上限：入库但不自动解析（parse_status='skipped'，手动重解析可绕过）
+        max_pages = int(flt.get("max_pages") or 0)
+        over_limit = bool(max_pages and pages and pages > max_pages)
         file_hash = ingest.sha256_bytes(data)
         paper_id, dup = ingest.create_paper(
             u["id"], file_hash, pages, len(data), visibility, f.filename or "untitled")
@@ -392,14 +403,70 @@ async def upload_papers(request: Request, files: list[UploadFile]):
             with db.write() as c:
                 c.execute("UPDATE papers SET collection_id=? WHERE id=?", (collection_id, paper_id))
         ingest.store_pdf(paper_id, data, f.filename or "original.pdf")
+        if over_limit:
+            with db.write() as c:
+                c.execute("UPDATE papers SET parse_status='skipped' WHERE id=?", (paper_id,))
+            results.append({"name": fname, "status": "skipped", "paper_id": paper_id,
+                            "reason": f"{pages} 页超过上限 {max_pages}，已入库但未自动解析"})
+            continue
         tier = "standard" if (is_admin or overrides.get("max_tier", "standard") != "advanced") else "standard"
         scheduler.enqueue(
             u["id"], "parse", paper_id,
             {"tier": tier, "original_name": f.filename, "visibility": visibility},
             priority="background" if batch else "interactive",
         )
-        results.append({"name": f.filename, "status": "queued", "paper_id": paper_id})
+        results.append({"name": fname, "status": "queued", "paper_id": paper_id})
     return {"results": results}
+
+
+def _get_parse_filter(user_id: int) -> dict:
+    row = db.one("SELECT value FROM settings WHERE key=?", (f"parse_filter:{user_id}",))
+    try:
+        d = json.loads(row["value"]) if row else {}
+    except Exception:  # noqa: BLE001
+        d = {}
+    return d if isinstance(d, dict) else {}
+
+
+def _filter_name_hit(fname: str, rule: str) -> str:
+    """文件名命中排除规则则返回命中的规则文本，否则 ''。"""
+    rule = (rule or "").strip()
+    if not rule:
+        return ""
+    low = fname.lower()
+    for item in rule.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if len(item) > 2 and item.startswith("/") and item.endswith("/"):
+            try:
+                if re.search(item[1:-1], fname, re.I):
+                    return item
+            except re.error:
+                continue
+        elif item.lower() in low:
+            return item
+    return ""
+
+
+@app.get("/api/settings/parse-filter")
+def get_parse_filter(request: Request):
+    u = require(request)
+    d = _get_parse_filter(u["id"])
+    return {"max_pages": int(d.get("max_pages") or 100), "exclude": d.get("exclude") or ""}
+
+
+@app.put("/api/settings/parse-filter")
+async def set_parse_filter(request: Request):
+    u = require(request)
+    body = await request.json()
+    d = {"max_pages": max(0, min(2000, int(body.get("max_pages") or 0))),
+         "exclude": str(body.get("exclude") or "")[:500]}
+    with db.write() as c:
+        c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (f"parse_filter:{u['id']}", json.dumps(d)))
+    return {"ok": True, **d}
 
 
 @app.get("/api/papers")
@@ -1575,9 +1642,73 @@ async def export_bibtex(request: Request):
                              f"filename*=UTF-8''{__import__('urllib.parse', fromlist=['quote']).quote(fname)}"})
 
 
+@app.get("/api/meta/cnki-search")
+def cnki_search_meta(request: Request, title: str = ""):
+    """知网中文元数据候选（jasminum 式：候选列表 → 人工确认 → 前端 PATCH 写入）。"""
+    require(request)
+    title = title.strip()
+    if len(title) < 2:
+        raise HTTPException(400, "title 太短")
+    from core import cnki
+    try:
+        cands = cnki.search(title)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"知网检索失败（可能反爬拦截）: {e}")
+    return {"candidates": cands}
+
+
+# ---------------- MCP Server（ZCode/Claude 直连；bearer=PAPERSYS_API_TOKEN） ----------------
+def _mcp_user() -> int | None:
+    """token 归属 admin（单部署者模型）；找不到则拒绝。"""
+    row = db.one("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1")
+    return row["id"] if row else None
+
+
+@app.post("/api/mcp")
+async def mcp_endpoint(request: Request):
+    auth = request.headers.get("authorization") or ""
+    if not (auth.startswith("Bearer ") and secrets.compare_digest(
+            auth[7:], PAPERSYS_API_TOKEN or "-")):
+        raise HTTPException(401, "无效 bearer token（PAPERSYS_API_TOKEN）")
+    uid = _mcp_user()
+    if uid is None:
+        raise HTTPException(503, "无 admin 用户")
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "无效 JSON-RPC")
+    from core import mcpserver
+    return mcpserver.handle(uid, payload)
+
+
+@app.get("/api/mcp/pending")
+def mcp_pending(request: Request):
+    """待确认的 MCP 写动作（网页「队列」浮层轮询展示）。"""
+    u = require(request)
+    from core import mcpserver
+    return {"pending": mcpserver.pending_for(u["id"])}
+
+
+@app.post("/api/mcp/confirm")
+async def mcp_confirm(request: Request):
+    """确认/丢弃 MCP 写动作；执行后可经 undo_last_action 撤销。"""
+    u = require(request)
+    body = await request.json()
+    from core import mcpserver
+    r = mcpserver.confirm_action(u["id"], body.get("action_id") or "",
+                                 bool(body.get("approve")))
+    if r.get("executed"):
+        audit(u["id"], "mcp-execute", str(body.get("action_id")))
+    return r
+
+
 @app.post("/api/papers/{paper_id}/verify-meta")
-def verify_meta(paper_id: str, request: Request):
-    """联网校准元数据（arXiv/CrossRef；只发标题，标题匹配≥0.75 才写入）。"""
+async def verify_meta(paper_id: str, request: Request):
+    """联网校准元数据（jasminum 式确认制）。
+
+    默认（apply=false）只返回候选不改库，前端弹「改前→改后」对照；
+    确认后带 {apply: true, candidate} 回传直接写入。
+    """
     u = require(request)
     p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
     if p is None:
@@ -1585,12 +1716,20 @@ def verify_meta(paper_id: str, request: Request):
     _require_visible(u, p)
     _require_owner(u, p)   # 改写元数据属写操作
     try:
+        body = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
+    except Exception:  # noqa: BLE001
+        body = {}
+    apply = bool(body.get("apply"))
+    candidate = body.get("candidate") if apply else None
+    try:
         from core.meta import verify_meta_online
-        result = verify_meta_online(paper_id)
+        result = verify_meta_online(paper_id, apply=apply, candidate=candidate)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"校准服务不可达: {e}")
+    if apply:
+        audit(u["id"], "verify-meta-apply", p["id"])
     return result
 
 
