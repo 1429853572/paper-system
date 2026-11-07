@@ -22,7 +22,7 @@ else
   nvidia-smi 2>&1 | head -3 | while read -r l; do log "  $l"; done
 fi
 
-# 2. 启动全部服务（ollama 若因旧库缺失起不来属预期，会被 xinference 取代）
+# 2. 启动全部服务
 log "启动 docker 服务…"
 docker compose up -d >/dev/null 2>&1
 sleep 20
@@ -34,11 +34,6 @@ done
 
 # 3. xinference 模型（本地路径优先，否则 ModelScope）
 log "加载 xinference 模型…"
-if [ -d models/xinference/bge-m3 ]; then
-  MP_BGE="models/xinference/bge-m3"
-elif [ -d models/xinference/bge-reranker-v2-m3 ]; then
-  MP_RR="models/xinference/bge-reranker-v2-m3"
-fi
 bash scripts/setup-xinference.sh
 
 # 4. 等待 app 健康

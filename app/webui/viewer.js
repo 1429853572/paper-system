@@ -61,7 +61,9 @@ window.copyText = async text => {
    uiConfirm(msg, {title, okText, cancelText, danger, anchor}) → Promise<bool>
    uiPrompt(title, {value, placeholder, okText, anchor})       → Promise<string|null>
    uiPassword(title, password)                                  → Promise<void>（展示+复制）
-   anchor 给定时锚定弹出（无遮罩，点外/Esc 取消）；否则居中浮卡 + 半透明遮罩。 */
+   anchor 给定时锚定弹出（无遮罩，点外/Esc 取消）；否则居中浮卡 + 半透明遮罩。
+   _uiStack：弹窗栈——叠加时仅栈顶响应键盘（防止一次 Esc/Enter 连带确认底层 danger 框） */
+const _uiStack = [];
 function _uiDialog({title, message = '', input = false, value = '', placeholder = '',
                     okText = '确定', cancelText = '取消', danger = false, anchor = null,
                     copyText = '', hideCancel = false, multiline = false}) {
@@ -79,33 +81,45 @@ function _uiDialog({title, message = '', input = false, value = '', placeholder 
         <button class="btn small ${danger ? 'danger' : 'primary'}" data-ok>${esc(okText)}</button></div>`;
     const inputVal = () => (pop.querySelector('.ui-pop-input') || {}).value ?? null;
     const done = val => {
+      const i = _uiStack.indexOf(done);
+      if (i >= 0) _uiStack.splice(i, 1);
       pop.remove(); backdrop?.remove();
       document.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll, true);
+      if (onOut) document.removeEventListener('click', onOut, true);
       resolve(val);
     };
+    _uiStack.push(done);   // 入栈在 done 定义后（TDZ）；叠加时仅栈顶响应键盘
     const onKey = e => {
+      if (_uiStack[_uiStack.length - 1] !== done) return;   // 非栈顶不响应
       if (e.key === 'Escape') { e.stopPropagation(); done(input ? null : false); }
       else if (e.key === 'Enter' && !e.isComposing && (!multiline || e.ctrlKey)) {
         e.preventDefault(); done(input ? inputVal() : true);
       }
     };
+    // 锚定浮层是 fixed 定位：锚点随内容滚动会脱节——滚动/缩放直接关闭（所见即所点）
+    const onScroll = () => { if (anchor && _uiStack[_uiStack.length - 1] === done) done(input ? null : false); };
     document.addEventListener('keydown', onKey, true);
+    document.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll, true);
     pop.querySelector('[data-ok]').onclick = () => done(input ? inputVal() : true);
     const cancelBtn = pop.querySelector('[data-cancel]');
     if (cancelBtn) cancelBtn.onclick = () => done(input ? null : false);
     if (copyText) pop.querySelector('[data-copy]').onclick = async () => {
       toast(await window.copyText(copyText) ? '已复制' : '复制失败，请手动选中');
     };
+    let onOut = null;
     if (backdrop) {
       backdrop.onclick = () => done(input ? null : false);
       document.body.appendChild(backdrop);
     } else {
-      document.addEventListener('click', function onOut(e) {
+      onOut = function (e) {
         if (!pop.contains(e.target) && e.target !== anchor && !anchor?.contains?.(e.target)) {
-          document.removeEventListener('click', onOut, true);
           done(input ? null : false);
         }
-      }, true);
+      };
+      document.addEventListener('click', onOut, true);
     }
     document.body.appendChild(pop);
     if (anchor) {
@@ -801,11 +815,13 @@ async function openPaper(id) {
   state.pairs = []; state.versions = []; state.assets = null;
   state._biTotal = 0; state._biOffset = 0;
   api(`/api/papers/${id}/assets`).then(d => {
+    if (state.current?.id !== id) return;   // 已切到别的论文：丢弃迟到响应（否则 A 的图表数据污染 B）
     state.assets = d;
     if (['orig', 'bilingual', 'zh'].includes(state.view)) renderContentView();   // 聚合就绪→升级原图裁剪
   }).catch(() => {});
   state._refs = null;   // 引用缓存随论文重置
   state._cite = null;   // 引用文本缓存（{styles, labels, default}）
+  state._citeRendered = null;   // 引用渲染缓存同样跨篇作废（防复制到上一篇的引用）
   state.citeStyle = localStorage.getItem('ps-cite-style') || 'gbt7714';
   state._metaEdit = false;   // 文献信息卡的内联编辑态
   state.showLayout = false; $('#layout-btn')?.classList.remove('on');   // 布局框不跨篇残留
@@ -1612,18 +1628,6 @@ window.saveMeta = async (pid) => {
     renderMeta();
   } catch (e) { toast('保存失败: ' + e.message); }
 };
-function canonicalName(p) {
-  const title = (p.title || p.id || '').trim();
-  const authors = (p.authors || '').trim();
-  const year = (p.year || '').trim();
-  let surname = '';
-  if (authors) {
-    const first = authors.split(',')[0].trim();
-    const tokens = first.split(/\s+/);
-    surname = tokens[tokens.length - 1] || first;
-  }
-  return ((surname || '') + year + ' ' + title).replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
-}
 window.reindexPaper = async (pid) => {
   if (!(await uiConfirm('重建该论文的块结构与检索索引？（从已存解析产物重新入库，不重新解析、不影响译文）', {title: '重建索引'}))) return;
   const r = await api(`/api/papers/${pid}/reindex`, {method: 'POST'});
@@ -1711,32 +1715,39 @@ function renderCiteCard() {
   };
 }
 async function _renderCiteBox(box, c, styleId) {
+  const pid = c.paper_id;
+  const put = html => { if (state.current?.id === pid && state._cite?.paper_id === pid) box.innerHTML = html; };
   if (styleId === 'bibtex' || !window.citeproc) {
     const html = c.styles?.[styleId]?.html || '（该样式需要 citeproc 支持库）';
-    box.innerHTML = html;
-    state._citeRendered = {styleId, html};
+    put(html);
+    state._citeRendered = {pid, styleId, html};
     return;
   }
-  box.innerHTML = '<span class="muted">渲染中…</span>';
+  put('<span class="muted">渲染中…</span>');
   try {
     const html = await cslRender(c.csl_json, styleId);
-    if (state.citeStyle !== styleId) return;   // 用户已切走样式：丢弃迟到渲染
-    box.innerHTML = html || '（渲染为空）';
-    state._citeRendered = {styleId, html};
+    if (state.citeStyle !== styleId || state._cite?.paper_id !== pid) return;   // 已切样式/论文：丢弃迟到渲染
+    put(html || '（渲染为空）');
+    state._citeRendered = {pid, styleId, html};
   } catch (e) {
-    box.innerHTML = c.styles?.[styleId]?.html || `<span class="muted">CSL 渲染失败：${esc(e.message)}</span>`;
-    state._citeRendered = {styleId, html: box.innerHTML};
+    put(c.styles?.[styleId]?.html || `<span class="muted">CSL 渲染失败：${esc(e.message)}</span>`);
+    // 失败分支不写 _citeRendered——防止把错误提示文案复制进剪贴板
   }
 }
 window.copyCite = async (pid) => {
   const c = state._cite && state._cite.paper_id === pid ? state._cite
             : await api(`/api/papers/${pid}/cite`);
   const st = state.citeStyle || c.default || 'gbt7714';
-  let txt = c.styles?.[st]?.text || '';
-  if (state._citeRendered?.styleId === st && state._citeRendered.html) {
+  let txt = '';
+  if (st === 'bibtex') {
+    txt = c.styles?.bibtex?.text || '';
+  } else if (state._citeRendered?.pid === pid && state._citeRendered?.styleId === st && state._citeRendered.html) {
     const d = document.createElement('div');
     d.innerHTML = state._citeRendered.html;
-    txt = (d.textContent || '').replace(/\s+/g, ' ').trim();
+    // 数字型样式的 [1] 与正文分属相邻块级节点，textContent 直接拼接会丢间隔
+    txt = [...d.querySelectorAll('.csl-left-margin, .csl-right-inline, .csl-entry')]
+      .map(n => (n.textContent || '').trim()).filter(Boolean).join(' ')
+      .replace(/\s+/g, ' ').trim() || (d.textContent || '').trim();
   }
   if (!txt) { toast('引用为空'); return; }
   toast(await window.copyText(txt) ? '已复制' : '复制失败，请手动选中复制');
@@ -2754,7 +2765,6 @@ window.selectLibPaper = pid => {
   state.libPaper = state.libPaper === pid ? '' : pid;
   renderCollectionsPage();
 };
-window.libSearch = q => { state.libQuery = q.trim(); renderCollectionsPage(); };
 
 async function renderCollectionsPage(preset = null) {
   const d = preset || await api('/api/collections');
@@ -2789,25 +2799,6 @@ async function renderCollectionsPage(preset = null) {
 
   const moveOpts = exclude => d.collections.filter(x => x.id !== exclude)
     .map(x => `<option value="${x.id}">${'\u3000'.repeat(treeDepth(x.id))}${esc(x.name)}</option>`).join('');
-
-  // ---- 左栏：库树 ----
-  const treeRow = (c, depth) => {
-    const kids = children[c.id] || [];
-    const open = openState(c.id);
-    const n = c.papers_total ?? c.papers ?? 0;
-    return `<div class="lib-sel ${sel === c.id ? 'on' : ''}" onclick="selectLib('${c.id}')">
-        <span class="lib-sel-name" style="padding-left:${6 + depth * 14}px">
-          ${kids.length ? `<button class="col-arrow ${open ? '' : 'closed'}" onclick="event.stopPropagation();toggleColOpen('${c.id}')">${open ? icon('chevD') : icon('chevR')}</button>` : '<span class="col-arrow-none"></span>'}
-          ${icon('folder')} ${esc(c.name)}</span>
-        <span class="lib-sel-n">${n}</span>
-      </div>` + (open ? kids.map(k => treeRow(k, depth + 1)).join('') : '');
-  };
-  const sideTree = `<div class="lib-side">
-      <div class="lib-sel ${sel === '' ? 'on' : ''}" onclick="selectLib('')">
-        <span class="lib-sel-name">${icon('library')} 全部文献</span><span class="lib-sel-n">${d.total}</span></div>
-      ${(children['root'] || []).map(c => treeRow(c, 0)).join('')}
-      ${d.collections.length ? '' : '<p class="muted" style="padding:10px 12px">还没有文献库</p>'}
-    </div>`;
 
   // ---- 右栏：选中库的论文表 ----
   const paperRows = shown.map(p => {
@@ -3642,7 +3633,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   let closed = false;
   for (const sel of ['#acc-pop', '#filter-pop', '#upload-pop', '#download-pop',
-                     '#queue-pop', '#qa-picker-pop', '#col-new-form', '#health-pop', '#sort-pop']) {
+                     '#queue-pop', '#col-new-form', '#health-pop', '#sort-pop']) {
     const el = document.querySelector(sel);
     if (el && !el.hidden) { el.hidden = true; closed = true; }
   }

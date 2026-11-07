@@ -14,7 +14,7 @@
 | 页面 | 功能 |
 |---|---|
 | 阅读双栏 | pdf.js 原 PDF ‖ 原文/双语对照/中文/JSON 四视图；点段落跳页+bbox 高亮 |
-| 问答 | 单篇全文直读、多篇对比（≤10篇自动检索取证）、引用[n]点击跳 PDF 页 |
+| 问答 | 单篇全文直读、多篇对比（≤6 篇自动检索取证）、引用[n]点击跳 PDF 页 |
 | 导读 | 9 字段科研模板（问题/核心思想/方法/数据集/基线/指标/消融/复杂度/局限），带页码证据 |
 | 任务中心 | 解析/翻译进度（段级）、重试/取消、批量暂停恢复、token 用量（按用户） |
 | 管理页 | 邀请码、按用户限额微调、公共额度池开关（默认关） |
@@ -29,6 +29,6 @@
 
 ## 技术栈
 
-FastAPI + SQLite(FTS5+向量) + numpy ｜ MinerU 4.1.6 (vLLM, GPU) ｜ Ollama BGE-M3 (GPU) ｜ Caddy ｜ 原生 JS + pdf.js
+FastAPI + SQLite(FTS5+向量) + numpy ｜ MinerU 4.1.6 (vLLM, GPU) ｜ xinference (GPU: BGE-M3 + bge-reranker-v2-m3) ｜ Caddy ｜ 原生 JS + pdf.js
 
 详见 `DEPLOY.md`（部署/迁移/备份）与 `config.example.yaml`（调优项）。

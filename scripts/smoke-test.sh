@@ -24,7 +24,7 @@ echo "== paper-system 冒烟测试 @ $BASE =="
 H=$(curl -sf "$BASE/api/health" || echo '')
 echo "$H" | grep -q '"db":true' && ok "health: db" || bad "health: db 异常: $H"
 echo "$H" | grep -q '"mineru":true' && ok "health: mineru" || bad "health: mineru 异常: $H"
-echo "$H" | grep -q '"ollama":true' && ok "health: ollama" || bad "health: ollama 异常: $H"
+echo "$H" | grep -q '"ai":true' && ok "health: ai(xinference)" || bad "health: ai 异常: $H"
 
 # 2. 静态资源
 CSS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE/static/styles.css")

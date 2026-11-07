@@ -17,7 +17,7 @@ limits:
 scheduler:
   parse_workers: 1          # 解析 worker（GPU 串行）
   translate_workers: 4      # 翻译 worker 池总并发
-  embed_backfill_batch: 32  # embedding 后台回填批大小（控 ollama 峰值显存）
+  embed_backfill_batch: 32  # embedding 后台回填批大小（控 xinference 峰值显存）
   poll_interval_sec: 10     # 队列轮询间隔
   retry_max: 3              # 失败重试次数（指数退避）
 
@@ -30,7 +30,8 @@ rag:
 
 qa:
   fulltext_max_tokens: 200000  # 全文直读预算（1M 上下文模型可全塞；小窗口模型改小自动降级检索）
-  multi_paper_max: 10          # 跨论文对比上限
+  multi_paper_max: 10
+  smart_top_sections: 3   # smart 模式喂入的命中章节数          # 跨论文对比上限
   context_char_budget: 90000   # 多篇拼接的字符预算（约1:1.5 token）
 
 retention:

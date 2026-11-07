@@ -300,7 +300,8 @@ def search(query: str, *, user_id: int, is_admin: bool,
         return []
     placeholders = ",".join("?" * len(ranked))
     rows = db.all(
-        f"SELECT id, paper_id, text, page_index, block_ids FROM chunks WHERE id IN ({placeholders})",
+        f"SELECT c.id, c.paper_id, c.text, c.page_index, c.block_ids FROM chunks c "
+        f"JOIN papers p ON p.id=c.paper_id WHERE c.id IN ({placeholders}) AND p.deleted_at IS NULL",
         tuple(cid for cid, _ in ranked),
     )
     score_map = dict(ranked)

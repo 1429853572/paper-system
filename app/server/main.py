@@ -968,6 +968,8 @@ def delete_collection(cid: str, request: Request):
             c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (p["id"],))
         audit(u["id"], "batch-delete", p["title"])
         n += 1
+    from core.retrieval import invalidate_vec_cache
+    invalidate_vec_cache()
     with db.write() as c:
         c.execute(f"DELETE FROM collections WHERE id IN ({ph})", ids)
     from core.retrieval import invalidate_vec_cache

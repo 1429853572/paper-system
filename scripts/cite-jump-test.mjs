@@ -33,7 +33,7 @@ const DATA = {
   '/api/papers': {total: 1, papers: [{id: 'p1', title: 'Test Paper', parse_status: 'parsed', visibility: 'shared', owner_id: 1, page_count: 13, file_size: 1024}]},
   '/api/papers/p1/bilingual': {run_id: 'r1', pairs: [], versions: [], total: 0, offset: 0, limit: 40},
   '/api/papers/p1/notes': {notes: {}},
-  '/api/papers/p1/assets': {figures: [], tables: []},
+  '/api/papers/p1/assets': {figures: [], tables: [], formulas: []},
   '/api/papers/p1/references': {references: []},
   '/api/papers/p1/summary': {summary: null},
   '/api/papers/p1/jobstate': {parse_status: 'parsed', parsing: false, translating: false, translated: false},

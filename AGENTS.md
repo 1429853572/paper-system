@@ -6,7 +6,7 @@ FastAPI + SQLite(FTS5 + 向量) + 原生 JS 前端，MinerU(vLLM) 与 Ollama(BGE
 ## 架构与目录
 
 ```
-caddy(:7861 反代+SSE) → app(:8001 FastAPI) → mineru(:8000 GPU) / ollama(:11434 GPU)
+caddy(:7861 反代+SSE) → app(:8001 FastAPI) → mineru(:8000 GPU) / xinference(:9997 GPU)
 ```
 
 | 路径 | 作用 |
@@ -18,7 +18,7 @@ caddy(:7861 反代+SSE) → app(:8001 FastAPI) → mineru(:8000 GPU) / ollama(:1
 | `config.yaml` / `config.example.yaml` | 非敏感调优项（限额/调度/RAG/回收站） |
 | `.env` | 敏感项：`SECRET_KEY` `FERNET_KEY` `ADMIN_INITIAL_PASSWORD` `PAPERSYS_API_TOKEN` `POOL_*` |
 | `data/` | `papersys.db` + `papers/<paper_id>/`（论文与解析产物）——**不入 git** |
-| `compose.yml` / `docker/mineru.Dockerfile` | 四容器编排（mineru/ollama/app/caddy），镜像版本已锁 |
+| `compose.yml` / `docker/mineru.Dockerfile` | 四容器编排（mineru/xinference/app/caddy），镜像版本已锁 |
 
 ## 运行与验证
 
@@ -26,14 +26,14 @@ caddy(:7861 反代+SSE) → app(:8001 FastAPI) → mineru(:8000 GPU) / ollama(:1
 docker compose --profile app ps          # app 与 caddy 在 profile "app" 下，必须带 --profile 才管
 docker compose restart app               # app/ 已卷挂载进容器：改完代码 = 刷新浏览器；改动 py 文件后重启
 docker compose logs -f app
-curl -s localhost:8001/api/health        # {db, mineru, ollama}
+curl -s localhost:8001/api/health        # {db, mineru, ai, models}
 ./psys list / ./psys ask "..." --papers pXXX
 ```
 
 本地直跑（不用容器）：`cd app && SECRET_KEY=x FERNET_KEY=<fernet key> uvicorn server.main:app --port 8001`
 ——`core/config.py` 在 `SECRET_KEY`/`FERNET_KEY` 缺失时直接抛 `RuntimeError`，导入即失败。
 
-**本仓库没有自动化测试**（`tests/` 只有一个 fixture PDF，无 pytest）。验证靠手工：API 用 curl/./psys，前端靠浏览器实测（浏览器自动化可用 `browser-use:control-browser` skill 打 `http://localhost:7861`）。
+**回归测试在 scripts/*-test.mjs（node 直跑）**（`tests/` 只有一个 fixture PDF，无 pytest）。验证靠手工：API 用 curl/./psys，前端靠浏览器实测（浏览器自动化可用 `browser-use:control-browser` skill 打 `http://localhost:7861`）。
 
 ## 必须遵守的架构边界
 
@@ -53,7 +53,7 @@ curl -s localhost:8001/api/health        # {db, mineru, ollama}
 - **视觉 token**：字号用 `--fs-*`（xs11/sm12/base13/md14/lg15/xl17/h1 22）、圆角 `--r-*`（xs4/sm6/md8/lg10/pill）、颜色用 `:root` 语义变量（含 `--tint-*` 系列）——新样式禁止硬编码 px 字号/颜色（v1.2 已归一 146 处字号、161 处颜色）。
 - **图标一律走 `icon('name')` / `ICONS`**（viewer.js，线条 SVG、currentColor）：新 UI 不再引入 emoji 图标；toast 消息文本里可保留 emoji。给 `textContent` 赋含 icon 的 HTML 会转义显示——用 `innerHTML`。
 - **内联 onclick 的函数必须挂到 window**：`viewer.js` 是 `type="module"`，模块顶层函数不在全局作用域，而内联 `onclick="fn()"` 在全局求值 → 引用模块函数会抛 ReferenceError，按钮表现为"点了没反应"。写法：`window.fn = fn;`。改完跑 `node scripts/check-inline-handlers.mjs` 复查（这坑已出现 4 次）。
-- **问答交互**：统一无模式——范围 = 已添加的文档 chips（`renderQaScope`，恒含虚线「＋添加论文」chip 即面板入口）；打开论文时自动挂载（size≤1 → 替换为新论文），≥2 篇后端自动检索取证对比 + `COMPARE_ADDENDUM` 附加对比提示词，上限 6 篇。多轮上下文：chat_stream 注入最近 2 轮问答（每则 400 字、总预算 1600）；≥2 篇的库级对比工作台是规划中的独立功能。
+- **问答交互**：统一无模式——范围 = 已添加的文档 chips（`renderQaScope`，恒含虚线「＋添加论文」chip 即面板入口）；打开论文时自动挂载（size≤1 → 替换为新论文），≥2 篇后端自动检索取证对比 + `COMPARE_ADDENDUM` 附加对比提示词，上限 6 篇（config multi_paper_max=10 为后端天花板）。多轮上下文：chat_stream 注入最近 2 轮问答（每则 400 字、总预算 1600）；≥2 篇的库级对比工作台是规划中的独立功能。
 - **材料注入策略**（对齐 ChatGPT/DeepSeek 的文件问答做法）：全文直读优先（整体理解最好），`fulltext_max_tokens`（默认 200000，config.yaml）为总预算——多篇总量超预算才降级检索；`_build_context` 的 fulltext 构建预算 = 该值 ×3.5 字符。**注意两处预算联动**：模式判定与构建都看它，改一个要改全。
 - **证据引用规则**：`_CITE` 支持 1-4 位编号（全文模式证据数百条）；evidence 的 `text` 保留全文（数字接地/补引需要），UI 只渲染被引用项；`renderCites` 按 `evidence_id` 匹配（数组下标 ≠ 编号，校验过滤后会错位）。
 - **冒烟测试**：部署后跑 `bash scripts/smoke-test.sh`（只读，15 项：health/静态/登录/关键端点/401 保护）。

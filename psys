@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # paper-system CLI wrapper（宿主机使用）
 # 用法: ./psys add paper1.pdf dir2/   ./psys ask "..." --papers p001,p002
+#   ./psys backup [--keep N] / ./psys restore [日期]   —— 在宿主机直接执行脚本（容器内没有 bash 脚本与 docker）
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -10,5 +11,19 @@ if [[ -f .env ]]; then
     WEB_PORT=$(grep -E '^WEB_PORT=' .env | cut -d= -f2- || true)
     export PAPERSYS_URL="http://127.0.0.1:${WEB_PORT:-7861}"
 fi
+
+# 宿主机本地执行的子命令（容器内无 docker/scripts，进入容器必失败）
+case "${1:-}" in
+    backup)
+        shift
+        KEEP=""
+        [[ "${1:-}" == "--keep" ]] && { KEEP="$2"; shift 2; }
+        exec bash scripts/backup.sh "${KEEP:-}"
+        ;;
+    restore)
+        shift || true
+        exec bash scripts/restore.sh "${1:-}"
+        ;;
+esac
 
 exec docker compose exec -T app python cli.py "$@"

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -150,9 +151,12 @@ def cmd_serve(args):
 
 
 def cmd_backup(args):
-    """立即备份（数据库快照 + 论文归档）。"""
+    """立即备份（数据库快照 + 论文归档）。注意：容器内无 scripts/——请用宿主机 ./psys backup。"""
     import subprocess
-    r = subprocess.run(["bash", "scripts/backup.sh", str(args.keep)], capture_output=True, text=True)
+    cmd = ["bash", "scripts/backup.sh"]
+    if str(args.keep) != "0":        # 0=用脚本/配置默认；传 "0" 会被轮转逻辑当作保留 0 份
+        cmd.append(str(args.keep))
+    r = subprocess.run(cmd, capture_output=True, text=True)
     print(r.stdout or r.stderr)
 
 
@@ -170,7 +174,15 @@ def cmd_export_images(args):
     """离线部署：导出全部镜像 tar。"""
     dest = Path(args.out)
     dest.mkdir(parents=True, exist_ok=True)
-    for img in ("mineru:4.1.6", "ollama/ollama:0.40.14", "caddy:2.11.7-alpine", "papersys-app:v1"):
+    dest = Path(args.out)
+    print("提示: install.sh --offline 读取的是 deploy/offline/，建议 --out deploy/offline")
+    # 镜像清单与 compose.yml 对齐（xinference 的 digest 从 compose 读取，不再硬编码）
+    images = ["mineru:4.1.6", "papersys-app:v1", "caddy:2.11.7-alpine"]
+    compose = (Path(__file__).parent.parent / "compose.yml").read_text()
+    m = re.search(r"image:\s*(docker\.1ms\.run/xprobe/xinference@\S+)", compose)
+    if m:
+        images.append(m.group(1))
+    for img in images:
         f = dest / (img.replace("/", "_").replace(":", "_") + ".tar")
         print(f"导出 {img} → {f}")
         os.system(f"docker save {img} -o {f}")
