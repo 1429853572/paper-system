@@ -62,6 +62,13 @@ const dom = new JSDOM(html, { url: 'http://localhost:7861/', runScripts: 'outsid
 const { window } = dom;
 const errors = [];
 
+// 45 篇论文基座：供自由勾选面板分页 mock（20/页 → 3 页）
+const PICK_POOL = Array.from({length: 45}, (_, i) => ({
+  id: `pb${String(i + 1).padStart(2, '0')}`,
+  title: i === 44 ? 'UniqueNeedle Paper 独特针' : `Batch Pool Paper ${i + 1}`,
+  year: String(2020 + (i % 6)), parse_status: 'parsed', visibility: 'shared', owner_id: 1,
+}));
+
 window.fetch = async (url, opts = {}) => {
   const u = String(url);
   const path = u.split('?')[0];
@@ -73,6 +80,15 @@ window.fetch = async (url, opts = {}) => {
         batch_id: 'synb', payload: JSON.stringify({ synthesis_id: 's1' }),
         progress_done: 3, progress_total: 3 },
     ] }) };
+  }
+  // /api/papers：按 query 分页（自由勾选面板用）
+  if (path === '/api/papers' && q.has('page') && q.get('page_size') === '20') {
+    const kw = (q.get('q') || '').toLowerCase();
+    const filtered = PICK_POOL.filter(p => !kw || p.title.toLowerCase().includes(kw));
+    const page = Math.max(1, +q.get('page') || 1);
+    const slice = filtered.slice((page - 1) * 20, page * 20);
+    return { ok: true, status: 200,
+             json: async () => ({ papers: slice, page, has_more: page * 20 < filtered.length }) };
   }
   const body = DATA[path] ?? {};
   return { ok: true, status: 200, json: async () => body, blob: async () => ({ size: 10 }) };
@@ -195,6 +211,41 @@ if (toCenter) {
   const cnt = doc.querySelector('#bp-count')?.textContent || '';
   ok('preset 圈定生效', /1 篇|0 篇/.test(cnt), cnt);
 }
+
+// 6.5) 自由勾选面板：分页 / 复选 / 全选本页 / 搜索
+window.__T.switchPage('batch');
+await new Promise((r) => setTimeout(r, 300));
+doc.querySelector('#bp-pick-toggle').click();
+await new Promise((r) => setTimeout(r, 250));
+ok('勾选面板展开且 20 行', !doc.querySelector('#bp-picker').hidden &&
+   doc.querySelectorAll('.bpp-row').length === 20, `实际 ${doc.querySelectorAll('.bpp-row').length}`);
+ok('下一页可用（45 篇 → 3 页）', !doc.querySelector('#bpp-next').disabled);
+doc.querySelector('.bpp-row input[type=checkbox]').click();
+await new Promise((r) => setTimeout(r, 80));
+ok('逐条勾选计数 1', doc.querySelector('#bp-count').textContent.includes('1 篇'));
+doc.querySelector('#bpp-all').click();
+await new Promise((r) => setTimeout(r, 80));
+ok('全选本页 → 20 篇（已勾项在本页内，并集 20）',
+   doc.querySelector('#bp-count').textContent.includes('20 篇'),
+   doc.querySelector('#bp-count').textContent);
+doc.querySelector('#bpp-next').click();
+await new Promise((r) => setTimeout(r, 250));
+ok('翻到第 2 页且勾选保留', doc.querySelector('#bpp-page').textContent.includes('第 2 页') &&
+   doc.querySelector('#bp-count').textContent.includes('20 篇'));
+doc.querySelector('#bpp-all').click();
+await new Promise((r) => setTimeout(r, 80));
+ok('第 2 页全选 → 40 篇', doc.querySelector('#bp-count').textContent.includes('40 篇'));
+doc.querySelector('#bpp-none').click();
+await new Promise((r) => setTimeout(r, 80));
+ok('本页取消 → 20 篇', doc.querySelector('#bp-count').textContent.includes('20 篇'));
+doc.querySelector('#bpp-search').value = '独特针';
+doc.querySelector('#bpp-search').dispatchEvent(new window.Event('input'));
+await new Promise((r) => setTimeout(r, 450));   // 300ms 防抖 + 加载
+ok('搜索命中 1 行', doc.querySelectorAll('.bpp-row').length === 1 &&
+   doc.querySelector('.bpp-title').textContent.includes('独特针'));
+doc.querySelector('#bp-clear').click();
+await new Promise((r) => setTimeout(r, 100));
+ok('清空圈定 → 0 篇', doc.querySelector('#bp-count').textContent.includes('0 篇'));
 
 // 7) 综述流：卡片激活 → 预估确认 → 批次面板综述行 → 报告视图
 const reviewCard = doc.querySelector('.batch-card[data-act="review"]');

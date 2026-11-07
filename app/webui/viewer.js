@@ -1577,12 +1577,28 @@ async function renderBatchPage() {
           <span class="spacer"></span>
           <button class="btn small" id="bp-clear" ${state.batchSel.size ? '' : 'hidden'}>清空</button></div>
         <div class="bp-sources">
+          <button class="btn small primary" id="bp-pick-toggle">自由勾选 ▾</button>
           <button class="btn small" id="bp-sel">我的勾选（<span id="bp-sel-n">${state.selected.size}</span>）</button>
           <button class="btn small" id="bp-list">当前列表（<span id="bp-list-n">${state.papers.length}</span>）</button>
           <select id="bp-col" style="width:auto;font-size:12px">
             <option value="">按库圈定…</option>
             ${cols.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
           </select>
+        </div>
+        <div class="bp-picker" id="bp-picker" hidden>
+          <div class="bpp-tools">
+            <input id="bpp-search" placeholder="搜索标题…" style="flex:1">
+            <button class="btn small" id="bpp-all" title="勾上本页全部">全选本页</button>
+            <button class="btn small" id="bpp-none" title="取消本页全部">本页取消</button>
+          </div>
+          <div class="bpp-list" id="bpp-list"><p class="muted" style="padding:10px">加载中…</p></div>
+          <div class="bpp-foot">
+            <button class="btn small" id="bpp-prev" disabled>‹ 上一页</button>
+            <span class="muted" id="bpp-page" style="font-size:11px">第 1 页</span>
+            <button class="btn small" id="bpp-next" disabled>下一页 ›</button>
+            <span class="spacer"></span>
+            <span class="muted" id="bpp-selcount" style="font-size:11px"></span>
+          </div>
         </div>
         <div class="bp-detail" id="bp-detail" hidden></div>
       </div>
@@ -1606,7 +1622,7 @@ async function renderBatchPage() {
     </div>`;
   $('#bp-sel').onclick = () => setBatchSel(new Set(state.selected), '我的勾选');
   $('#bp-list').onclick = () => setBatchSel(new Set(state.papers.map(p => p.id)), '当前列表');
-  $('#bp-clear').onclick = () => setBatchSel(new Set(), '');
+  $('#bp-clear').onclick = () => { setBatchSel(new Set(), ''); renderBpPicker(); };
   $('#bp-col').onchange = async e => {
     const cid = e.target.value;
     if (!cid) return;
@@ -1619,6 +1635,22 @@ async function renderBatchPage() {
     } catch (err) { toast('圈定失败: ' + err.message); }
     e.target.value = '';
   };
+  /* 自由勾选面板：服务端分页 + 搜索，逐条复选实时计入圈定 */
+  state._bpp = {page: 1, q: '', hasMore: false, items: []};
+  $('#bp-pick-toggle').onclick = () => {
+    const p = $('#bp-picker');
+    p.hidden = !p.hidden;
+    if (!p.hidden) { loadBpPicker(); $('#bpp-search').focus(); }
+  };
+  let _bppTimer = 0;
+  $('#bpp-search').oninput = e => {
+    clearTimeout(_bppTimer);
+    _bppTimer = setTimeout(() => { state._bpp.q = e.target.value.trim(); state._bpp.page = 1; loadBpPicker(); }, 300);
+  };
+  $('#bpp-all').onclick = () => { toggleBpPage(true); };
+  $('#bpp-none').onclick = () => { toggleBpPage(false); };
+  $('#bpp-prev').onclick = () => { if (state._bpp.page > 1) { state._bpp.page--; loadBpPicker(); } };
+  $('#bpp-next').onclick = () => { if (state._bpp.hasMore) { state._bpp.page++; loadBpPicker(); } };
   if (state._batchPreset) {
     const preset = state._batchPreset;
     state._batchPreset = null;
@@ -1633,7 +1665,15 @@ function setBatchSel(ids, srcName) {
   if (!cnt) return;
   cnt.textContent = `${ids.size} 篇` + (srcName ? `（来自${srcName}）` : '');
   $('#bp-clear').hidden = !ids.size;
+  renderBpDetail();
+  const sc = $('#bpp-selcount');
+  if (sc) sc.textContent = ids.size ? `已圈定 ${ids.size} 篇` : '';
+}
+
+function renderBpDetail() {
   const det = $('#bp-detail');
+  if (!det) return;
+  const ids = state.batchSel;
   if (!ids.size) { det.hidden = true; det.innerHTML = ''; return; }
   const byId = new Map([...state.papers, ...state._batchPapers, ...(state.qaAllPapers || [])]
     .map(p => [p.id, p]));
@@ -1651,6 +1691,74 @@ function setBatchSel(ids, srcName) {
     r.hidden = !r.hidden;
     tg.textContent = r.hidden ? `展开 ${ids.size} 篇` : '收起';
   };
+}
+
+/* ---- 自由勾选面板（服务端分页 20/页 + 标题搜索 + 本页全选/取消） ---- */
+const BPP_PAGE_SIZE = 20;
+
+async function loadBpPicker() {
+  const bp = state._bpp;
+  const list = $('#bpp-list');
+  if (!list) return;
+  try {
+    const params = new URLSearchParams({q: bp.q, page: bp.page, page_size: BPP_PAGE_SIZE});
+    const d = await api('/api/papers?' + params);
+    bp.items = d.papers;
+    bp.hasMore = !!d.has_more;
+    state._batchPapers = [...state._batchPapers.filter(x => !d.papers.some(p => p.id === x.id)), ...d.papers];
+  } catch (e) {
+    list.innerHTML = `<p class="muted" style="padding:10px">加载失败: ${esc(e.message)}</p>`;
+    return;
+  }
+  renderBpPicker();
+}
+
+function renderBpPicker() {
+  const bp = state._bpp;
+  const list = $('#bpp-list');
+  if (!list) return;
+  if (!bp.items.length) {
+    list.innerHTML = `<p class="muted" style="padding:10px">${bp.q ? '没有匹配的论文' : '库中还没有论文'}</p>`;
+  } else {
+    list.innerHTML = bp.items.map(p => `
+      <label class="bpp-row ${state.batchSel.has(p.id) ? 'on' : ''}" data-id="${esc(p.id)}">
+        <input type="checkbox" ${state.batchSel.has(p.id) ? 'checked' : ''}>
+        <span class="bpp-title">${esc(p.title || p.id)}</span>
+        ${p.year ? `<span class="badge priv">${esc(p.year)}</span>` : ''}
+        ${statusBadge(p)}
+      </label>`).join('');
+    $$('input[type=checkbox]', list).forEach(cb => cb.onchange = e => {
+      const id = e.target.closest('.bpp-row').dataset.id;
+      if (e.target.checked) state.batchSel.add(id);
+      else state.batchSel.delete(id);
+      e.target.closest('.bpp-row').classList.toggle('on', e.target.checked);
+      syncBpCount();
+    });
+  }
+  const pg = $('#bpp-page');
+  if (pg) pg.textContent = `第 ${bp.page} 页${bp.q ? `（搜“${bp.q}”）` : ''}`;
+  $('#bpp-prev').disabled = bp.page <= 1;
+  $('#bpp-next').disabled = !bp.hasMore;
+  const sc = $('#bpp-selcount');
+  if (sc) sc.textContent = state.batchSel.size ? `已圈定 ${state.batchSel.size} 篇` : '';
+}
+
+function toggleBpPage(on) {
+  const bp = state._bpp;
+  for (const p of bp.items) {
+    if (on) state.batchSel.add(p.id);
+    else state.batchSel.delete(p.id);
+  }
+  renderBpPicker();
+  syncBpCount();
+}
+
+/* 勾选变化后同步顶部计数与明细（轻量：不重建勾选面板本身） */
+function syncBpCount() {
+  const cnt = $('#bp-count');
+  if (cnt) cnt.textContent = `${state.batchSel.size} 篇`;
+  $('#bp-clear').hidden = !state.batchSel.size;
+  renderBpDetail();
 }
 
 async function runBatchAction(act, anchor) {
