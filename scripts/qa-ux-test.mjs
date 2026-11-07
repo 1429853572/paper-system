@@ -158,8 +158,8 @@ doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', 
 ok('↓ 到底回草稿', doc.querySelector('#qa-text').value === '');
 
 // 5.5) 问答区高度可拖拽：分隔条 + 标题栏两处抓握点，握点提示可见
-ok('问答拖拽握点提示存在', !!doc.querySelector('.qa-drag-hint'));
-ok('标题栏为抓握点（cursor 提示由 CSS 提供）', !!doc.querySelector('.qa-dock-head'));
+ok('标题栏为抓握点（拖拽逻辑走 .qa-dock-head）', !!doc.querySelector('.qa-dock-head'));
+ok('⇕ 提示控件已移除（按需求精简）', !doc.querySelector('.qa-drag-hint'));
 const handle = doc.querySelector('#rpane-handle');
 ok('分隔条存在且未隐藏', !!handle && !handle.hidden);
 {

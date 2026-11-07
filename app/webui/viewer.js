@@ -2818,29 +2818,8 @@ window.openQaDock = () => {
   applyQaLayout();
   $('#qa-dock-close').onclick = closeQa;
   $('#qa-export').onclick = exportChat;
-  // 标题栏拖拽提示 ⇕：可拖动（随标题栏同一套逻辑），单击则循环预设高度
-  const qaHead = document.querySelector('.qa-dock-head');   // 只有 class，无 id
-  if (qaHead && !qaHead.querySelector('.qa-drag-hint')) {
-    const hint = document.createElement('span');
-    hint.className = 'qa-drag-hint';
-    hint.title = '拖动调整问答区高度；单击切换 1/3 · 1/2 · 2/3';
-    hint.textContent = '⇕';
-    hint.addEventListener('click', () => {
-      const presets = [33, 50, 25, 66];
-      const cur = state.rpane.top;
-      const next = presets.find(p => p > cur + 2) ?? presets[0];
-      state.rpane.top = next;
-      const top = $('#rpane-top');
-      if (top) { top.style.flex = 'none'; top.style.height = next + '%'; }
-      localStorage.setItem('ps-rpane-top', String(next));
-      toast(`问答区高度 ${next}%`);
-    });
-    qaHead.insertBefore(hint, qaHead.querySelector('#qa-sess-toggle'));
-  }
-  // 拖拽改 Pointer Events + 文档级委托：不依赖把手的直接监听（免疫任何层叠/重建问题），
-  // 鼠标与触屏通吃；min 6% 防止问答框被拖没
+  // 拖拽改占比：起点两处——中间分隔条 #rpane-handle，或问答框标题栏 .qa-dock-head（排除按钮）
   document.addEventListener('pointerdown', e => {
-    // 抓握点有两处：中间分隔条 + 问答框标题栏（后者更显眼，标题栏上的按钮除外）
     const onHandle = e.target.closest?.('#rpane-handle');
     const onHead = e.target.closest?.('.qa-dock-head');
     const headBtn = e.target.closest?.('.qa-dock-head button');
