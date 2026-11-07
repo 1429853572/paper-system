@@ -1764,19 +1764,8 @@ function syncBpCount() {
 async function runBatchAction(act, anchor) {
   if (!state.batchSel.size) { toast('请先在上方圈定论文'); return; }
   const ids = [...state.batchSel];
-  if (act === 'review') { await runSynthesis(anchor); return; }
-  if (act === 'bibtex') {
-    try {
-      const r = await fetch('/api/papers/export/bibtex', {method: 'POST',
-        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paper_ids: ids})});
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const blob = await r.blob();
-      const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(blob), download: 'references.bib'});
-      a.click(); URL.revokeObjectURL(a.href);
-      toast(`已导出 ${ids.length} 篇 BibTeX`);
-    } catch (e) { toast('导出失败: ' + e.message); }
-    return;
-  }
+  if (act === 'review') { await runSynthesis(anchor, ids); return; }
+  if (act === 'bibtex') { downloadBibtex(ids); return; }
   if (act === 'delete') {
     if (!(await uiConfirm(`将圈定的 ${ids.length} 篇移入回收站？（${state.health.trash_days || 30} 天内可恢复）`,
                           {title: '批量移入回收站', anchor}))) return;
@@ -1810,9 +1799,22 @@ const BATCH_TYPE_LABEL = {translate: '批量翻译', meta: '元数据补全', su
 /* ---- 综述流水线（批量页核心卡）----
    圈定 → 成本预估确认（缺导读自动补齐 + 组内比对 + 跨组综合 = N 次调用）
    → synthesis job 进批次面板（四阶段进度）→ 完成后查看报告/导出 MD·CSV */
-async function runSynthesis(anchor) {
-  const ids = [...state.batchSel];
-  if (ids.length < 2) { toast('综述至少需要圈定 2 篇'); return; }
+function downloadBibtex(ids) {
+  fetch('/api/papers/export/bibtex', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paper_ids: ids})})
+    .then(async r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const blob = await r.blob();
+      const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(blob), download: 'references.bib'});
+      a.click(); URL.revokeObjectURL(a.href);
+      toast(`已导出 ${ids.length} 篇 BibTeX`);
+    })
+    .catch(e => toast('导出失败: ' + e.message));
+}
+
+async function runSynthesis(anchor, ids = null) {
+  ids = ids || [...state.batchSel];
+  if (ids.length < 2) { toast('综述至少需要选择 2 篇'); return; }
   let est;
   try {
     est = await api('/api/synthesize/estimate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
@@ -3710,7 +3712,7 @@ async function renderCollectionsPage(preset = null) {
     const tk = s.tokens;
     const owner = d.collections.find(c => c.id === p.collection_id);
     return `<tr class="lib-paper-row ${state.libPaper === p.id ? 'on' : ''}" onclick="selectLibPaper('${p.id}')">
-        <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" onchange="libCk('${scopeKey}')"></td>
+        <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${state.selected.has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
           ${esc(p.title || p.id)}
           ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size:11px"> · ${esc(owner.name)}</span>` : ''}</td>
@@ -3785,10 +3787,18 @@ async function renderCollectionsPage(preset = null) {
           ${subLibs.map(k => `<span class="chip" onclick="libOpenLib('${k.id}')" style="cursor:pointer">${icon('folder')} ${esc(k.name)} · ${k.papers ?? 0} 篇</span>`).join('')}
         </div>` : ''}
         <div class="lib-batch" id="lb-${scopeKey}" hidden>
-          <span id="lb-count-${scopeKey}">0</span> 篇选中
-          <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 批量翻译</button>
+          <b id="lb-count-${scopeKey}">0</b>&nbsp;篇选中
+          <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 翻译</button>
+          <button class="btn small" onclick="libBatchAct('${scopeKey}','summary')" title="批量生成 9 字段导读">🧠 导读</button>
+          <button class="btn small" onclick="libBatchAct('${scopeKey}','meta')" title="联网校准 + AI 补缺失字段">🏷 元数据</button>
+          <button class="btn small" onclick="libBatchAct('${scopeKey}','parse')" title="重新提取全文（仅自己上传的可执行）">♻️ 重解析</button>
+          <button class="btn small" onclick="libBatchSynth('${scopeKey}')" title="自动分组比对生成综述报告">📑 综述</button>
+          <button class="btn small" onclick="libBatchBibtex('${scopeKey}')" title="合并导出一个 .bib">⬇ BibTeX</button>
           <select style="width:auto;font-size:12px" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
-          <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">删除</button>
+          <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">${icon('trash')} 删除</button>
+          <span class="lib-batch-sep"></span>
+          <button class="btn small primary" onclick="libToBatchCenter('${scopeKey}')" title="带勾选进批量中心（批次进度/综述报告视图）">批量中心 »</button>
+          <button class="btn small" onclick="libClearSel('${scopeKey}')">清空</button>
         </div>
         <div class="lib-split">
           <div class="lib-list">
@@ -3802,6 +3812,12 @@ async function renderCollectionsPage(preset = null) {
       </div>`;
 
   // 搜索框：输入去抖后重渲染，并恢复焦点与光标（否则每敲一个字就失焦）
+  // 勾选状态持久化在 state.selected（与侧栏/批量中心共享）——重渲染后恢复批量条
+  {
+    const pre = libSelected(scopeKey);
+    const bar = $('#lb-' + scopeKey);
+    if (bar) { bar.hidden = !pre.length; $('#lb-count-' + scopeKey).textContent = pre.length; }
+  }
   const qIn = $('#lib-mgr-q');
   if (qIn) {
     qIn.oninput = e => {
@@ -3835,6 +3851,9 @@ function libSelected(cid) {
   return $$('.lib-ck').filter(x => x.dataset.cid === cid && x.checked).map(x => x.dataset.pid);
 }
 window.libCk = cid => {
+  // 勾选状态与全站共享（侧栏批量条 / 批量中心「我的勾选」同一集合）
+  $$(`.lib-ck[data-cid="${cid}"]`).forEach(x =>
+    x.checked ? state.selected.add(x.dataset.pid) : state.selected.delete(x.dataset.pid));
   const n = libSelected(cid).length;
   $('#lb-' + cid).hidden = !n;
   $('#lb-count-' + cid).textContent = n;
@@ -3855,6 +3874,39 @@ window.libBatchTranslate = async cid => {
   await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
   toast(`已加入翻译队列 ${ids.length} 篇`); await refreshLib();
 };
+/* 文库页批量条 → 与批量中心同一批次机制（batch_id 进度面板跟踪） */
+window.libBatchAct = async (cid, act) => {
+  const ids = libSelected(cid);
+  if (!ids.length) { toast('先勾选论文'); return; }
+  if (act === 'parse' && !(await uiConfirm(`重解析 ${ids.length} 篇将重建全文，译文与旧版本的对应关系作废（仅自己上传的可执行）。继续？`,
+      {title: '批量重解析', danger: true}))) return;
+  try {
+    const d = await api('/api/batch/' + act, {method: 'POST', body: JSON.stringify({paper_ids: ids})});
+    toast(`${d.queued.length} 篇已入队${d.skipped.length ? `，跳过 ${d.skipped.length} 篇` : ''}——进度见「批量中心」`);
+  } catch (e) { toast('批量操作失败: ' + e.message); }
+};
+window.libBatchSynth = async cid => {
+  const ids = libSelected(cid);
+  if (!ids.length) { toast('先勾选论文'); return; }
+  await runSynthesis(null, ids);
+};
+window.libBatchBibtex = async cid => {
+  const ids = libSelected(cid);
+  if (!ids.length) { toast('先勾选论文'); return; }
+  downloadBibtex(ids);
+};
+window.libToBatchCenter = cid => {
+  const ids = libSelected(cid);
+  state._batchPreset = new Set(ids);
+  switchPage('batch');
+};
+window.libClearSel = cid => {
+  $$(`.lib-ck[data-cid="${cid}"]`).forEach(x => {
+    x.checked = false;
+    state.selected.delete(x.dataset.pid);
+  });
+  libCk(cid);
+};
 window.libBatchMove = async (cid, v, sel) => {
   if (!v) return;
   const target = v === '__none__' ? null : v;
@@ -3863,8 +3915,10 @@ window.libBatchMove = async (cid, v, sel) => {
 };
 window.libBatchDelete = async cid => {
   const ids = libSelected(cid);
-  if (!(await uiConfirm(`删除选中的 ${ids.length} 篇？（进回收站）`, {title: '批量删除'}))) return;
-  for (const pid of ids) await api('/api/papers/' + pid, {method: 'DELETE'});
+  if (!(await uiConfirm(`删除选中的 ${ids.length} 篇？（进回收站，${state.health.trash_days || 30} 天内可恢复）`,
+                        {title: '批量删除'}))) return;
+  await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
+  ids.forEach(pid => state.selected.delete(pid));
   toast('已移入回收站'); await refreshLib();
 };
 window.libUpload = cid => {

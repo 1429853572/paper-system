@@ -182,6 +182,41 @@ for (const fn of ['exportBibtex', 'quickDelete', 'lightbox', 'loadMoreBlocks',
 }
 results.push('函数检查完成');
 
+// 4) 文库管理页批量条（勾选状态与全站共享：侧栏/批量中心同一集合）
+try {
+  window.__T.state.libLevel = 2;
+  window.__T.state.libSel = '';
+  window.__T.switchPage('collections');
+  await new Promise((r) => setTimeout(r, 300));
+  const rowCk = doc.querySelector('.lib-ck');
+  if (!rowCk) throw new Error('论文行复选框缺失');
+  rowCk.checked = true;
+  window.libCk(rowCk.dataset.cid);
+  await new Promise((r) => setTimeout(r, 100));
+  const cid = rowCk.dataset.cid;
+  const bar = doc.querySelector('#lb-' + cid);
+  const barVisible = bar && !bar.hidden;
+  results.push(`文库批量条: ${barVisible ? 'OK' : '未显示'}`);
+  if (!barVisible) errors.push('文库批量条: 勾选后未显示');
+  for (const label of ['翻译', '导读', '元数据', '重解析', '综述', 'BibTeX', '批量中心']) {
+    if (!bar || !bar.textContent.includes(label)) errors.push(`文库批量条缺少: ${label}`);
+  }
+  // 勾选状态共享：state.selected 应含该论文；重渲染后复选框保持
+  const pid = rowCk.dataset.pid;
+  if (!window.__T.state.selected.has(pid)) errors.push('勾选未同步到 state.selected');
+  window.__T.switchPage('reader');
+  window.__T.switchPage('collections');
+  await new Promise((r) => setTimeout(r, 300));
+  const ck2 = doc.querySelector(`.lib-ck[data-pid="${pid}"]`);
+  if (!ck2 || !ck2.checked) errors.push('文库勾选状态重渲染后丢失');
+  results.push('文库勾选持久化: OK');
+  // 清空
+  window.libClearSel(cid);
+  const bar2 = doc.querySelector('#lb-' + cid);
+  if (bar2 && !bar2.hidden) errors.push('清空后批量条仍显示');
+  window.__T.state.selected.clear();
+} catch (e) { errors.push('文库批量条: ' + e.message); }
+
 console.log(results.join('\n'));
 console.log('\n' + (errors.length ? '❌ 失败:\n  ' + errors.slice(0, 12).join('\n  ') : '✅ 全部通过'));
 process.exit(errors.length ? 1 : 0);

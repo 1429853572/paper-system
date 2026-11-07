@@ -954,3 +954,9 @@ table.list input[type=checkbox] { width: auto; }
 .bpp-foot { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-top: 1px solid var(--border);
             background: var(--panel-soft); }
 .bpp-foot .spacer { flex: 1; }
+
+/* 文库管理批量条：完整操作条（勾选状态与侧栏/批量中心共享） */
+.lib-batch { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+             padding: 8px 10px; margin-bottom: 8px; }
+.lib-batch b { font-size: var(--fs-md); }
+.lib-batch-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
