@@ -1804,32 +1804,50 @@ const BATCH_ST = {queued: '排队', pending_gate: '等GPU', running: '进行中'
 async function renderBatchPanel() {
   const el = $('#batch-panel');
   if (!el) return;
+  let bs;
   try {
-    const d = await api('/api/batches');
-    if (!d.batches.length) {
-      el.innerHTML = '<p class="muted" style="padding:8px 0">还没有批次记录——圈定论文后点上方操作卡发起</p>';
-      return;
-    }
-    el.innerHTML = d.batches.map(b => {
-      const finished = b.active === 0;
-      return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
-        <div class="bpanel-row head">
-          <span class="badge ${b.failed ? 'err' : finished ? 'ok' : 'run'}">${finished ? (b.failed ? '有失败' : '完成') : '进行中'}</span>
-          <b>${BATCH_TYPE_LABEL[b.job_type] || esc(b.job_type)}</b>
-          <span class="muted">${b.done + b.failed}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}</span>
-          <span class="spacer"></span>
-          <span class="muted" style="font-size:11px">${esc((b.updated_at || '').slice(5, 16))}</span>
-          <span class="ic">${icon('chevD')}</span>
-        </div>
-        <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
-      </div>`;
-    }).join('');
-    for (const bid of state._batchOpen) {
-      const box = el.querySelector(`[data-jobs="${bid}"]`);
-      if (box && !box.hidden) renderBatchJobs(bid, box);
-    }
+    bs = (await api('/api/batches?limit=20')).batches;
   } catch (e) {
     el.innerHTML = `<p class="muted" style="padding:8px 0">加载失败: ${esc(e.message)}</p>`;
+    return;
+  }
+  if (!bs.length) {
+    el.innerHTML = '<p class="muted" style="padding:8px 0">还没有批次——发起批量操作后，这里会实时显示进度</p>';
+    return;
+  }
+  // 语义：进行中（实时刷新、自动展开）置顶；已结束只保留最近 5 条折叠回看，更早的看「队列」浮层
+  const active = bs.filter(b => b.active > 0);
+  const settled = bs.filter(b => b.active === 0).slice(0, 5);
+  active.forEach(b => state._batchOpen.add(b.batch_id));   // 活跃批次默认展开
+
+  const row = b => {
+    const badge = b.active > 0 ? ['run', '进行中']
+      : b.failed > 0 ? ['err', '有失败']
+      : b.done > 0 ? ['ok', '完成'] : ['priv', '已取消'];
+    const extra = [
+      b.failed ? `<span class="berr">${b.failed} 失败</span>` : '',
+      b.canceled ? `<span class="muted">${b.canceled} 取消</span>` : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
+      <div class="bpanel-row head">
+        <span class="badge ${badge[0]}">${badge[1]}</span>
+        <b>${BATCH_TYPE_LABEL[b.job_type] || esc(b.job_type)}</b>
+        <span class="muted">${b.done}/${b.total}${extra ? ' · ' + extra : ''}</span>
+        <span class="spacer"></span>
+        <span class="muted" style="font-size:11px">${esc((b.updated_at || '').slice(5, 16))}</span>
+        <span class="ic">${icon('chevD')}</span>
+      </div>
+      <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
+    </div>`;
+  };
+
+  el.innerHTML = `
+    <div class="bp-sec-title">进行中${active.length ? `（${active.length}）` : ''}</div>
+    ${active.length ? active.map(row).join('') : '<p class="muted" style="padding:2px 0 8px">没有进行中的批次</p>'}
+    ${settled.length ? `<div class="bp-sec-title">最近完成（保留 5 条，更早的看「队列」浮层）</div>${settled.map(row).join('')}` : ''}`;
+  for (const bid of state._batchOpen) {
+    const box = el.querySelector(`[data-jobs="${bid}"]`);
+    if (box && !box.hidden) renderBatchJobs(bid, box);
   }
 }
 

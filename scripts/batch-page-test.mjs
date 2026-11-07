@@ -27,9 +27,11 @@ const DATA = {
   '/api/statuses': { statuses: {} },
   '/api/health': { db: true, mineru: true, ai: true, trash_days: 30 },
   '/api/batches': { batches: [
-    { batch_id: 'bt1', job_type: 'summary', total: 3, done: 2, failed: 1, active: 0,
+    { batch_id: 'live1', job_type: 'translate', total: 2, done: 0, failed: 0, canceled: 0, active: 2,
+      started_at: '2026-11-07 12:00:00', updated_at: '2026-11-07 12:01:00' },
+    { batch_id: 'bt1', job_type: 'summary', total: 3, done: 2, failed: 1, canceled: 0, active: 0,
       started_at: '2026-11-07 10:00:00', updated_at: '2026-11-07 10:05:00' },
-    { batch_id: 'synb', job_type: 'synthesis', total: 1, done: 1, failed: 0, active: 0,
+    { batch_id: 'synb', job_type: 'synthesis', total: 1, done: 1, failed: 0, canceled: 0, active: 0,
       started_at: '2026-11-07 11:00:00', updated_at: '2026-11-07 11:09:00' },
   ] },
   '/api/synthesize/estimate': { valid: 2, missing_summaries: 1, groups: 1, calls: 3, no_parse: [] },
@@ -78,6 +80,14 @@ window.fetch = async (url, opts = {}) => {
   const path = u.split('?')[0];
   const q = new URLSearchParams(u.split('?')[1] || '');
   // synthesis 批次的 job 明细（payload 携带 synthesis_id）
+  if (path === '/api/jobs' && q.get('batch_id') === 'live1') {
+    return { ok: true, status: 200, json: async () => ({ jobs: [
+      { id: 31, job_type: 'translate', status: 'running', title: 'Pool Paper A', paper_id: 'pb01',
+        batch_id: 'live1', progress_done: 1, progress_total: 3 },
+      { id: 32, job_type: 'translate', status: 'queued', title: 'Pool Paper B', paper_id: 'pb02',
+        batch_id: 'live1', progress_done: 0, progress_total: 0 },
+    ] }) };
+  }
   if (path === '/api/jobs' && q.get('batch_id') === 'synb') {
     return { ok: true, status: 200, json: async () => ({ jobs: [
       { id: 21, job_type: 'synthesis', status: 'done', title: null, paper_id: null,
@@ -185,15 +195,23 @@ ok('勾选圈定 1 篇', doc.querySelector('#bp-count').textContent.includes('1 
 
 // 5) 批次进度面板：批次行渲染 + 展开逐篇
 await new Promise((r) => setTimeout(r, 200));
-const batchRow = doc.querySelector('#batch-panel .bpanel-batch');
+ok('进度分组标题（进行中/最近完成）', doc.body.textContent.includes('进行中') &&
+   doc.body.textContent.includes('最近完成'));
+ok('活跃批次自动展开（live1 逐篇可见）',
+   !doc.querySelector('[data-jobs="live1"]').hidden &&
+   doc.querySelectorAll('[data-jobs="live1"] .bpanel-row.sub').length === 2);
+ok('失败计数口径（2/3 · 1 失败）',
+   [...doc.querySelectorAll('.bpanel-row.head')].some(r => r.textContent.includes('2/3') &&
+                                                    r.textContent.includes('1 失败')));
+const batchRow = doc.querySelector('[data-batch="bt1"]');
 ok('批次行渲染', !!batchRow);
 ok('批次操作名显示', batchRow && batchRow.textContent.includes('批量导读'));
 ok('失败数显示', batchRow && batchRow.textContent.includes('1 失败'));
-const head = doc.querySelector('.bpanel-row.head');
+const head = doc.querySelector('[data-batch="bt1"] .bpanel-row.head');
 if (head) {
   head.click();
   await new Promise((r) => setTimeout(r, 150));
-  const jobs = doc.querySelectorAll('.bpanel-row.sub');
+  const jobs = doc.querySelectorAll('[data-batch="bt1"] .bpanel-row.sub');
   ok('批次展开逐篇 2 行', jobs.length === 2, `实际 ${jobs.length}`);
   ok('失败行有重试键', !!doc.querySelector('[data-retry="12"]'));
   ok('错误信息显示', doc.querySelector('.bpanel-err')?.textContent.includes('LLM 超时'));

@@ -793,13 +793,14 @@ async def batch_action(action: str, request: Request):
 
 
 @app.get("/api/batches")
-def list_batches(request: Request, limit: int = 12):
-    """批次汇总（批量中心进度面板：每批次一行聚合）。"""
+def list_batches(request: Request, limit: int = 20):
+    """批次汇总（批量中心进度面板）：前端按 active 分「进行中 / 最近完成」两组展示。"""
     u = require(request)
     scope = "" if u["role"] == "admin" else f" AND user_id={int(u['id'])}"
     rows = db.all(
         "SELECT batch_id, MIN(job_type) AS job_type, COUNT(*) AS total, "
         "SUM(status='done') AS done, SUM(status='failed') AS failed, "
+        "SUM(status='canceled') AS canceled, "
         "SUM(status IN ('queued','pending_gate','running')) AS active, "
         "MIN(created_at) AS started_at, MAX(updated_at) AS updated_at "
         f"FROM jobs WHERE batch_id IS NOT NULL AND batch_id!=''{scope} "

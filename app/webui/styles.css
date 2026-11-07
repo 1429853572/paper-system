@@ -976,3 +976,7 @@ table.list input[type=checkbox] { width: auto; }
              padding: 8px 10px; margin-bottom: 8px; }
 .lib-batch b { font-size: var(--fs-md); }
 .lib-batch-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+
+/* 批次进度分组标题 */
+.bp-sec-title { font-size: var(--fs-xs); color: var(--muted); font-weight: 600;
+                padding: 6px 0 4px; letter-spacing: .02em; }
