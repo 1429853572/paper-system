@@ -1472,17 +1472,6 @@ async function renderMeta() {
         <button class="btn small" onclick="cancelMeta()">取消</button>`
         : `<button class="btn small" onclick="editMeta('${pid}')">${icon('edit')} 编辑</button>`}
         <button class="btn small" onclick="extractMeta('${pid}')" title="用 AI 补全缺失字段（作者/摘要/关键词）">${icon('bolt')} AI 补全</button>
-        <div class="exp-dd" onmouseover="this.classList.add('open')" onmouseout="this.classList.remove('open')">
-          <button class="btn small" onclick="void(0)">${icon('download')} 导出</button>
-          <div class="exp-menu">
-            <button onclick="window.open('/api/papers/${pid}/export/translation?lang=both')">翻译对照 Markdown</button>
-            <button onclick="window.open('/api/papers/${pid}/markdown')">解析 Markdown</button>
-            <button onclick="window.open('/api/papers/${pid}/export/summary')">科研导读 Markdown</button>
-          </div>
-        </div>
-        <a class="btn small" href="/api/papers/${pid}/pdf" download="${canonicalName(paper)}.pdf">${icon('download')} PDF</a>
-        <button class="btn small" onclick="parseCtrl()">${icon('retry')} 重新解析</button>
-        <button class="btn small" onclick="retranslatePaper('${pid}')" title="换模型/术语表后生成新译文版本">${icon('retry')} 强制重译</button>
       </div>
     </div>
     <div class="card cite-card">

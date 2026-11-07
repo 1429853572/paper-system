@@ -1048,11 +1048,13 @@ def paper_assets(paper_id: str, request: Request):
                         "bbox": _bbox,
                     })
 
-    # 编号解析：Figure N / Table N → 徽标；无编号子图归并到同页主图
+    # 编号解析：Fig. 2 / Figs. 2 / Figure 2 / 图 2 → 徽标；无编号子图归并到同页主图
     import re as _re
 
     def _label(cap: str, kind: str) -> str:
-        m = _re.search(rf"{kind}\s*\.?\s*(\d+)", cap or "", _re.I)
+        # \b 防 config 里的 fig 误配；Tab. 支持表格缩写
+        pat = r"\b(?:figure|figs?\.?|图)\s*(\d+)" if kind == "figure" else r"\b(?:table|tabs?\.?|表)\s*(\d+)"
+        m = _re.search(pat, cap or "", _re.I)
         if not m:
             return ""
         return ("图" if kind == "figure" else "表") + m.group(1)
@@ -1061,52 +1063,61 @@ def paper_assets(paper_id: str, request: Request):
         t["label"] = _label(t["caption"], "table") or f"第{t['page_index'] + 1}页·表"
     tables.sort(key=lambda t: t["page_index"])
 
+    def _union(members):
+        bs = [m.get("bbox") for m in members if m.get("bbox")]
+        if not bs:
+            return None
+        return [min(b[0] for b in bs), min(b[1] for b in bs),
+                max(b[2] for b in bs), max(b[3] for b in bs)]
+
+    def _finalize(members, label):
+        """一组（同号多块/主图+子图）合成一个条目：按 y 排序、题注去重。
+        MinerU 会把多分体 figure 拆成多个 image 块且各带同一题注——不合并会
+        出现重复条目和题注显示两遍。"""
+        members = sorted(members, key=lambda x: (x.get("bbox") or [0, 0, 0, 0])[1])
+        first = members[0]
+        caps = []
+        for m in members:
+            c = (m.get("caption") or "").strip()
+            if c and c not in caps:
+                caps.append(c)
+        first["label"] = label
+        first["caption"] = caps[0] if caps else ""
+        first["extra_images"] = [m["image_path"] for m in members[1:] if m.get("image_path")]
+        first["sub_captions"] = caps[1:]
+        first["union_bbox"] = _union(members)
+        figures.append(first)
+
     by_page: dict[int, list] = {}
     for f in figures_raw:
         by_page.setdefault(f["page_index"], []).append(f)
     figures = []
     for pg in sorted(by_page):
         imgs = sorted(by_page[pg], key=lambda x: ((x.get("bbox") or [0, 0, 0, 0])[1]))
-        numbered, others = [], []
+        labeled: dict[str, list] = {}   # 同页同号多块 = 同一 figure 的分体
+        others = []
         for f in imgs:
-            (_label(f["caption"], "figure") if False else None)
-            if _label(f["caption"], "figure"):
-                numbered.append(f)
+            lb = _label(f["caption"], "figure")
+            if lb:
+                labeled.setdefault(lb, []).append(f)
             else:
                 others.append(f)
-        def _union(members):
-            bs = [m.get("bbox") for m in members if m.get("bbox")]
-            if not bs:
-                return None
-            return [min(b[0] for b in bs), min(b[1] for b in bs),
-                    max(b[2] for b in bs), max(b[3] for b in bs)]
-
-        if not numbered:
+        if not labeled:
             if imgs:
-                first = imgs[0]
-                first["label"] = f"第{pg + 1}页·组图"
-                first["extra_images"] = [o["image_path"] for o in imgs[1:]]
-                first["sub_captions"] = [o["caption"] for o in imgs if o["caption"]]
-                first["union_bbox"] = _union(imgs)
-                figures.append(first)
+                _finalize(imgs, f"第{pg + 1}页·组图")
             continue
-        # 有编号：未编号子图挂到「bbox 纵向在其上方的最近编号图」
-        assigned: dict[int, list] = {id(n): [] for n in numbered}
+        # 未编号子图：挂到 bbox 纵向在其上方的最近编号组
+        anchored: dict[str, list] = {lb: [] for lb in labeled}
         for o in others:
             oy = (o.get("bbox") or [0, 0, 0, 0])[1]
             target = None
-            for n in numbered:
-                ny = (n.get("bbox") or [0, 9, 0, 9])[1]
+            for lb, members in labeled.items():
+                ny = min((m.get("bbox") or [0, 9, 0, 9])[1] for m in members)
                 if ny <= oy + 0.02:
-                    target = n  # 保留最下方的上方编号
-            assigned[id(target if target else numbered[0])].append(o)
-        for n in numbered:
-            subs = assigned[id(n)]
-            n["label"] = _label(n["caption"], "figure")
-            n["extra_images"] = [s["image_path"] for s in subs]
-            n["sub_captions"] = [s["caption"] for s in subs if s["caption"]]
-            n["union_bbox"] = _union([n] + subs)
-            figures.append(n)
+                    target = lb   # 保留最下方的上方编号组
+            anchored[target if target else next(iter(labeled))].append(o)
+        for lb, members in labeled.items():
+            _finalize(members + anchored[lb], lb)
 
     # 公式清单（IvySCI 式独立页签）：blocks 里 type=equation 即 LaTeX
     run_id = run["id"]
