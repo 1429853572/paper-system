@@ -204,10 +204,15 @@ doc.body.dispatchEvent(new window.Event('mouseup', { bubbles: true }));
 await new Promise((r) => setTimeout(r, 100));
 const selBar = doc.querySelector('#sel-bar');
 ok('选中浮条出现', !!selBar);
-ok('浮条三键', selBar && selBar.querySelectorAll('button').length === 3);
+ok('浮条四键（解读/提问/译/引文）', selBar && selBar.querySelectorAll('button').length === 4);
 selBar.querySelector('[data-a="translate"]').click();
 await new Promise((r) => setTimeout(r, 150));
 ok('翻译请求发出', translateCalls.length === 1 && translateCalls[0].text.includes('gaussians'));
+// 引文提取：选中参考文献条目 → 走标识符导入
+selBar.querySelector('[data-a="cite"]').click();
+await new Promise((r) => setTimeout(r, 200));
+ok('引文提取走标识符导入', identCalls.length === 1 &&
+   identCalls[0].text.includes('gaussians') && !identCalls[0].text.startsWith('['));
 ok('译文卡显示', !!doc.querySelector('#sel-result') &&
    doc.querySelector('#sel-result .sr-body').textContent.includes('译文'));
 
@@ -216,8 +221,8 @@ doc.querySelector('#upload-arrow').click();
 doc.querySelector('#ident-input').value = '10.1234/abc\narXiv:2401.12345';
 doc.querySelector('#ident-btn').click();
 await new Promise((r) => setTimeout(r, 200));
-ok('标识符导入请求发出', identCalls.length === 1 &&
-   identCalls[0].text.includes('10.1234/abc'));
+ok('标识符导入请求发出（含步骤8引文提取共 2 次）', identCalls.length === 2 &&
+   identCalls[1].text.includes('10.1234/abc'));
 ok('上传弹层关闭+列表刷新', doc.querySelector('#upload-pop').hidden);
 
 console.log(results.join('\n'));

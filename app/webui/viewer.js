@@ -3186,13 +3186,15 @@ function showSelBar(sel, text) {
   const bar = Object.assign(document.createElement('div'), {className: 'sel-bar', id: 'sel-bar'});
   bar.innerHTML = `<button data-a="explain" title="解读选中文字">解读</button>
     <button data-a="ask" title="拿选中文字提问">提问</button>
-    <button data-a="translate" title="翻译选中文字">译</button>`;
+    <button data-a="translate" title="翻译选中文字">译</button>
+    <button data-a="cite" title="智能提取：选中参考文献条目一键入库（Zotero 智能提取式）">引文</button>`;
   bar.style.top = Math.max(8, rect.top - 36) + 'px';
   bar.style.left = Math.min(innerWidth - 140, Math.max(8, rect.left)) + 'px';
   document.body.appendChild(bar);
   $$('#sel-bar button').forEach(b => b.onclick = () => {
     hideSelBar();
     if (b.dataset.a === 'translate') translateSelection(text);
+    else if (b.dataset.a === 'cite') importCitation(text);
     else executeTag(BUILTIN_TAGS[b.dataset.a === 'explain' ? 1 : 2]);
   });
 }
@@ -3210,6 +3212,27 @@ document.addEventListener('mouseup', e => {
 document.addEventListener('selectionchange', () => {
   if (!window.getSelection()?.toString()) hideSelBar();
 });
+
+/* 智能提取引文（Zotero 式）：选中参考文献条目 → 解析元数据 → 自动入库 */
+async function importCitation(text) {
+  // 去掉条目编号前缀 [24] / (2) / 3. —— 提高标题匹配命中
+  const cleaned = text.replace(/^\s*\[\d+\]\s*/, '').replace(/^\s*\(\d+\)\s*/, '')
+    .replace(/^\s*\d+[.)]\s+/, '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (cleaned.length < 10) { toast('选中的引文太短，选完整一条（标题+作者）'); return; }
+  toast('正在识别引文…');
+  try {
+    const d = await api('/api/papers/import-identifier', {method: 'POST',
+      body: JSON.stringify({text: cleaned, collection_id: state.currentCollection || null,
+                            visibility: state.uploadPrivate ? 'private' : 'shared'})});
+    const r = d.results[0];
+    if (!r) { toast('未能识别该引文'); return; }
+    const m = r.metadata || {};
+    if (r.status === 'queued') toast(`✓ 已入库《${(m.title || '').slice(0, 40)}》并开始解析`);
+    else if (r.status === 'duplicate') toast('该引文已在库中');
+    else if (r.status === 'no_pdf') toast(`识别到《${(m.title || '').slice(0, 40)}》但无公开 PDF，未导入`);
+    else toast(r.message || '识别失败（可稍后重试）');
+  } catch (e) { toast('引文识别失败: ' + e.message); }
+}
 
 async function translateSelection(text) {
   const card = Object.assign(document.createElement('div'), {className: 'sel-result', id: 'sel-result'});
