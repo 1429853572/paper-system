@@ -43,16 +43,20 @@ function toast(msg, ms = 2500) {
    anchor 给定时锚定弹出（无遮罩，点外/Esc 取消）；否则居中浮卡 + 半透明遮罩。 */
 function _uiDialog({title, message = '', input = false, value = '', placeholder = '',
                     okText = '确定', cancelText = '取消', danger = false, anchor = null,
-                    copyText = '', hideCancel = false}) {
+                    copyText = '', hideCancel = false, multiline = false}) {
   return new Promise(resolve => {
     const backdrop = anchor ? null : Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
     const pop = Object.assign(document.createElement('div'), {className: 'ui-pop' + (danger ? ' danger' : '')});
+    const inputHtml = !input ? '' : multiline
+      ? `<textarea class="ui-pop-input" rows="9" placeholder="${esc(placeholder || '')}">${esc(value)}</textarea>`
+      : `<input class="ui-pop-input" value="${esc(value)}" placeholder="${esc(placeholder || '')}">`;
     pop.innerHTML = `
       <div class="ui-pop-title">${esc(title)}${copyText ? `<button class="btn small" data-copy>${icon('copy')} 复制</button>` : ''}</div>
       ${message ? `<div class="ui-pop-msg">${esc(message)}</div>` : ''}
-      ${input ? `<input class="ui-pop-input" value="${esc(value)}" placeholder="${esc(placeholder || '')}">` : ''}
+      ${inputHtml}
       <div class="ui-pop-foot">${hideCancel ? '' : `<button class="btn small" data-cancel>${esc(cancelText)}</button>`}
         <button class="btn small ${danger ? 'danger' : 'primary'}" data-ok>${esc(okText)}</button></div>`;
+    const inputVal = () => (pop.querySelector('.ui-pop-input') || {}).value ?? null;
     const done = val => {
       pop.remove(); backdrop?.remove();
       document.removeEventListener('keydown', onKey, true);
@@ -60,10 +64,12 @@ function _uiDialog({title, message = '', input = false, value = '', placeholder 
     };
     const onKey = e => {
       if (e.key === 'Escape') { e.stopPropagation(); done(input ? null : false); }
-      else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); done(input ? (pop.querySelector('.ui-pop-input').value || null) : true); }
+      else if (e.key === 'Enter' && !e.isComposing && (!multiline || e.ctrlKey)) {
+        e.preventDefault(); done(input ? inputVal() : true);
+      }
     };
     document.addEventListener('keydown', onKey, true);
-    pop.querySelector('[data-ok]').onclick = () => done(input ? (pop.querySelector('.ui-pop-input').value || null) : true);
+    pop.querySelector('[data-ok]').onclick = () => done(input ? inputVal() : true);
     const cancelBtn = pop.querySelector('[data-cancel]');
     if (cancelBtn) cancelBtn.onclick = () => done(input ? null : false);
     if (copyText) pop.querySelector('[data-copy]').onclick = () => { navigator.clipboard?.writeText(copyText); toast('已复制'); };
@@ -1176,11 +1182,42 @@ function switchView(v, s) {
 }
 /* 行 HTML 生成（renderContentView 与增量追加共用，避免追加时全量重渲染） */
 const CHROME_TYPES = ['page_number', 'footer', 'header'];   // 页眉/页码是版面噪声，正文流不显示
+const EDITABLE_TYPES = ['text', 'title', 'list', 'aside_text', 'page_footnote', 'equation', 'ref_text', 'page_title'];
+
+function canEditBlock() {
+  const me = state.me, p = state.current;
+  return !!(me && p && (me.role === 'admin' || p.owner_id === me.id));
+}
+
+function editBtnHtml(bid, type) {
+  if (!canEditBlock() || !EDITABLE_TYPES.includes(type)) return '';
+  return `<button class="blk-edit" data-bid="${bid}" title="修正此块（索引/向量同步更新）">${icon('edit')}</button>`;
+}
+
+/* 可视化修正：浮层改块文本 → PATCH → 本地同步 blocks/pairs */
+window.editBlock = async (bid, anchorEl) => {
+  const blk = state.blocks.find(x => x.block_id === bid) || (state.pairs || []).find(x => x.block_id === bid);
+  if (!blk || !state.current) return;
+  const cur = (blk.text ?? blk.en ?? '');
+  const v = await _uiDialog({title: '修正此块文本', input: true, multiline: true,
+    value: cur, okText: '保存', cancelText: '取消', anchor: anchorEl,
+    message: '保存后全文索引与向量同步更新（检索/问答即刻生效）；译文不变，可点强制重译生成新版本。'});
+  if (v === null) return;
+  const nv = v.trim();
+  if (!nv || nv === cur.trim()) return;
+  try {
+    await api(`/api/papers/${state.current.id}/blocks/${bid}`, {method: 'PATCH', body: JSON.stringify({text: nv})});
+    const b = state.blocks.find(x => x.block_id === bid); if (b) b.text = nv;
+    const pr = (state.pairs || []).find(x => x.block_id === bid); if (pr) pr.en = nv;
+    renderContentView();
+    toast('已修正（索引与向量已同步）');
+  } catch (e) { toast(e.message); }
+};
 
 function blockRowHtml(b) {
   const aux = ['aside_text', 'page_footnote'].includes(b.type) ? ' blk-aux' : '';
   return `<div class="blk${aux}" data-bid="${b.block_id}" data-page="${b.page_index}" data-bbox='${esc(b.bbox ?? '')}' data-bbox-pages='${esc(b.bbox_pages ?? '')}'>
-    ${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
+    ${editBtnHtml(b.block_id, b.type)}${b.type === 'title' ? '<h3>' : ''}${renderBlockBody(b)}${b.type === 'title' ? '</h3>' : ''}
   </div>`;
 }
 
@@ -1189,11 +1226,11 @@ function pairRowsHtml(p) {
   const attrs = `data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'`;
   if (p.type === 'image' || p.type === 'equation') {
     // 图/公式无对应译文行，只出一份（在 en 行）
-    return enHtml ? [`<div class="pair en blk" ${attrs}>${enHtml}</div>`] : [];
+    return enHtml ? [`<div class="pair en blk" ${attrs}>${editBtnHtml(p.block_id, p.type)}${enHtml}</div>`] : [];
   }
   if (!p.zh) return [];   // 未翻译段：不渲染空壳
   const isTitle = p.type === 'title';
-  return [`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" ${attrs}>${enHtml}</div>`,
+  return [`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" ${attrs}>${editBtnHtml(p.block_id, p.type)}${enHtml}</div>`,
     `<div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" ${attrs}>${katexify(esc(p.zh))}</div>`];
 }
 
@@ -1219,6 +1256,8 @@ function appendRows(rowsHtml, hasMore, hintTxt) {
 function bindBlkClicks(el) {
   // 段落点击 → 跳页 + 高亮（重复绑定无害：onclick 覆盖式赋值）
   $$('.blk', el).forEach(x => x.onclick = e => {
+    const editBtn = e.target.closest?.('.blk-edit');
+    if (editBtn) { e.stopPropagation(); editBlock(editBtn.dataset.bid, editBtn); return; }   // 修正模式：不触发跳页
     $$('.blk.active').forEach(y => { y.classList.remove('active'); y.style.removeProperty('--hlc'); });
     applyActiveStyle(x);
     const page = parseInt(x.dataset.page ?? '0') + 1;

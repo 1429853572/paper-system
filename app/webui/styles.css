@@ -185,7 +185,14 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
 .view-tabs .spacer { flex: 1; }
 .content-view { flex: 1; overflow-y: auto; padding: 16px 22px; line-height: 1.75; }
 
-.blk { padding: 6px 8px; border-radius: var(--r-sm); cursor: pointer; }
+.blk { padding: 6px 8px; border-radius: var(--r-sm); cursor: pointer; position: relative; }
+/* 可视化修正：悬停行尾浮现编辑图标 */
+.blk-edit { display: none; position: absolute; right: 4px; top: 4px; z-index: 3;
+            border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+            border-radius: var(--r-sm); padding: 2px 4px; cursor: pointer; opacity: .85; }
+.blk:hover .blk-edit { display: inline-flex; }
+.blk-edit:hover { color: var(--primary); border-color: var(--primary); opacity: 1; }
+.ui-pop textarea.ui-pop-input { min-height: 150px; resize: vertical; font-family: inherit; line-height: 1.6; }
 .blk:hover { background: var(--hover); }
 .blk.active { background: var(--tint-warn); }
 .blk h1, .blk h2, .blk h3 { margin: 8px 0 4px; }

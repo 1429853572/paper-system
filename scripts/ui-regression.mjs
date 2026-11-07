@@ -149,6 +149,12 @@ else {
   results.push(`提问键开关: 第一次关=${closedAfterFirst} 第二次开=${openAfterSecond}`);
   if (!closedAfterFirst) errors.push('提问键第一次点击应关闭问答框');
   if (!openAfterSecond) errors.push('提问键第二次点击应打开问答框');
+  // 可视化修正：admin 打开论文后，正文块应出现行尾编辑图标
+  const editBtns = doc.querySelectorAll('#paper-list, #content-view').length
+    ? doc.querySelectorAll('#content-view .blk-edit')
+    : [];
+  results.push(`块编辑图标: ${editBtns.length} 个`);
+  if (!editBtns.length) errors.push('admin 应看到块编辑图标（可视化修正）');
 }
 
 // 2.6) 下载弹层：开启后应为 fixed 浮动定位（工具条 overflow 会裁掉 absolute 弹层）

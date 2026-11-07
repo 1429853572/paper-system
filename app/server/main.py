@@ -1571,6 +1571,38 @@ def reindex_paper(paper_id: str, request: Request):
     return {"ok": True, "blocks": n_blocks, "chunks": n_chunks}
 
 
+@app.patch("/api/papers/{paper_id}/blocks/{block_id}")
+async def edit_paper_block(paper_id: str, block_id: str, request: Request):
+    """可视化修正：人工修正解析块文本，并同步重建受影响 chunk 的 FTS 与向量。
+
+    与 reindex 同口径（仅属主/admin）：修正会改共享解析结果与检索索引。
+    表格/图片块不支持（表格可视化编辑后置）。
+    """
+    u = require(request)
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "文本不能为空")
+    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    if p is None:
+        raise HTTPException(404, "论文不存在")
+    _require_visible(u, p)
+    _require_owner(u, p)
+    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
+                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    if run is None:
+        raise HTTPException(400, "论文尚未解析完成")
+    blk = db.one("SELECT type FROM blocks WHERE paper_id=? AND parse_run_id=? AND block_id=?",
+                 (paper_id, run["id"], block_id))
+    if blk is None:
+        raise HTTPException(404, "块不存在")
+    if blk["type"] in ("table", "image", "chart"):
+        raise HTTPException(400, "表格/图片块暂不支持文本修正")
+    n = retrieval.sync_block_edit(paper_id, run["id"], block_id, text)
+    audit(u["id"], "edit-block", f"{paper_id}:{block_id}")
+    return {"ok": True, "chunks": n}
+
+
 # ---------------- 解析/翻译控制 ----------------
 def _cancel_paper_jobs(paper_id: str, job_type: str) -> int:
     """取消该论文指定类型的在途任务。返回取消数。"""

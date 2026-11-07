@@ -25,21 +25,23 @@ from .db import db
 
 # ---- 分块（入库时调用） ----
 
+def _clean_text(t: str) -> str:
+    """表格 HTML → 纯文本（避免 <table> 污染索引与检索展示）."""
+    if not t or "<" not in t:
+        return t
+    t = re.sub(r"<\s*(br|/tr|/p|/div|/td|/th)[^>]*>", " ", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", " ", t)
+    for a, b in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">")):
+        t = t.replace(a, b)
+    return re.sub(r"[ \t]+", " ", t).strip()
+
+
 def build_chunks(paper_id: str, run_id: str, blocks: list) -> int:
     """按 block 边界聚合 chunk：~800 字符目标，重叠靠块级重复上一 chunk 尾块。
 
     返回 chunk 数。chunk.page_index 取首 block 页（0 基）。
     """
-    def _clean(t: str) -> str:
-        """表格 HTML → 纯文本（避免 <table> 污染索引与检索展示）."""
-        if not t or "<" not in t:
-            return t
-        t = re.sub(r"<\s*(br|/tr|/p|/div|/td|/th)[^>]*>", " ", t, flags=re.I)
-        t = re.sub(r"<[^>]+>", " ", t)
-        for a, b in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">")):
-            t = t.replace(a, b)
-        return re.sub(r"[ \t]+", " ", t).strip()
-
+    _clean = _clean_text
     target = int(config.get("rag", "chunk_tokens")) * 1.3  # ≈字符数（英文 ~1.3 char/token）
     overlap_chars = int(config.get("rag", "overlap_tokens")) * 1.3
     chunks: list[tuple[str, str, int]] = []  # (text, block_ids_json, page_index)
@@ -182,6 +184,53 @@ def _load_matrix(scope_key: str, sql: str, args: tuple) -> tuple[np.ndarray, np.
 
 
 # ---- 检索 ----
+
+def sync_block_edit(paper_id: str, run_id: str, block_id: str, new_text: str) -> int:
+    """人工修正块文本后的索引同步（可视化修正）。
+
+    blocks.text 更新 + 重建所有引用该块的 chunk（chunk 文本聚合规则与 build_chunks
+    一致：块序 + _clean + 空行 join）+ FTS 行替换 + 重算 embedding。
+    embedding 失败时置 NULL 交给 backfill 兜底（FTS 不受影响）。
+    返回受影响 chunk 数。
+    """
+    import json as _json
+
+    blk = db.one("SELECT text FROM blocks WHERE paper_id=? AND parse_run_id=? AND block_id=?",
+                 (paper_id, run_id, block_id))
+    if blk is None:
+        return 0
+    with db.write() as c:
+        c.execute("UPDATE blocks SET text=? WHERE paper_id=? AND parse_run_id=? AND block_id=?",
+                  (new_text, paper_id, run_id, block_id))
+    chunks = db.all(
+        "SELECT id, chunk_index, block_ids FROM chunks WHERE paper_id=? AND parse_run_id=? "
+        "AND block_ids LIKE ?", (paper_id, run_id, f'%"{block_id}"%'))
+    paper = db.one("SELECT owner_id, visibility FROM papers WHERE id=?", (paper_id,))
+    if paper is None:
+        return 0
+    texts = {r["block_id"]: r["text"] for r in db.all(
+        "SELECT block_id, text FROM blocks WHERE parse_run_id=?", (run_id,))}
+    for ch in chunks:
+        bids = _json.loads(ch["block_ids"])
+        new_chunk_text = "\n\n".join(
+            p for p in (_clean_text(texts.get(b, "")) for b in bids) if p.strip())
+        try:
+            vec = embed_texts([new_chunk_text], batch_size=1)[0]
+            emb = _pack(vec)
+        except Exception:  # noqa: BLE001 —— embedding 服务抖动不阻塞修正，NULL 交给 backfill
+            emb = None
+        with db.write() as c:
+            c.execute("UPDATE chunks SET text=? WHERE id=?", (new_chunk_text, ch["id"]))
+            c.execute("DELETE FROM chunks_fts WHERE paper_id=? AND chunk_row=?",
+                      (paper_id, f"{run_id}:{ch['chunk_index']}"))
+            c.execute("INSERT INTO chunks_fts(text,paper_id,owner_id,visibility,chunk_row) "
+                      "VALUES(?,?,?,?,?)",
+                      (new_chunk_text, paper_id, paper["owner_id"], paper["visibility"],
+                       f"{run_id}:{ch['chunk_index']}"))
+            c.execute("UPDATE chunks SET embedding=? WHERE id=?", (emb, ch["id"]))
+    invalidate_vec_cache()
+    return len(chunks)
+
 
 def _rrf(rankings: list[list[int]], k: int = 60) -> dict[int, float]:
     """Reciprocal Rank Fusion：输入各路召回的 id 排名列表。"""
