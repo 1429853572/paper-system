@@ -40,6 +40,20 @@ button { font: inherit; cursor: pointer; }
 /* 键盘导航可见性：Tab 聚焦统一高亮（鼠标点击不触发） */
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; border-radius: var(--r-xs); }
 
+/* ---- 统一弹窗（uiConfirm/uiPrompt/uiPassword，替代原生 confirm/prompt） ---- */
+.ui-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 28, .28); z-index: 90; }
+.ui-pop { position: fixed; z-index: 95; min-width: 260px; max-width: 360px;
+          background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
+          box-shadow: 0 12px 36px rgba(0,0,0,.18); padding: 12px 14px 10px; }
+.ui-pop-title { font-weight: 600; font-size: var(--fs-base); display: flex; align-items: center; gap: 8px; }
+.ui-pop-title .btn { margin-left: auto; }
+.ui-pop-msg { font-size: var(--fs-sm); color: var(--text-2); line-height: 1.6; margin-top: 6px;
+              word-break: break-all; user-select: text; }
+.ui-pop-input { margin-top: 8px; }
+.ui-pop-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.ui-pop .btn.danger { background: var(--err); border-color: var(--err); color: #fff; }
+.ui-pop .btn.danger:hover { filter: brightness(.94); }
+
 /* ---- SVG 图标（icon() 生成，线条风格跟随文字颜色）---- */
 .ic { stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
       flex: none; vertical-align: -2px; }

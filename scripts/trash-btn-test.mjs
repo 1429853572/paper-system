@@ -80,15 +80,23 @@ const check = (name, cond) => { console.log((cond ? '  OK ' : '  FAIL ') + name)
 const del = doc.querySelector('.paper-item .pi-del');
 check('删除按钮存在', !!del);
 check('按钮内嵌 SVG 图标', !!del?.querySelector('svg'));
-// 点在 SVG 图标上（用户实际点中的位置）
+// 点在 SVG 图标上（用户实际点中的位置）→ 应出统一确认浮层（替代原生 confirm）
 del.querySelector('svg').dispatchEvent(new window.MouseEvent('click', {bubbles: true}));
+await new Promise(r => setTimeout(r, 150));
+let okBtn = doc.querySelector('.ui-pop [data-ok]');
+check('统一确认浮层出现（替代原生 confirm）', !!okBtn);
+check('浮层是危险操作样式', !!doc.querySelector('.ui-pop.danger'));
+okBtn?.click();
 await new Promise(r => setTimeout(r, 200));
-check('点图标触发 DELETE（此前会误开论文）', calls.some(c => c.startsWith('DELETE /api/papers/p1')));
+check('确认后发出 DELETE（此前会误开论文）', calls.some(c => c.startsWith('DELETE /api/papers/p1')));
 
 calls.length = 0;
 del.dispatchEvent(new window.MouseEvent('click', {bubbles: true}));
+await new Promise(r => setTimeout(r, 150));
+okBtn = doc.querySelector('.ui-pop [data-ok]');
+okBtn?.click();
 await new Promise(r => setTimeout(r, 200));
-check('点按钮本体同样触发 DELETE', calls.some(c => c.startsWith('DELETE /api/papers/p1')));
+check('点按钮本体同样走确认→DELETE', calls.some(c => c.startsWith('DELETE /api/papers/p1')));
 
 check('无页面错误', !errors.length);
 console.log('\n' + (ok ? '✅ 全部通过' : '❌ 存在失败') + (errors.length ? '\n  ' + errors.slice(0, 5).join('\n  ') : ''));

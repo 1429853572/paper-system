@@ -35,6 +35,76 @@ function toast(msg, ms = 2500) {
   clearTimeout(_toastTimer);   // 连续触发时旧 timer 会让后一条提前消失
   _toastTimer = setTimeout(() => t.classList.remove('show'), ms);
 }
+
+/* ---- 统一弹窗（替代原生 confirm/prompt；MinerU 式轻量浮层） ----
+   uiConfirm(msg, {title, okText, cancelText, danger, anchor}) → Promise<bool>
+   uiPrompt(title, {value, placeholder, okText, anchor})       → Promise<string|null>
+   uiPassword(title, password)                                  → Promise<void>（展示+复制）
+   anchor 给定时锚定弹出（无遮罩，点外/Esc 取消）；否则居中浮卡 + 半透明遮罩。 */
+function _uiDialog({title, message = '', input = false, value = '', placeholder = '',
+                    okText = '确定', cancelText = '取消', danger = false, anchor = null,
+                    copyText = '', hideCancel = false}) {
+  return new Promise(resolve => {
+    const backdrop = anchor ? null : Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
+    const pop = Object.assign(document.createElement('div'), {className: 'ui-pop' + (danger ? ' danger' : '')});
+    pop.innerHTML = `
+      <div class="ui-pop-title">${esc(title)}${copyText ? `<button class="btn small" data-copy>${icon('copy')} 复制</button>` : ''}</div>
+      ${message ? `<div class="ui-pop-msg">${esc(message)}</div>` : ''}
+      ${input ? `<input class="ui-pop-input" value="${esc(value)}" placeholder="${esc(placeholder || '')}">` : ''}
+      <div class="ui-pop-foot">${hideCancel ? '' : `<button class="btn small" data-cancel>${esc(cancelText)}</button>`}
+        <button class="btn small ${danger ? 'danger' : 'primary'}" data-ok>${esc(okText)}</button></div>`;
+    const done = val => {
+      pop.remove(); backdrop?.remove();
+      document.removeEventListener('keydown', onKey, true);
+      resolve(val);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') { e.stopPropagation(); done(input ? null : false); }
+      else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); done(input ? (pop.querySelector('.ui-pop-input').value || null) : true); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    pop.querySelector('[data-ok]').onclick = () => done(input ? (pop.querySelector('.ui-pop-input').value || null) : true);
+    const cancelBtn = pop.querySelector('[data-cancel]');
+    if (cancelBtn) cancelBtn.onclick = () => done(input ? null : false);
+    if (copyText) pop.querySelector('[data-copy]').onclick = () => { navigator.clipboard?.writeText(copyText); toast('已复制'); };
+    if (backdrop) {
+      backdrop.onclick = () => done(input ? null : false);
+      document.body.appendChild(backdrop);
+    } else {
+      document.addEventListener('click', function onOut(e) {
+        if (!pop.contains(e.target) && e.target !== anchor && !anchor?.contains?.(e.target)) {
+          document.removeEventListener('click', onOut, true);
+          done(input ? null : false);
+        }
+      }, true);
+    }
+    document.body.appendChild(pop);
+    if (anchor) {
+      const r = anchor.getBoundingClientRect();
+      pop.style.visibility = 'hidden';
+      requestAnimationFrame(() => {
+        const pw = pop.offsetWidth, ph = pop.offsetHeight;
+        let x = Math.min(r.left, innerWidth - pw - 8);
+        let y = r.bottom + 6;
+        if (y + ph > innerHeight - 8) y = Math.max(8, r.top - ph - 6);
+        pop.style.left = Math.max(8, x) + 'px';
+        pop.style.top = y + 'px';
+        pop.style.visibility = '';
+      });
+    } else {
+      requestAnimationFrame(() => {   // 居中
+        pop.style.left = Math.max(8, (innerWidth - pop.offsetWidth) / 2) + 'px';
+        pop.style.top = Math.max(8, (innerHeight - pop.offsetHeight) / 2.4) + 'px';
+      });
+    }
+    const inp = pop.querySelector('.ui-pop-input');
+    if (inp) { inp.focus(); inp.select(); }
+    else pop.querySelector('[data-ok]').focus();
+  });
+}
+window.uiConfirm = (message, opts = {}) => _uiDialog({message, danger: true, ...opts});
+window.uiPrompt = (title, opts = {}) => _uiDialog({title, input: true, ...opts});
+window.uiPassword = (title, password) => _uiDialog({title, message: password, copyText: password, okText: '关闭', hideCancel: true, danger: false});
 function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
 
 /* ---- SVG 图标库（v1.2 起 UI 图标全 SVG 化；toast 消息文本中的 emoji 保留）----
@@ -209,7 +279,7 @@ function renderCollections() {
     e.stopPropagation();
     const cid = e.target.closest('.col-item').dataset.id;
     const name = state.collections.find(c => c.id === cid)?.name || '';
-    if (!confirm(`删除文献库「${name}」？子库与论文保留`)) return;
+    if (!(await uiConfirm(`删除文献库「${name}」？子库与论文保留`, {title: '删除文献库', anchor: e.currentTarget}))) return;
     await api('/api/collections/' + cid, {method: 'DELETE'});
     if (state.currentCollection === cid) state.currentCollection = '';
     await refreshLib();
@@ -369,7 +439,7 @@ function renderPapers() {
     if (!id) return;   // 上传占位行无 paper id（由下方 up-act 接管）
     item.onclick = e => {
       if (e.target.type === 'checkbox') { toggleSelect(id, e.target.checked); return; }
-      if (e.target.closest?.('.pi-del')) { quickDelete(id); return; }   // closest：按钮内嵌 SVG 图标，e.target 常是 svg/path
+      if (e.target.closest?.('.pi-del')) { quickDelete(id, e.target.closest('.pi-del')); return; }   // closest：按钮内嵌 SVG 图标，e.target 常是 svg/path
       if (state.selectMode) { toggleSelect(id, !state.selected.has(id)); return; }
       openPaper(id);   // 普通模式：单击任意位置直接打开
     };
@@ -590,8 +660,9 @@ $('#batch-translate').onclick = async () => {
   await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [...state.selected]})});
   toast(`已加入翻译队列（${state.selected.size} 篇）`); $('#batch-cancel').click();
 };
-$('#batch-delete').onclick = async () => {
-  if (!confirm(`删除选中的 ${state.selected.size} 篇？（进回收站，${state.health.trash_days || 30} 天内可恢复）`)) return;
+$('#batch-delete').onclick = async e => {
+  if (!(await uiConfirm(`删除选中的 ${state.selected.size} 篇？（进回收站，${state.health.trash_days || 30} 天内可恢复）`,
+                         {title: '批量删除', anchor: e?.currentTarget}))) return;
   await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: [...state.selected]})});
   toast(`已移入回收站 ${state.selected.size} 篇`);
   state.selected.clear(); $('#batch-bar').classList.remove('show');
@@ -1027,7 +1098,7 @@ async function parseCtrl() {
   const pid = state.current.id;
   const js = await api(`/api/papers/${pid}/jobstate`);
   if (js.parsing) {
-    if (!confirm('取消解析当前论文？')) return;
+    if (!(await uiConfirm('取消解析当前论文？', {title: '取消解析'}))) return;
     await api(`/api/papers/${pid}/cancel-parse`, {method: 'POST'});
     toast('解析已取消');
   } else {
@@ -1046,7 +1117,7 @@ async function startTranslate() {
 }
 window.startTranslate = startTranslate;
 async function cancelTranslate() {
-  if (!confirm('取消翻译当前论文？（已完成段落会保留）')) return;
+  if (!(await uiConfirm('取消翻译当前论文？（已完成段落会保留）', {title: '取消翻译'}))) return;
   await api(`/api/papers/${state.current.id}/cancel-translate`, {method: 'POST'});
   toast('翻译已取消');
   refreshJobState();
@@ -1411,8 +1482,8 @@ async function renderMeta() {
     notes.importance = val; renderMeta();
   });
   // 标签（点行尾进入编辑）
-  $('#m-tags').onclick = async () => {
-    const v = prompt('标签（逗号分隔）:', notes.tags || '');
+  $('#m-tags').onclick = async e => {
+    const v = await uiPrompt('编辑标签（逗号分隔）', {value: notes.tags || '', placeholder: '如：综述, 必读', okText: '保存', anchor: e?.currentTarget});
     if (v === null) return;
     await api(`/api/papers/${pid}/notes`, {method: 'PUT', body: JSON.stringify({...notes, tags: v})});
     notes.tags = v; renderMeta();
@@ -1468,7 +1539,7 @@ function canonicalName(p) {
   return ((surname || '') + year + ' ' + title).replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
 }
 window.reindexPaper = async (pid) => {
-  if (!confirm('重建该论文的块结构与检索索引？（从已存解析产物重新入库，不重新解析、不影响译文）')) return;
+  if (!(await uiConfirm('重建该论文的块结构与检索索引？（从已存解析产物重新入库，不重新解析、不影响译文）', {title: '重建索引'}))) return;
   const r = await api(`/api/papers/${pid}/reindex`, {method: 'POST'});
   toast(`已重建 ${r.blocks} 块 / ${r.chunks} 分块，向量回填中`);
 };
@@ -1758,7 +1829,7 @@ window.switchSess = async sid => {
   updateExportBtn?.();
 };
 window.delSess = async sid => {
-  if (!confirm('删除该会话及其全部消息？')) return;
+  if (!(await uiConfirm('删除该会话及其全部消息？', {title: '删除会话'}))) return;
   await api(`/api/chat/sessions/${sid}`, {method: 'DELETE'});
   if (state.qaSession === sid) state.qaSession = '';
   $('#qa-sess-panel').hidden = true;
@@ -1766,7 +1837,7 @@ window.delSess = async sid => {
   toast('会话已删除');
 };
 window.renameSess = async (sid, old) => {
-  const t = prompt('新标题：', old);
+  const t = await uiPrompt('重命名会话', {value: old, okText: '保存'});
   if (!t || t === old) return;
   await api(`/api/chat/sessions/${sid}`, {method: 'PATCH', body: JSON.stringify({title: t})});
   renderSessList();
@@ -2306,23 +2377,23 @@ window.createInvite = async () => {
   if (el) el.innerHTML = `邀请码: <code style="font-size:16px">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
 };
 window.logoutAll = async () => {
-  if (!confirm('登出所有设备？其他已登录的会话将全部失效。')) return;
+  if (!(await uiConfirm('登出所有设备？其他已登录的会话将全部失效。', {title: '登出所有设备'}))) return;
   await api('/api/logout-all', {method: 'POST'});
   toast('已登出所有设备');
 };
 window.toggleUser = async (uid, uname, disable) => {
   const act = disable ? '禁用' : '重新启用';
-  if (!confirm(`${act}用户 ${uname}？${disable ? '该用户将无法登录，已有会话全部失效。' : ''}`)) return;
+  if (!(await uiConfirm(`${act}用户 ${uname}？${disable ? '该用户将无法登录，已有会话全部失效。' : ''}`, {title: `${act}用户`, danger: !disable}))) return;
   try {
     await api(`/api/admin/users/${uid}/${disable ? 'disable' : 'enable'}`, {method: 'POST'});
     toast(`已${act}`); renderAdminZone();
   } catch (e) { toast('操作失败: ' + e.message); }
 };
 window.resetUserPw = async (uid, uname) => {
-  if (!confirm(`重置 ${uname} 的密码？将生成一次性临时密码，且该用户所有会话立即失效。`)) return;
+  if (!(await uiConfirm(`重置 ${uname} 的密码？将生成一次性临时密码，且该用户所有会话立即失效。`, {title: '重置密码'}))) return;
   try {
     const r = await api(`/api/admin/users/${uid}/reset-password`, {method: 'POST'});
-    prompt(`已重置。${uname} 的临时密码（请立即复制转交）：`, r.temp_password);
+    await uiPassword(`${uname} 的临时密码（仅显示一次，请立即复制转交）`, r.temp_password);
   } catch (e) { toast('重置失败: ' + e.message); }
 };
 
@@ -2706,7 +2777,7 @@ window.libBatchMove = async (cid, v, sel) => {
 };
 window.libBatchDelete = async cid => {
   const ids = libSelected(cid);
-  if (!confirm(`删除选中的 ${ids.length} 篇？（进回收站）`)) return;
+  if (!(await uiConfirm(`删除选中的 ${ids.length} 篇？（进回收站）`, {title: '批量删除'}))) return;
   for (const pid of ids) await api('/api/papers/' + pid, {method: 'DELETE'});
   toast('已移入回收站'); await refreshLib();
 };
@@ -2717,13 +2788,13 @@ window.libUpload = cid => {
   inp.click();
 };
 window.renameLib = async (cid, oldName) => {
-  const name = prompt('重命名文献库：', oldName);
+  const name = await uiPrompt('重命名文献库', {value: oldName, okText: '保存'});
   if (!name?.trim() || name === oldName) return;
   await api('/api/collections/' + cid, {method: 'PATCH', body: JSON.stringify({name: name.trim()})});
   toast('已重命名'); await refreshLib();
 };
 window.delLib = async (cid, name) => {
-  if (!confirm(`删除文献库「${name}」？库内论文保留（变为未分库）`)) return;
+  if (!(await uiConfirm(`删除文献库「${name}」？库内论文保留（变为未分库）`, {title: '删除文献库'}))) return;
   await api('/api/collections/' + cid, {method: 'DELETE'});
   toast('已删除'); await refreshLib();
 };
@@ -2741,7 +2812,7 @@ window.movePaper = async (pid, v, sel) => {
   toast('已移动'); await refreshLib();
 };
 window.delPaperFromLib = async pid => {
-  if (!confirm(`删除这篇论文？（进回收站，${state.health.trash_days || 30} 天内可恢复）`)) return;
+  if (!(await uiConfirm(`删除这篇论文？（进回收站，${state.health.trash_days || 30} 天内可恢复）`, {title: '移入回收站'}))) return;
   await api('/api/papers/' + pid, {method: 'DELETE'});
   toast('已移入回收站'); await refreshLib();
 };
@@ -2771,12 +2842,13 @@ window.retryPaperJob = async pid => {
   toast('已重新入队'); await refreshLib();
 };
 
-window.quickDelete = async pid => {
+window.quickDelete = async (pid, anchor) => {
   const p = state.papers.find(x => x.id === pid);
   if (p?.visibility === 'shared' && state.me?.role !== 'admin') {
     toast('共享论文仅管理员可删除'); return;
   }
-  if (!confirm(`《${(p?.title || pid).slice(0, 40)}》移入回收站？（${state.health.trash_days || 30} 天内可恢复）`)) return;
+  if (!(await uiConfirm(`《${(p?.title || pid).slice(0, 40)}》移入回收站？（${state.health.trash_days || 30} 天内可恢复）`,
+                         {title: '移入回收站', anchor}))) return;
   try {
     await api('/api/papers/' + pid, {method: 'DELETE'});
     toast('已移入回收站');
@@ -3269,7 +3341,7 @@ window.figCropPass = async () => {
 })();
 
 window.retranslatePaper = async pid => {
-  if (!confirm('用当前模型/术语表重新翻译，生成新版本？（消耗 token，旧版本保留）')) return;
+  if (!(await uiConfirm('用当前模型/术语表重新翻译，生成新版本？（消耗 token，旧版本保留）', {title: '强制重译', danger: false}))) return;
   await api('/api/papers/translate', {method: 'POST',
     body: JSON.stringify({paper_ids: [pid], force_new_version: true})});
   toast('重译已入队（完成后自动展示最新版）');
@@ -3403,7 +3475,7 @@ document.addEventListener('keydown', e => {
 $('#toc-btn').onclick = () => toggleToc();
 
 window.addSubLib = async pid => {
-  const name = prompt('子库名称：');
+  const name = await uiPrompt('新建子库', {placeholder: '子库名称', okText: '创建'});
   if (!name?.trim()) return;
   try {
     await api('/api/collections', {method: 'POST', body: JSON.stringify({name: name.trim(), parent_id: pid})});
@@ -3412,7 +3484,7 @@ window.addSubLib = async pid => {
 };
 
 window.emptyTrash = async () => {
-  if (!confirm('彻底清空回收站？所有已删除论文（含译文/索引/会话）将永久移除，不可恢复。')) return;
+  if (!(await uiConfirm('所有已删除论文（含译文/索引/会话）将永久移除，不可恢复。', {title: '彻底清空回收站', okText: '清空'}))) return;
   const r = await api('/api/trash/empty', {method: 'POST'});
   toast(`已彻底删除 ${r.purged} 篇`);
   renderTrash(); await refreshLib();
