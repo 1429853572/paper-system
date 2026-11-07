@@ -123,8 +123,13 @@ def cluster_papers(digests: list[dict], k: int) -> list[list[str]]:
 
 # ---------------- 流水线主体（worker 调用） ----------------
 
-def run(user: dict, synthesis_id: str, job_update=None) -> None:
-    """执行综述流水线。job_update(**fields) 用于同步 jobs 行进度（SSE 面板）。"""
+def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None:
+    """执行综述流水线。job_update(**fields) 用于同步 jobs 行进度（SSE 面板）。
+
+    topic: 专题名/研究问题先验——注入到聚类与组内比对提示词。
+    纯 embedding 聚会把「同领域不同问题」的论文混在一组（评审提出的「聚类≠科研分类」），
+    而专题本身是用户已知的研究问题，用它做过滤约束能显著提升分组与归纳的针对性。
+    """
 
     def progress(done_inc: int = 1, **fields) -> None:
         row = db.one("SELECT progress_done, progress_total FROM syntheses WHERE id=?", (synthesis_id,))
@@ -183,12 +188,15 @@ def run(user: dict, synthesis_id: str, job_update=None) -> None:
             if not g_digests:
                 continue
             body = "\n\n".join(_digest_block(d) for d in g_digests)
+            topic_line = (f"\n本次综述的研究问题（专题）：{topic}。只讨论与之直接相关的论文；"
+                          f"与该问题无关的论文请在 points 中明确标注「与专题弱相关」。\n") if topic else ""
             raw = ""
             parsed = None
             for _attempt in range(2):
                 raw = client.complete([
                     {"role": "system", "content":
                         "你是文献综述引擎。下面是同一研究主题下几篇论文的结构化摘要卡。"
+                        + topic_line +
                         "输出 JSON（只输出 JSON）：\n"
                         '{"group_name": "本组研究主题名（10字内）", '
                         '"papers": [{"id": "论文id原样保留", "points": "该篇在本主题下的定位与贡献，2句"}], '
@@ -228,9 +236,12 @@ def run(user: dict, synthesis_id: str, job_update=None) -> None:
             sims = "\n".join(f"- {s}" for s in cj.get("similarities", [])[:6]) or "-（材料未给出）"
             diffs = "\n".join(f"- {s}" for s in cj.get("differences", [])[:6]) or "-（材料未给出）"
             gsections.append(f"### 组 {i + 1}: {cj.get('group_name', '')}\n{papers_txt}\n共识:\n{sims}\n差异:\n{diffs}")
+        topic_note = (f"本次综述聚焦的研究问题：{topic}。报告应围绕该问题组织，"
+                      f"与该问题弱相关的材料单独归入「外围工作」一小节，不混入主线结论。\n") if topic else ""
         report = client.complete([
             {"role": "system", "content":
                 "你是学术综述撰写人。依据提供的分组比对材料写一篇中文文献综述报告（Markdown）。"
+                + topic_note +
                 "结构固定：\n"
                 "# 文献综述\n## 一、总体概览（材料范围、主题分布，3~5 句）\n"
                 "## 二、分主题梳理（每个主题一小节：代表性工作+演进关系）\n"

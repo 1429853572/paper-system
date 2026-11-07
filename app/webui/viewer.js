@@ -1976,6 +1976,7 @@ async function runBatchAction(act, anchor) {
   const ids = [...state.selected];
   if (act === 'review') { await runSynthesis(anchor, ids); return; }
   if (act === 'acquire') { openAcquirePop(); return; }
+  if (act === 'topics') { showTopicsView(); return; }
   if (act === 'bibtex') { downloadBibtex(ids); return; }
   if (act === 'delete') {
     if (!(await uiConfirm(`将圈定的 ${ids.length} 篇移入回收站？（${state.health.trash_days || 30} 天内可恢复）`,
@@ -2021,6 +2022,162 @@ function downloadBibtex(ids) {
       toast(`已导出 ${ids.length} 篇 BibTeX`);
     })
     .catch(e => toast('导出失败: ' + e.message));
+}
+
+/* ---- 专题采集任务：列表 → 详情（候选勾选 → 下载入库 → 综述） ---- */
+const TASK_STATUS = {draft: '待检索', searching: '检索中', ready: '待勾选',
+  downloading: '下载中', ingested: '已入库', reviewing: '综述中', done: '已完成', failed: '失败'};
+
+async function showTopicsView() {
+  const el = $('#page-batch');
+  el.innerHTML = `<div class="batch-wrap"><div class="card" style="padding:16px">
+    <p class="muted">加载中…</p></div></div>`;
+  let tasks = [];
+  try { tasks = (await api('/api/acq-tasks')).tasks; }
+  catch (e) { el.innerHTML = `<div class="batch-wrap"><div class="card" style="padding:16px">
+    加载失败：${esc(e.message)}</div></div>`; return; }
+  el.innerHTML = `
+    <div class="batch-wrap">
+      <div class="card topics-head">
+        <button class="btn small" id="tp-back">← 返回批量</button>
+        <b style="flex:1;font-size:var(--fs-lg)">📚 我的专题</b>
+        <button class="btn primary" id="tp-new">＋ 新建专题</button>
+      </div>
+      <div class="card" style="padding:0">
+        ${tasks.length ? tasks.map(t => `
+          <div class="tp-row" data-tid="${esc(t.id)}">
+            <span class="badge ${t.status === 'done' ? 'ok' : t.status === 'failed' ? 'err' : 'run'}">${TASK_STATUS[t.status] || t.status}</span>
+            <span class="tp-main">
+              <b>${esc(t.title)}</b>
+              <span class="muted" style="font-size:11px">${esc(t.query)} · ${esc(t.site)} · 候选 ${t.cand_selected}/${t.cand_total} · 已下载 ${t.cand_done} · 入库 ${t.papers} 篇 · ${esc((t.updated_at || '').slice(5, 16))}</span>
+              ${t.error ? `<span class="bpanel-err" style="padding:0">${esc(t.error.slice(0, 120))}</span>` : ''}
+            </span>
+            <button class="btn small primary" data-tp-open="${esc(t.id)}">打开</button>
+            <button class="btn small danger" data-tp-del="${esc(t.id)}">删除</button>
+          </div>`).join('') : '<p class="muted" style="padding:16px">还没有专题——点右上「新建专题」，用关键词建一个（如「3DGS 稀疏视图 中文综述」）</p>'}
+      </div>
+    </div>`;
+  $('#tp-back').onclick = () => renderBatchPage();
+  $('#tp-new').onclick = newTopicDialog;
+  $$('[data-tp-open]', el).forEach(b => b.onclick = () => showTopicDetail(b.dataset.tpOpen));
+  $$('[data-tp-del]', el).forEach(b => b.onclick = async () => {
+    if (!(await uiConfirm('删除这个专题？已入库的论文会保留在文库中。',
+                          {title: '删除专题', danger: true, anchor: b}))) return;
+    try { await api('/api/acq-tasks/' + b.dataset.tpDel, {method: 'DELETE'}); showTopicsView(); }
+    catch (e) { toast('删除失败: ' + e.message); }
+  });
+}
+
+async function newTopicDialog() {
+  const name = await uiPrompt('专题名（同时作为综述的研究问题，例如「3DGS 稀疏视图 中文综述」）',
+                               {value: '', placeholder: '专题名'});
+  if (!name || !name.trim()) return;
+  const q = await uiPrompt('检索关键词', {value: name.trim(), placeholder: '关键词'});
+  if (!q || !q.trim()) return;
+  try {
+    const d = await api('/api/acq-tasks', {method: 'POST', body: JSON.stringify({
+      title: name.trim(), query: q.trim(), site: 'chinaxiv'})});
+    showTopicDetail(d.id);
+    toast('专题已创建，点「检索」开始');
+  } catch (e) { toast('创建失败: ' + e.message); }
+}
+
+async function showTopicDetail(tid) {
+  const el = $('#page-batch');
+  el.innerHTML = `<div class="batch-wrap"><div class="card" style="padding:16px">加载中…</div></div>`;
+  let t;
+  try { t = (await api('/api/acq-tasks/' + tid)).task; }
+  catch (e) { el.innerHTML = `<div class="batch-wrap"><div class="card" style="padding:16px">${esc(e.message)}</div></div>`; return; }
+  const cands = t.candidates || [];
+  const sel = cands.filter(c => c.selected);
+  const done = cands.filter(c => c.dl_status === 'done').length;
+  const failed = cands.filter(c => c.dl_status === 'failed').length;
+  const papers = t.papers_detail || [];
+  const parsed = papers.filter(p => p.parse_status === 'parsed').length;
+  el.innerHTML = `
+    <div class="batch-wrap">
+      <div class="card topics-head">
+        <button class="btn small" id="td-back">← 我的专题</button>
+        <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title)}</b>
+        <span class="badge ${t.status === 'done' ? 'ok' : t.status === 'failed' ? 'err' : 'run'}">${TASK_STATUS[t.status] || t.status}</span>
+      </div>
+      <div class="card" style="padding:14px 16px">
+        <div class="bp-sources" style="padding:0">
+          <input id="td-q" value="${esc(t.query)}" placeholder="检索关键词" style="flex:1;min-width:140px">
+          <select id="td-site" style="width:auto;font-size:12px">
+            <option value="chinaxiv" ${t.site === 'chinaxiv' ? 'selected' : ''}>中国科学院预印本</option>
+            <option value="cnki" ${t.site === 'cnki' ? 'selected' : ''}>中国知网</option>
+          </select>
+          <button class="btn small primary" id="td-search">检索</button>
+        </div>
+        ${cands.length ? `<div class="muted" style="font-size:11px;margin-top:8px">
+          候选 ${cands.length} 条 · 已勾选 ${sel.length} · 已下载 ${done}${failed ? ` · <span class="berr">失败 ${failed}</span>` : ''}
+          ${sel.length ? `· <button class="btn small" id="td-dl">下载并入库（${sel.filter(c => c.dl_status !== 'done').length}）</button>` : ''}
+          ${sel.length ? `· <button class="btn small" id="td-selall">全选未入库</button>` : ''}
+        </div>` : '<p class="muted" style="font-size:11px;margin-top:8px">填关键词点「检索」拉候选（走宿主浏览器，需采集服务在运行）</p>'}
+      </div>
+      ${cands.length ? `<div class="card" style="padding:0">
+        ${cands.map((c, i) => `
+          <label class="tp-cand ${c.in_library ? 'have' : ''}">
+            <input type="checkbox" data-tc="${esc(c.pdf_url)}" ${c.selected ? 'checked' : ''} ${c.in_library || !c.pdf_url ? 'disabled' : ''}>
+            <span class="tp-cand-main">
+              <b>${esc(c.title || '')}</b>
+              <span class="muted" style="font-size:11px">${esc([c.authors, c.year, c.venue].filter(Boolean).join(' · ').slice(0, 70))}</span>
+              ${c.summary ? `<span class="tp-cand-abs">${esc(c.summary)}</span>` : ''}
+            </span>
+            ${c.dl_status === 'done' ? '<span class="badge ok">已入库</span>'
+              : c.dl_status === 'failed' ? `<span class="badge err" title="${esc(c.error || '')}">失败</span>`
+              : c.in_library ? '<span class="badge priv">已在库</span>' : ''}
+          </label>`).join('')}
+      </div>` : ''}
+      ${papers.length ? `<div class="card" style="padding:14px 16px">
+        <b>已入库论文（${parsed}/${papers.length} 解析完成）</b>
+        <div class="muted" style="font-size:11px;margin:6px 0">${papers.map(p =>
+          esc((p.title || '').slice(0, 40))).join('、')}</div>
+        ${t.synthesis_id ? `<button class="btn small primary" id="td-syn">查看综述报告</button>`
+          : `<button class="btn small primary" id="td-mksyn" ${parsed < papers.length ? 'disabled' : ''}>
+              ${parsed < papers.length ? `还有 ${papers.length - parsed} 篇未解析完成` : '生成综述报告'}</button>`}
+      </div>` : ''}
+    </div>`;
+  $('#td-back').onclick = () => showTopicsView();
+  $('#td-search').onclick = async () => {
+    const q = $('#td-q').value.trim();
+    const site = $('#td-site').value;
+    if (!q) { toast('输入关键词'); return; }
+    const btn = $('#td-search');
+    btn.disabled = true; btn.textContent = '检索中…';
+    try {
+      await api(`/api/acq-tasks/${tid}/search`, {method: 'POST', body: JSON.stringify({query: q, site, limit: 30})});
+      showTopicDetail(tid);
+    } catch (e) { toast('检索失败: ' + e.message); btn.disabled = false; btn.textContent = '检索'; }
+  };
+  const saveSel = async () => {
+    const urls = $$('input[data-tc]', el).filter(x => x.checked && !x.disabled).map(x => x.dataset.tc);
+    try { await api(`/api/acq-tasks/${tid}/select`, {method: 'PUT', body: JSON.stringify({pdf_urls: urls})}); }
+    catch (e) { toast('保存勾选失败: ' + e.message); }
+  };
+  $$('input[data-tc]', el).forEach(cb => cb.onchange = saveSel);
+  $('#td-selall')?.addEventListener('click', async () => {
+    $$('input[data-tc]', el).forEach(x => { if (!x.disabled && !x.closest('.tp-cand').classList.contains('have')) x.checked = true; });
+    await saveSel();
+    showTopicDetail(tid);
+  });
+  $('#td-dl')?.addEventListener('click', async () => {
+    await saveSel();
+    try {
+      const d = await api(`/api/acq-tasks/${tid}/download`, {method: 'POST'});
+      toast(`已入队下载 ${d.queued} 篇——进度见「任务」页`);
+      showTopicDetail(tid);
+    } catch (e) { toast('下载入队失败: ' + e.message); }
+  });
+  $('#td-syn')?.addEventListener('click', () => showSynthesisReport(t.synthesis_id));
+  $('#td-mksyn')?.addEventListener('click', async () => {
+    try {
+      const d = await api(`/api/acq-tasks/${tid}/synthesize`, {method: 'POST'});
+      toast('综述已启动——进度见「任务」页，完成后在此查看');
+      showTopicDetail(tid);
+    } catch (e) { toast('生成综述失败: ' + e.message); }
+  });
 }
 
 /* ---- 采集弹层：检索中文文献 → 勾选 → 批量下载入库 ---- */

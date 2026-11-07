@@ -297,6 +297,24 @@ CREATE TABLE IF NOT EXISTS syntheses (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_syntheses_user ON syntheses(user_id, updated_at DESC);
+
+-- 专题采集任务：关键词 → 检索候选 → 勾选下载入库 → 自动综述（可中断可恢复）
+CREATE TABLE IF NOT EXISTS acq_tasks (
+    id          TEXT PRIMARY KEY,               -- atk+随机串
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL DEFAULT '',      -- 专题名（同时作为综述的研究问题先验）
+    query       TEXT NOT NULL DEFAULT '',
+    site        TEXT NOT NULL DEFAULT 'chinaxiv',
+    filters     TEXT NOT NULL DEFAULT '{}',     -- {year_from, year_to, source_type, max}
+    status      TEXT NOT NULL DEFAULT 'draft', -- draft|searching|ready|downloading|ingested|reviewing|done|failed
+    candidates  TEXT NOT NULL DEFAULT '[]',     -- [{title,authors,year,venue,summary,pdf_url,abs_url,doi,selected,dl_status,paper_id,error}]
+    paper_ids   TEXT NOT NULL DEFAULT '[]',
+    synthesis_id TEXT,
+    error       TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_acq_tasks_user ON acq_tasks(user_id, updated_at DESC);
 """
 
 
@@ -387,6 +405,7 @@ class Database:
         self._add_col(c, "users", "token_ver", "INTEGER NOT NULL DEFAULT 0")
         self._add_col(c, "users", "disabled", "INTEGER NOT NULL DEFAULT 0")
         self._add_col(c, "jobs", "batch_id", "TEXT")
+        self._add_col(c, "papers", "acq_task_id", "TEXT")
 
     def _migrate(self, c: sqlite3.Connection, from_v: int) -> None:
         # 列级变更统一由 _ensure_columns 幂等处理；这里只做数据迁移与死表清理。

@@ -95,6 +95,7 @@ class Scheduler:
             ("translate-worker", self._translate_loop),
             ("summary-worker", self._summary_loop),
             ("synthesis-worker", self._synthesis_loop),
+            ("acquire-worker", self._acquire_loop),
             ("janitor", self._janitor_loop),
         ):
             t = threading.Thread(target=fn, name=name, daemon=True)
@@ -122,7 +123,7 @@ class Scheduler:
                                 (r["id"],),
                             )
                         log.info("job %s 远程任务失效，已重排队", r["id"])
-            elif r["job_type"] in ("embed_backfill", "translate", "synthesis"):
+            elif r["job_type"] in ("embed_backfill", "translate", "synthesis", "acquire"):
                 with db.write() as c:
                     c.execute("UPDATE jobs SET status='queued' WHERE id=?", (r["id"],))
 
@@ -501,7 +502,8 @@ class Scheduler:
                     from . import synthesis
                     payload = json.loads(job["payload"] or "{}")
                     synthesis.run({"id": job["user_id"]}, payload.get("synthesis_id"),
-                                  job_update=lambda **f: self._update(job["id"], **f))
+                                  job_update=lambda **f: self._update(job["id"], **f),
+                                  topic=payload.get("topic") or "")
                     self._update(job["id"], status="done", progress_done=1, progress_total=1)
                     log.info("综述完成 %s", payload.get("synthesis_id"))
                 except Exception as e:  # noqa: BLE001
@@ -510,6 +512,123 @@ class Scheduler:
             except Exception:  # noqa: BLE001
                 log.exception("synthesis worker 循环异常（继续运行）")
                 time.sleep(5)
+
+    # ================= 采集 worker（专题下载；串行+礼貌延时+断点续传） =================
+    def _acquire_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                job = self._next_job("acquire")
+                if job is None:
+                    time.sleep(5)
+                    continue
+                if not self._claim(job["id"]):
+                    continue
+                try:
+                    self._run_acquire(job)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("acquire job %s 异常", job["id"])
+                    self._update(job["id"], status="failed", error=str(e)[:300])
+            except Exception:  # noqa: BLE001
+                log.exception("acquire worker 循环异常（继续运行）")
+                time.sleep(5)
+
+    def _run_acquire(self, job: Any) -> None:
+        """逐篇下载勾选候选 → 入库 → 解析入队。
+
+        知网/出版方有风控：串行 + 每篇随机延时 1.5~3s + 失败退避重试（最多 3 次），
+        省掉这步会被限 IP/账号，反而拿不到文献。
+        """
+        import random
+        import time as _t
+
+        from core import acqtask, acquire, ingest
+
+        payload = json.loads(job["payload"] or "{}")
+        tid = payload.get("task_id") or ""
+        task = acqtask.get(tid)
+        if task is None:
+            self._update(job["id"], status="done")
+            return
+        todo = [c for c in (task.get("candidates") or [])
+                if c.get("selected") and c.get("dl_status") != "done"]
+        total = max(1, len(todo))
+        done = 0
+        for c in todo:
+            if self._stop.is_set():
+                return
+            url = c.get("pdf_url") or ""
+            title = c.get("title") or "未命名"
+            if not url:
+                acqtask.mark_candidate(tid, url, dl_status="skipped", error="无下载链接")
+                continue
+            data = None
+            err = ""
+            for attempt in range(3):
+                try:
+                    data, _ct, fname = acquire.fetch(url)
+                    if data:
+                        break
+                    err = "下载内容为空"
+                except ValueError as e:
+                    err = str(e)[:150]
+                _t.sleep(2 ** attempt * 3)          # 退避：3s / 6s / 12s
+            if not data:
+                acqtask.mark_candidate(tid, url, dl_status="failed", error=err or "下载失败")
+                done += 1
+                self._update(job["id"], progress_done=done, progress_total=total)
+                continue
+            # 非 PDF（CAJ 等）→ 尝试转换
+            if data[:5] != b"%PDF-":
+                from core import caj as caj_mod
+                try:
+                    data = caj_mod.convert_bytes(data, fname or "paper.pdf")
+                except caj_mod.ConvertError as e:
+                    acqtask.mark_candidate(tid, url, dl_status="failed",
+                                           error=f"非 PDF 且转换失败: {str(e)[:110]}")
+                    done += 1
+                    self._update(job["id"], progress_done=done, progress_total=total)
+                    continue
+            try:
+                pages, _k = ingest.preflight_doc(data, fname or "paper.pdf",
+                                                 is_admin=True, overrides={})
+            except Exception as e:  # noqa: BLE001
+                acqtask.mark_candidate(tid, url, dl_status="failed", error=str(e)[:120])
+                done += 1
+                self._update(job["id"], progress_done=done, progress_total=total)
+                continue
+            fh = ingest.sha256_bytes(data)
+            paper_id, dup = ingest.create_paper(job["user_id"], fh, pages, len(data),
+                                                "shared", fname or "paper.pdf")
+            if dup:
+                # 已在库的同内容论文同样属于本专题（计入综述），只是不重复入库
+                acqtask.mark_candidate(tid, url, dl_status="done", paper_id=paper_id)
+                acqtask.attach_papers(tid, [paper_id])
+                done += 1
+                self._update(job["id"], progress_done=done, progress_total=total)
+                continue
+            with db.write() as c2:
+                c2.execute("UPDATE papers SET title=COALESCE(NULLIF(title,''),?) WHERE id=?",
+                           (title, paper_id))
+                c2.execute("UPDATE papers SET acq_task_id=? WHERE id=?", (tid, paper_id))
+                c2.execute("UPDATE papers SET meta_source=COALESCE(meta_source,'acquire') WHERE id=?",
+                           (paper_id,))
+                for col, val in (("authors", c.get("authors")), ("year", c.get("year")),
+                                 ("abstract", c.get("summary")), ("doi", c.get("doi"))):
+                    if val:
+                        c2.execute(f"UPDATE papers SET {col}=? WHERE id=?", (str(val)[:3000], paper_id))
+            ingest.store_pdf(paper_id, data, "original.pdf")
+            self.enqueue(job["user_id"], "parse", paper_id,
+                          {"tier": "standard", "original_name": fname or "paper.pdf",
+                           "source_url": url, "batch_id": payload.get("batch_id")},
+                          priority="background")
+            acqtask.mark_candidate(tid, url, dl_status="done", paper_id=paper_id, error=None)
+            acqtask.attach_papers(tid, [paper_id])
+            done += 1
+            self._update(job["id"], progress_done=done, progress_total=total)
+            _t.sleep(1.5 + random.random() * 1.5)   # 礼貌间隔
+        # 收尾：状态 → 已入库（解析完成后可生成综述）
+        acqtask.update(tid, status="ingested", error=None)
+        self._update(job["id"], status="done", progress_done=total, progress_total=total)
 
     # ================= 管家：回收站清理 + 每日备份 =================
     def _janitor_loop(self) -> None:

@@ -1703,6 +1703,182 @@ def _safe_import_dir(rel: str) -> Path:
     return target
 
 
+# ---------------- 专题采集任务（可中断可恢复的科研采集流程） ----------------
+def _own_task(u: dict, tid: str):
+    from core import acqtask
+    t = acqtask.get(tid)
+    if t is None:
+        raise HTTPException(404, "专题不存在")
+    if u["role"] != "admin" and t["user_id"] != u["id"]:
+        raise HTTPException(403, "无权访问他人专题")
+    return t
+
+
+@app.get("/api/acq-tasks")
+def list_acq_tasks(request: Request):
+    from core import acqtask
+    u = require(request)
+    scope = "" if u["role"] == "admin" else " AND user_id=?" 
+    args = () if u["role"] == "admin" else (u["id"],)
+    rows = db.all(
+        "SELECT id,title,query,site,status,filters,candidates,paper_ids,synthesis_id,error,"
+        "created_at,updated_at FROM acq_tasks WHERE 1=1" + scope +
+        " ORDER BY updated_at DESC LIMIT 50", args)
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            cands = json.loads(d.get("candidates") or "[]")
+            d["cand_total"] = len(cands)
+            d["cand_selected"] = sum(1 for c in cands if c.get("selected"))
+            d["cand_done"] = sum(1 for c in cands if c.get("dl_status") == "done")
+        except Exception:  # noqa: BLE001
+            d["cand_total"] = d["cand_selected"] = d["cand_done"] = 0
+        try:
+            d["papers"] = len(json.loads(d.get("paper_ids") or "[]"))
+        except Exception:  # noqa: BLE001
+            d["papers"] = 0
+        d.pop("candidates", None)
+        out.append(d)
+    return {"tasks": out}
+
+
+@app.post("/api/acq-tasks")
+async def create_acq_task(request: Request):
+    u = require(request)
+    body = await request.json()
+    title = (body.get("title") or "").strip()[:120]
+    query = (body.get("query") or "").strip()[:300]
+    if not query:
+        raise HTTPException(400, "query 必填")
+    if not title:
+        title = query
+    from core import acqtask
+    tid = acqtask.create(u["id"], title, query, (body.get("site") or "chinaxiv"),
+                         body.get("filters") or {})
+    return {"id": tid, "task": acqtask.get(tid)}
+
+
+@app.get("/api/acq-tasks/{tid}")
+def get_acq_task(tid: str, request: Request):
+    u = require(request)
+    t = _own_task(u, tid)
+    # 附带论文的解析进度（综述前置条件可视化）
+    ids = t.get("paper_ids") or []
+    if ids:
+        marks = ",".join("?" * len(ids))
+        rows = db.all(f"SELECT id,title,parse_status FROM papers WHERE id IN ({marks})", tuple(ids))
+        t["papers_detail"] = [dict(r) for r in rows]
+        t["all_parsed"] = acqtask_ok(ids)
+    return {"task": t}
+
+
+def acqtask_ok(ids: list[str]) -> bool:
+    from core import acqtask
+    return acqtask.all_parsed(ids)
+
+
+@app.post("/api/acq-tasks/{tid}/search")
+async def search_acq_task(tid: str, request: Request):
+    """检索候选（宿主浏览器）。保留已勾选/已下载状态。"""
+    u = require(request)
+    t = _own_task(u, tid)
+    from core import acqtask, acquire
+    body = await request.json()
+    query = (body.get("query") or t["query"] or "").strip()
+    if not query:
+        raise HTTPException(400, "query 必填")
+    site = body.get("site") or t["site"] or "chinaxiv"
+    try:
+        items = acquire.search(site, query, 1, min(int(body.get("limit") or 30), 50))
+    except ValueError as e:
+        acqtask.update(tid, status="failed", error=str(e)[:300])
+        raise HTTPException(502, str(e))
+    titles = {row[0].lower() for row in db.all("SELECT title FROM papers WHERE deleted_at IS NULL")}
+    cands = []
+    for it in items:
+        cands.append({"title": it.get("title") or "", "authors": it.get("authors") or "",
+                      "year": it.get("year") or "", "venue": it.get("venue") or "",
+                      "summary": it.get("summary") or "", "pdf_url": it.get("pdf_url") or "",
+                      "abs_url": it.get("abs_url") or it.get("url") or "",
+                      "doi": it.get("doi") or "", "source": it.get("source") or site,
+                      "in_library": (it.get("title") or "").strip().lower() in titles})
+    acqtask.set_candidates(tid, cands)
+    acqtask.update(tid, query=query, site=site, status="ready", error=None)
+    return {"task": acqtask.get(tid)}
+
+
+@app.put("/api/acq-tasks/{tid}/select")
+async def select_acq_task(tid: str, request: Request):
+    """保存勾选（前端排卡勾选后调用）。"""
+    u = require(request)
+    t = _own_task(u, tid)
+    body = await request.json()
+    urls = set(body.get("pdf_urls") or [])
+    from core import acqtask
+    cands = t.get("candidates") or []
+    for c in cands:
+        c["selected"] = c.get("pdf_url") in urls
+    acqtask.update(tid, candidates=cands)
+    return {"task": acqtask.get(tid)}
+
+
+@app.post("/api/acq-tasks/{tid}/download")
+async def download_acq_task(tid: str, request: Request):
+    """把勾选的候选入队下载（job_type='acquire'）。"""
+    u = require(request)
+    t = _own_task(u, tid)
+    from core import acqtask
+    cands = acqtask.selected_candidates(tid)
+    if not cands:
+        raise HTTPException(400, "先勾选要下载的文献")
+    todo = [c for c in cands if c.get("dl_status") != "done"]
+    if not todo:
+        raise HTTPException(400, "勾选项都已下载完成")
+    acqtask.update(tid, status="downloading", error=None)
+    scheduler.enqueue(u["id"], "acquire", None, {"task_id": tid},
+                      priority="background", progress_total=len(todo))
+    return {"task": acqtask.get(tid), "queued": len(todo)}
+
+
+@app.post("/api/acq-tasks/{tid}/synthesize")
+async def synthesize_acq_task(tid: str, request: Request):
+    """专题 → 综述：论文全部解析完成后可发起（专题名作为研究问题先验注入）。"""
+    u = require(request)
+    t = _own_task(u, tid)
+    ids = t.get("paper_ids") or []
+    if len(ids) < 2:
+        raise HTTPException(400, "入库论文不足 2 篇")
+    from core import acqtask, synthesis
+    if not acqtask.all_parsed(ids):
+        pending = [i for i in ids
+                   if (db.one("SELECT parse_status s FROM papers WHERE id=?", (i,)) or {}).get("s") != "parsed"]
+        raise HTTPException(400, f"还有 {len(pending)} 篇未解析完成，完成后即可生成综述")
+    # 已有综述 → 直接返回
+    if t.get("synthesis_id"):
+        return {"synthesis_id": t["synthesis_id"], "reused": True}
+    est = synthesis.estimate(ids)
+    sid = synthesis.create(u["id"], ids, est)
+    with db.write() as c:
+        c.execute("UPDATE syntheses SET title=? WHERE id=?",
+                  (f"{t['title']}（{len(ids)} 篇）", sid))
+    acqtask.update(tid, synthesis_id=sid, status="reviewing")
+    batch_id = uuid.uuid4().hex[:12]
+    scheduler.enqueue(u["id"], "synthesis", None,
+                      {"synthesis_id": sid, "batch_id": batch_id, "topic": t["title"]},
+                      priority="background", progress_total=est["calls"])
+    return {"synthesis_id": sid, "estimate": est}
+
+
+@app.delete("/api/acq-tasks/{tid}")
+def delete_acq_task(tid: str, request: Request):
+    u = require(request)
+    _own_task(u, tid)
+    with db.write() as c:
+        c.execute("DELETE FROM acq_tasks WHERE id=?", (tid,))
+    return {"ok": True}
+
+
 # ---------------- 文献采集（宿主浏览器服务；中文文献获取主路径） ----------------
 @app.get("/api/acquire/status")
 def acquire_status(request: Request):
