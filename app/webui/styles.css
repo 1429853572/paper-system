@@ -379,8 +379,10 @@ table.list th { color: var(--muted); font-weight: 500; }
 .rpane-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .rpane-top { flex: none; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .rpane-top .content-view { flex: 1; }
-.rpane-handle { height: 6px; background: var(--border); cursor: row-resize; flex: none; }
-.rpane-handle:hover { background: var(--primary); }
+.rpane-handle { height: 12px; background: transparent; cursor: row-resize; flex: none; position: relative; }
+.rpane-handle::before { content: ''; position: absolute; left: 30%; right: 30%; top: 4px; height: 4px;
+                        border-radius: 2px; background: var(--border); transition: background .15s, left .15s, right .15s; }
+.rpane-handle:hover::before, .rpane-handle.dragging::before { background: var(--primary); left: 20%; right: 20%; }
 .qa-dock { flex: 1; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--border); }
 .qa-dock-head { padding: 8px 14px; font-weight: 600; font-size: var(--fs-base); background: var(--panel-soft);
                 border-bottom: 1px solid var(--border); }

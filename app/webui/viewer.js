@@ -2812,24 +2812,34 @@ window.openQaDock = () => {
   applyQaLayout(); renderQaTab(); $('#qa-text')?.focus();
 };
 (() => {
-  const top = $('#rpane-top');
   const apply = () => {
-    if (state.qaOpen) { top.style.flex = 'none'; top.style.height = state.rpane.top + '%'; }
+    if (state.qaOpen) { const top = $('#rpane-top'); top.style.flex = 'none'; top.style.height = state.rpane.top + '%'; }
   };
   applyQaLayout();
   $('#qa-dock-close').onclick = closeQa;
   $('#qa-export').onclick = exportChat;
-  const handle = $('#rpane-handle');
-  let dragging = false;
-  handle.addEventListener('mousedown', e => { dragging = true; e.preventDefault(); });
-  document.addEventListener('mousemove', e => {
-    if (!dragging) return;
-    const body = $('.rpane-body').getBoundingClientRect();
-    const pct = Math.min(99, Math.max(1, Math.round(100 * (e.clientY - body.top) / body.height)));
-    state.rpane.top = pct; apply();
-  });
-  document.addEventListener('mouseup', () => {
-    if (dragging) { dragging = false; localStorage.setItem('ps-rpane-top', String(state.rpane.top)); }
+  // 拖拽改 Pointer Events + 文档级委托：不依赖把手的直接监听（免疫任何层叠/重建问题），
+  // 鼠标与触屏通吃；min 6% 防止问答框被拖没
+  document.addEventListener('pointerdown', e => {
+    if (!e.target.closest?.('#rpane-handle')) return;
+    e.preventDefault();
+    const handle = $('#rpane-handle');
+    handle?.classList.add('dragging');
+    const move = ev => {
+      const body = $('.rpane-body')?.getBoundingClientRect();
+      if (!body || !body.height) return;
+      const pct = Math.min(94, Math.max(6, Math.round(100 * (ev.clientY - body.top) / body.height)));
+      state.rpane.top = pct;
+      apply();
+    };
+    const up = () => {
+      handle?.classList.remove('dragging');
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      localStorage.setItem('ps-rpane-top', String(state.rpane.top));
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
   });
 })();
 async function renderSessList() {
