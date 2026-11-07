@@ -2367,14 +2367,14 @@ async function renderAssets() {
   const pid = state.current?.id;
   if (!pid) { $('#content-view').innerHTML = '<p class="muted">选择论文后查看图表</p>'; return; }
   if (!state.assets) state.assets = await api(`/api/papers/${pid}/assets`);
-  const {figures, tables} = state.assets;
-  if (!figures.length && !tables.length) {
+  const {figures: rawFigures, tables: rawTables} = state.assets;
+  if (!rawFigures.length && !rawTables.length) {
     $('#content-view').innerHTML = '<p class="muted">未提取到图表</p>'; return;
   }
-  // 空条目过滤：图必须可显示，表必须有内容或坐标
-  const F = figures.filter(f => f.image_path);
-  const T = tables.filter(t => (t.html && t.html.trim()) || t.bbox);
-  figures = F; tables = T;
+  // 空条目过滤：图必须可显示，表必须有内容或坐标（过滤结果用新变量——
+  // 原先对 const 解构变量重新赋值直接 TypeError，图表页签必崩）
+  const figures = rawFigures.filter(f => f.image_path);
+  const tables = rawTables.filter(t => (t.html && t.html.trim()) || t.bbox);
   setTimeout(() => {   // 兜底：裁剪失败且无兜底内容的卡片隐藏
     $$('.asset', $('#content-view')).forEach(a => {
       const hasImg = [...a.querySelectorAll('img')].some(i => i.naturalWidth > 0);

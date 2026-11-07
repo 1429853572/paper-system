@@ -26,8 +26,12 @@ const DATA = {
   },
   '/api/papers/p1/bilingual': { run_id: 'r1', pairs: [], versions: [], total: 0, offset: 0, limit: 40 },
   '/api/papers/p1/notes': { notes: {} },
-  '/api/papers/p1/assets': { figures: [], tables: [] },
+  '/api/papers/p1/assets': {   // 非空：覆盖 renderAssets 的过滤重赋值路径（曾是 const 赋值必崩）
+    figures: [{page_index: 0, image_path: 'images/page_0_image_1.jpg', caption: 'Fig 1', bbox: [0.1, 0.1, 0.5, 0.5], label: 'Fig. 1', extra_images: [], sub_captions: []}],
+    tables: [{page_index: 1, label: 'Table 1', caption: 'results', bbox: [0.1, 0.1, 0.8, 0.6], html: '<table><tr><th>A</th><td>1</td></tr></table>'}],
+  },
   '/api/papers/p1/references': { references: [] },
+  '/api/papers/p1/cite': { styles: { gbt7714: { label: 'GB/T 7714', html: 'test cite' } }, labels: {}, default: 'gbt7714' },
   '/api/papers/p1/summary': { summary: null },
   '/api/papers/p1/jobstate': { parse_status: 'parsed', parsing: false, translating: false, translated: false },
   '/api/papers/p1/bilingual/blocks': { pairs: [], total: 0 },
@@ -66,7 +70,7 @@ process.on('unhandledRejection', (r) => {
 });
 
 try {
-  window.eval(js + '\n;window.__T = { state, switchView, switchPage, renderContentView, openQa: window.openQa };');
+  window.eval(js + '\n;window.__T = { state, switchView, switchPage, renderContentView, openPaper, openQa: window.openQa };');
 } catch (e) {
   errors.push('eval: ' + e.stack.split('\n').slice(0, 3).join(' | '));
 }
@@ -111,7 +115,11 @@ try {
   }
 } catch (e) { errors.push('账号菜单: ' + e.message); }
 
-// 2) 右栏视图
+// 2) 右栏视图（先打开论文——否则 meta/assets 等只走"未选论文"占位分支，测不到真实渲染）
+try {
+  await window.__T.openPaper('p1');
+  await new Promise((r) => setTimeout(r, 150));
+} catch (e) { errors.push('openPaper: ' + e.message); }
 for (const v of ['meta', 'assets', 'json', 'qa', 'read']) {
   try {
     window.eval(`switchView('${v}')`);
