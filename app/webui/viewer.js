@@ -193,7 +193,7 @@ function renderCollections() {
        <button class="btn small" id="col-new-cancel">取消</button></div>
      </div>`;
   $$('.col-item', el).forEach(item => item.onclick = e => {
-    if (e.target.classList.contains('col-del') || e.target.dataset.toggle) return;
+    if (e.target.closest?.('.col-del') || e.target.dataset.toggle) return;
     const id = item.dataset.id;
     state.currentCollection = id;
     updateUploadTarget();
@@ -369,7 +369,7 @@ function renderPapers() {
     if (!id) return;   // 上传占位行无 paper id（由下方 up-act 接管）
     item.onclick = e => {
       if (e.target.type === 'checkbox') { toggleSelect(id, e.target.checked); return; }
-      if (e.target.classList.contains('pi-del')) { quickDelete(id); return; }
+      if (e.target.closest?.('.pi-del')) { quickDelete(id); return; }   // closest：按钮内嵌 SVG 图标，e.target 常是 svg/path
       if (state.selectMode) { toggleSelect(id, !state.selected.has(id)); return; }
       openPaper(id);   // 普通模式：单击任意位置直接打开
     };
@@ -2750,7 +2750,7 @@ window.lightbox = (src, caption) => {
     lb.className = 'lightbox';
     lb.innerHTML = `<img><p class="lb-cap"></p><button class="lb-close">${icon('close')}</button>`;
     document.body.appendChild(lb);
-    lb.onclick = e => { if (e.target === lb || e.target.classList.contains('lb-close')) lb.classList.remove('open'); };
+    lb.onclick = e => { if (e.target === lb || e.target.closest?.('.lb-close')) lb.classList.remove('open'); };
     document.addEventListener('keydown', e => { if (e.key === 'Escape') lb.classList.remove('open'); });
   }
   lb.querySelector('img').src = src;
