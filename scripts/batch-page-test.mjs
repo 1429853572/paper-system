@@ -164,7 +164,7 @@ ok('操作卡数量≥6', doc.querySelectorAll('#page-batch .batch-card').length
    `实际 ${doc.querySelectorAll('#page-batch .batch-card').length}`);
 ok('综述卡已激活', !!doc.querySelector('#page-batch .batch-card[data-act="review"]') &&
    !doc.querySelector('#page-batch .batch-card[data-act="review"]').classList.contains('soon'));
-ok('进度面板渲染', !!doc.querySelector('#page-batch #batch-panel'));
+ok('任务中心页签存在', !!doc.querySelector('.topnav button[data-page="tasks"]'));
 
 // 3) 圈定：勾选即全站共享（文库页/批量页同一集合），已选定视图实时计数
 window.__T.state.selected.add('p1');
@@ -176,25 +176,30 @@ doc.querySelector('#bpp-v-all').click();
 await new Promise((r) => setTimeout(r, 80));
 window.__T.state.selected.clear();
 
-// 5) 批次进度面板：批次行渲染 + 展开逐篇
+// 5) 任务中心：独立页 + 类型徽章 + 分区
+window.__T.switchPage('tasks');
+await new Promise((r) => setTimeout(r, 300));
+ok('任务中心页标题', doc.querySelector('#page-title').textContent === '任务中心');
+ok('类型筛选 chips', doc.querySelectorAll('#page-tasks [data-tt]').length === 6);
+ok('状态筛选 chips', doc.querySelectorAll('#page-tasks [data-ts]').length === 4);
 await new Promise((r) => setTimeout(r, 200));
-ok('进度分组标题（进行中/最近完成）', doc.body.textContent.includes('进行中') &&
-   doc.body.textContent.includes('最近完成'));
+ok('进度分组标题（进行中/已结束）', doc.body.textContent.includes('进行中') &&
+   doc.body.textContent.includes('已结束'));
 ok('活跃批次自动展开（live1 逐篇可见）',
    !doc.querySelector('[data-jobs="live1"]').hidden &&
    doc.querySelectorAll('[data-jobs="live1"] .bpanel-row.sub').length === 2);
 ok('失败计数口径（2/3 · 1 失败）',
    [...doc.querySelectorAll('.bpanel-row.head')].some(r => r.textContent.includes('2/3') &&
                                                     r.textContent.includes('1 失败')));
-const batchRow = doc.querySelector('[data-batch="bt1"]');
+const batchRow = doc.querySelector('#page-tasks [data-batch="bt1"]');
 ok('批次行渲染', !!batchRow);
-ok('批次操作名显示', batchRow && batchRow.textContent.includes('批量导读'));
+ok('任务类型徽章显示', batchRow && batchRow.textContent.includes('导读'));
 ok('失败数显示', batchRow && batchRow.textContent.includes('1 失败'));
-const head = doc.querySelector('[data-batch="bt1"] .bpanel-row.head');
+const head = doc.querySelector('#page-tasks [data-batch="bt1"] .bpanel-row.head');
 if (head) {
   head.click();
   await new Promise((r) => setTimeout(r, 150));
-  const jobs = doc.querySelectorAll('[data-batch="bt1"] .bpanel-row.sub');
+  const jobs = doc.querySelectorAll('#page-tasks [data-batch="bt1"] .bpanel-row.sub');
   ok('批次展开逐篇 2 行', jobs.length === 2, `实际 ${jobs.length}`);
   ok('失败行有重试键', !!doc.querySelector('[data-retry="12"]'));
   ok('错误信息显示', doc.querySelector('.bpanel-err')?.textContent.includes('LLM 超时'));
@@ -203,7 +208,8 @@ if (head) {
   ok('再点收起', doc.querySelector('[data-jobs="bt1"]').hidden);
 }
 
-// 6) 批量选择主入口在文库管理页：勾选 → 批量中心 »（耦合流）
+// 6) 批量选择主入口在文库管理页：勾选 → 批量中心（耦合流）
+window.__T.switchPage('batch');
 window.__T.state.libLevel = 2;   // 进第二层（库内论文表），第一层是库列表
 window.__T.state.libSel = '';
 window.__T.switchPage('collections');
@@ -220,6 +226,7 @@ if (libCk) {
   ok('批量中心按钮切页', doc.querySelector('#page-batch').style.display !== 'none');
   const cnt = doc.querySelector('#bp-count')?.textContent || '';
   ok('勾选全站共享（文库页勾选批量页可见）', /1 篇/.test(cnt), cnt);
+  window.__T.state.selected.clear();
 }
 
 // 6.5) 勾选面板（常驻）：库树形分组 / 搜索 / 年份 / 整组全选 / 已选定视图

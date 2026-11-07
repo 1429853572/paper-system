@@ -1012,3 +1012,24 @@ table.list input[type=checkbox] { width: auto; }
 .bpp-group-head .spacer { flex: 1; }
 .bpp-caret { color: var(--muted); display: inline-flex; }
 .bpp-list { max-height: 46vh; overflow-y: auto; }
+
+/* ---- 任务中心（独立页） ---- */
+.tasks-wrap { max-width: 1000px; margin: 0 auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.tasks-head { padding: 0; }
+.task-filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 16px 12px; }
+.task-fsep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; }
+.tt { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-xs);
+      padding: 2px 8px; border-radius: var(--r-pill); font-weight: 600; white-space: nowrap; }
+.tt-parse     { background: var(--tint-primary); color: var(--primary); }
+.tt-translate { background: var(--tint-ok);      color: var(--ok); }
+.tt-summary   { background: var(--tint-warn);    color: var(--warn-ink); }
+.tt-meta      { background: var(--bg-soft);      color: var(--text-2); }
+.tt-embed     { background: var(--bg-soft);      color: var(--muted); }
+.tt-synthesis { background: var(--tint-primary-2); color: var(--primary-dark); }
+.task-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+            border-bottom: 1px dashed var(--line-soft); }
+.task-row:last-child { border-bottom: none; }
+.task-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.task-title { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-bar.task { max-width: 300px; }
+.tasks-body { padding: 6px 16px 14px; }

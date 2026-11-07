@@ -1409,12 +1409,12 @@ $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.data
 function switchPage(page) {
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
   $('#page-title').textContent = {reader: '阅读', collections: '文库管理', batch: '批量中心',
-    trash: '回收站', settings: '设置'}[page];
-  for (const p of ['reader', 'collections', 'batch', 'trash', 'settings']) {
+    tasks: '任务中心', trash: '回收站', settings: '设置'}[page];
+  for (const p of ['reader', 'collections', 'batch', 'tasks', 'trash', 'settings']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
-  ({collections: renderCollectionsPage, batch: renderBatchPage, trash: renderTrash,
-    settings: renderSettings})[page]?.();
+  ({collections: renderCollectionsPage, batch: renderBatchPage, tasks: renderTasksPage,
+    trash: renderTrash, settings: renderSettings})[page]?.();
 }
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
 
@@ -1439,27 +1439,27 @@ async function _refreshQueueBadge() {
     // 批量中心打开时：任务区随事件实时刷新
     if ($('#page-batch')?.style.display !== 'none' && Date.now() - _batchSseAt > 2000) {
       _batchSseAt = Date.now();
-      renderBatchPanel();
+      renderTaskPanel();
       renderSynList();
     }
   } catch {}
 }
-window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderBatchPanel(); refreshQueueBadge(); };
-window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderBatchPanel(); refreshQueueBadge(); };
+window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); };
+window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); };
 window.mcpConfirm = async (id, approve) => {
   try {
     const r = await api('/api/mcp/confirm', {method: 'POST', body: JSON.stringify({action_id: id, approve})});
     toast(r.ok ? (r.executed ? '✓ 已执行' + (r.summary ? '：' + r.summary : '') : '已丢弃') : (r.message || '失败'));
   } catch (e) { toast('操作失败: ' + e.message); }
-  renderBatchPanel();
+  renderTaskPanel();
   refreshQueueBadge();
 };
-window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: 'POST'}); toast('批量已暂停（手动任务不受影响）'); renderBatchPanel(); };
-window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); renderBatchPanel(); };
+window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: 'POST'}); toast('批量已暂停（手动任务不受影响）'); renderTaskPanel(); };
+window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); renderTaskPanel(); };
 // 顶栏「队列」按钮 → 批量中心任务进度区
 $('#queue-btn').onclick = () => {
-  switchPage('batch');
-  setTimeout(() => $('#batch-panel')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
+  switchPage('tasks');
+  setTimeout(() => $('#task-body')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
 };
 setInterval(refreshQueueBadge, 8000);
 
@@ -1482,7 +1482,7 @@ async function renderBatchPage() {
   const cols = state.collections || [];
   el.innerHTML = `
     <div class="batch-wrap">
-      <div class="batch-intro">${icon('bulb', 12)} 先在左侧圈定论文（勾选实时计入），再点右侧操作卡；批次进度在下方实时可见。</div>
+      <div class="batch-intro">${icon('bulb', 12)} 先在左侧圈定论文（勾选实时计入），再点右侧操作卡；任务进度与综述历史见下方区块。</div>
       <div class="batch-grid">
         <div class="card batch-pick">
           <div class="bp-head"><b>① 圈定论文</b>
@@ -1532,14 +1532,6 @@ async function renderBatchPage() {
           <button class="btn small" id="syn-refresh">${icon('retry')} 刷新</button></div>
         <div id="syn-list"><p class="muted" style="padding:8px 16px">加载中…</p></div>
       </div>
-      <div class="card batch-prog">
-        <div class="bp-head"><b>③ 任务进度</b>
-          <span class="muted" style="font-size:11px">批次 + 单篇任务统一在此；失败项可单独重试；MCP 写操作在此确认</span>
-          <span class="spacer"></span>
-          <button class="btn small" id="qp-pause" title="暂停批量解析队列（手动任务不受影响）">⏸ 暂停批量</button>
-          <button class="btn small" id="qp-resume">▶ 恢复</button></div>
-        <div id="batch-panel"><p class="muted" style="padding:8px">加载中…</p></div>
-      </div>
     </div>`;
   $('#bp-clear').onclick = () => { state.selected.clear(); renderBpPicker(); syncBpCount(); };
   /* 勾选面板：库树形分组浏览（搜索/年份筛选/已选定视图/整组全选） */
@@ -1552,10 +1544,7 @@ async function renderBatchPage() {
   $('#bpp-reload').onclick = () => loadBpPicker();
   $('#bpp-v-all').onclick = () => { state._bpp.view = 'all'; renderBpPicker(); };
   $('#bpp-v-sel').onclick = () => { state._bpp.view = 'sel'; renderBpPicker(); };
-  $('#qp-pause').onclick = () => pauseQueue();
-  $('#qp-resume').onclick = () => resumeQueue();
   loadBpPicker();          // 勾选面板常驻，进页即加载
-  await renderBatchPanel();
   renderSynList();
   updateBatchOpsState();
 }
@@ -1603,7 +1592,7 @@ $('#page-batch').addEventListener('click', async e => {
                         {title: '删除综述', danger: true, anchor: sdl})) {
       try { await api('/api/syntheses/' + encodeURIComponent(sdl.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
       renderSynList();
-      renderBatchPanel();
+      renderTaskPanel();
     }
   }
 });
@@ -1758,6 +1747,177 @@ function renderBpPicker() {
   });
 }
 
+/* ================= 任务中心（独立页） =================
+   全部任务的唯一视图：批次任务按组展开、单篇任务平铺；
+   类型彩色徽章 + 类型/状态筛选；MCP 待确认置顶。 */
+const TASK_TYPES = {
+  parse:          {label: '解析',    icon: '🔍', cls: 'tt-parse'},
+  translate:      {label: '翻译',    icon: '🌐', cls: 'tt-translate'},
+  summary:        {label: '导读',    icon: '🧠', cls: 'tt-summary'},
+  meta:           {label: '元数据',  icon: '🏷', cls: 'tt-meta'},
+  embed_backfill: {label: '索引回填', icon: '🧲', cls: 'tt-embed'},
+  synthesis:      {label: '综述',    icon: '📑', cls: 'tt-synthesis'},
+};
+const taskType = t => TASK_TYPES[t] || {label: t, icon: '•', cls: ''};
+state._taskFilter = {type: '', status: ''};
+
+async function renderTasksPage() {
+  const el = $('#page-tasks');
+  const f = state._taskFilter;
+  const chips = (prefix, cur, items) => items.map(([v, label]) =>
+    `<button class="chip-btn ${cur === v ? 'on' : ''}" data-${prefix}="${v}">${label}</button>`).join('');
+  el.innerHTML = `
+    <div class="tasks-wrap">
+      <div class="card tasks-head">
+        <div class="bp-head" style="border-bottom:none;padding-bottom:4px">
+          <b style="font-size:var(--fs-lg)">任务中心</b>
+          <span class="muted" style="font-size:11px">解析 / 翻译 / 导读 / 元数据 / 综述——全部任务的实时状态</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="tk-reload">${icon('retry')} 刷新</button>
+          <button class="btn small" id="tk-pause" title="暂停批量解析队列（手动任务不受影响）">⏸ 暂停批量</button>
+          <button class="btn small" id="tk-resume">▶ 恢复</button></div>
+        <div class="task-filters">
+          <span class="muted" style="font-size:11px">类型</span>
+          ${chips('tt', f.type, [['', '全部'], ['parse', '解析'], ['translate', '翻译'],
+            ['summary', '导读'], ['meta', '元数据'], ['synthesis', '综述']])}
+          <span class="task-fsep"></span>
+          <span class="muted" style="font-size:11px">状态</span>
+          ${chips('ts', f.status, [['', '全部'], ['active', '进行中'], ['done', '完成'], ['failed', '失败']])}
+        </div>
+      </div>
+      <div id="mcp-zone"></div>
+      <div class="card tasks-body" id="task-body"><p class="muted" style="padding:10px">加载中…</p></div>
+    </div>`;
+  $('#tk-reload').onclick = () => renderTaskPanel();
+  $('#tk-pause').onclick = () => pauseQueue();
+  $('#tk-resume').onclick = () => resumeQueue();
+  $$('#page-tasks [data-tt]').forEach(b => b.onclick = () => { state._taskFilter.type = b.dataset.tt; renderTasksPage(); });
+  $$('#page-tasks [data-ts]').forEach(b => b.onclick = () => { state._taskFilter.status = b.dataset.ts; renderTasksPage(); });
+  await renderTaskPanel();
+}
+
+const taskStatusOf = j => ['queued', 'pending_gate', 'running'].includes(j.status) ? 'active'
+  : j.status === 'done' ? 'done' : j.status === 'failed' ? 'failed' : 'other';
+
+function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN, doneN) {
+  const f = state._taskFilter;
+  const stMap = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
+                 failed: '失败', canceled: '已取消'};
+  const row = j => {
+    const tt = taskType(j.job_type);
+    const bar = j.progress_total > 1
+      ? `<div class="up-bar task"><i style="width:${Math.min(100, Math.round(100 * (j.progress_done || 0) / j.progress_total))}%"></i></div>` : '';
+    return `<div class="task-row">
+      <span class="tt ${tt.cls}">${tt.icon} ${tt.label}</span>
+      <span class="task-main">
+        <span class="task-title">${esc(j.title || j.paper_id || '（无标题）')}</span>
+        ${bar}
+        ${j.error ? `<span class="bpanel-err" style="padding:0">${esc(j.error.slice(0, 140))}</span>` : ''}
+      </span>
+      <span class="muted" style="font-size:11px;white-space:nowrap">${stMap[j.status] || esc(j.status)}${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
+      ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
+      ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
+    </div>`;
+  };
+  const batchCard = b => {
+    const tt = taskType(b.job_type);
+    const resolved = b.done + b.failed + b.canceled;
+    const badge = b.active > 0 ? ['run', '进行中'] : b.failed > 0 ? ['err', '有失败']
+      : b.done > 0 ? ['ok', '完成'] : ['priv', '已取消'];
+    return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
+      <div class="bpanel-row head" data-tb="${esc(b.batch_id)}">
+        <span class="badge ${badge[0]}">${badge[1]}</span>
+        <span class="tt ${tt.cls}">${tt.icon} ${tt.label}</span>
+        <span class="muted">${b.done}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}${b.canceled ? ` · ${b.canceled} 取消` : ''}</span>
+        <span class="spacer"></span>
+        <span class="muted" style="font-size:11px">${esc((b.updated_at || '').slice(5, 16))}</span>
+        <span class="ic">${icon('chevD')}</span>
+      </div>
+      <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
+    </div>`;
+  };
+  const sec = (title, inner, empty) =>
+    `<div class="bp-sec-title">${title}</div>` + (inner || `<p class="muted" style="padding:2px 0 8px">${empty}</p>`);
+  let html = '';
+  if (!f.status || f.status === 'active') {
+    html += sec(`进行中${activeN ? `（${activeN}）` : ''}`,
+      (activeBatches.map(batchCard).join('') || '') +
+      (looseActive.length ? `<div class="bpanel-batch">${looseActive.map(row).join('')}</div>` : ''),
+      '没有进行中的任务——发起批量操作或上传论文后，这里实时显示进度');
+  }
+  if (!f.status || f.status === 'done' || f.status === 'failed') {
+    html += sec(`已结束${doneN ? `（${doneN}）` : ''}`,
+      (settledBatches.map(batchCard).join('') || '') +
+      (looseDone.length ? `<div class="bpanel-batch">${looseDone.map(row).join('')}</div>` : ''),
+      '暂无已结束任务');
+  }
+  return html;
+}
+
+async function renderTaskPanel() {
+  const body = $('#task-body');
+  if (!body) return;
+  const f = state._taskFilter;
+  let bs = [], jobs = [], pend = [];
+  try {
+    bs = (await api('/api/batches?limit=20')).batches;
+    jobs = (await api('/api/jobs?limit=200')).jobs || [];
+    try { pend = (await api('/api/mcp/pending')).pending || []; } catch { /* 忽略 */ }
+  } catch (e) {
+    body.innerHTML = `<p class="muted" style="padding:10px">加载失败: ${esc(e.message)}</p>`;
+    return;
+  }
+  const stMatch = b => !f.status
+    || (f.status === 'active' && b.active > 0)
+    || (f.status === 'done' && b.active === 0 && b.done > 0 && !b.failed)
+    || (f.status === 'failed' && b.failed > 0);
+  const tMatchB = b => !f.type || b.job_type === f.type;
+  const actB = bs.filter(b => b.active > 0 && tMatchB(b) && stMatch(b));
+  const setB = bs.filter(b => b.active === 0 && tMatchB(b) && stMatch(b)).slice(0, 5);
+  actB.forEach(b => state._batchOpen.add(b.batch_id));
+  const tMatchJ = j => (!f.type || j.job_type === f.type) && (f.status ? taskStatusOf(j) === f.status || (f.status === 'failed' && j.status === 'canceled') : true);
+  const looseActive = jobs.filter(j => !j.batch_id && ['queued', 'pending_gate', 'running'].includes(j.status) && tMatchJ(j)).slice(0, 12);
+  const looseDone = jobs.filter(j => !j.batch_id && ['done', 'failed', 'canceled'].includes(j.status) && tMatchJ(j)).slice(0, 12);
+  const activeN = actB.length + looseActive.length;
+  const doneN = setB.length + looseDone.length;
+
+  // MCP 待确认（不受筛选影响——需要人工动作的始终置顶）
+  const mz = $('#mcp-zone');
+  if (mz) {
+    mz.innerHTML = pend.length
+      ? `<div class="card" style="margin-bottom:12px;padding:0"><div class="bp-sec-title" style="padding:10px 16px 2px">MCP 待确认写操作（外部 AI 客户端发起）</div>
+         <div style="padding:0 16px 12px">${pend.map(p => `
+           <div class="bpanel-row head" style="border:1px solid var(--border);border-radius:var(--r-sm);margin-bottom:6px">
+             <span class="badge run">待确认</span>
+             <span style="flex:1;min-width:0">${esc(p.summary || p.tool)}</span>
+             <button class="btn small primary" onclick="mcpConfirm('${esc(p.action_id)}',true)">执行</button>
+             <button class="btn small danger" onclick="mcpConfirm('${esc(p.action_id)}',false)">丢弃</button>
+           </div>`).join('')}</div></div>`
+      : '';
+  }
+  body.innerHTML = taskBody(actB, setB, looseActive, looseDone, activeN, doneN);
+  for (const bid of state._batchOpen) {
+    const box = body.querySelector(`[data-jobs="${bid}"]`);
+    if (box && !box.hidden) renderBatchJobs(bid, box);
+  }
+}
+
+// 任务页事件委托：批次展开/收起 + 单篇任务重试/取消
+$('#page-tasks').addEventListener('click', async e => {
+  const retry = e.target.closest('[data-retry]');
+  if (retry) { await api(`/api/jobs/${retry.dataset.retry}/retry`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); return; }
+  const cancel = e.target.closest('[data-cancel]');
+  if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); return; }
+  const head = e.target.closest('.bpanel-row.head[data-tb]');
+  if (head) {
+    const bid = head.dataset.tb;
+    const box = head.parentElement.querySelector('[data-jobs]');
+    box.hidden = !box.hidden;
+    if (box.hidden) state._batchOpen.delete(bid);
+    else { state._batchOpen.add(bid); renderBatchJobs(bid, box); }
+  }
+});
+
 /* 勾选变化后同步全部计数（卡头/已选定视图/操作卡置灰）——单一数据源，无滞后 */
 function syncBpCount() {
   const cnt = $('#bp-count');
@@ -1801,9 +1961,9 @@ async function runBatchAction(act, anchor) {
           (d.skipped.length ? `，跳过 ${d.skipped.length} 篇（已完成/进行中/无权限）` : ''));
     if (d.queued.length) {
       state._batchOpen = new Set([d.batch_id]);
-      renderBatchPanel();
+      renderTaskPanel();
       $('#batch-panel').scrollIntoView({behavior: 'smooth', block: 'nearest'});
-    } else renderBatchPanel();
+    } else renderTaskPanel();
   } catch (e) { toast('批量操作失败: ' + e.message); }
 }
 
@@ -1841,89 +2001,12 @@ async function runSynthesis(anchor, ids = null) {
     const d = await api('/api/synthesize', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
     toast(`综述已启动（预计 ${d.estimate.calls} 次调用），进度见下方批次面板`);
     state._batchOpen = new Set([d.batch_id]);
-    await renderBatchPanel();
+    await renderTaskPanel();
     $('#batch-panel')?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
   } catch (e) { toast('综述启动失败: ' + e.message); }
 }
 const BATCH_ST = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
                   failed: '失败', canceled: '已取消'};
-
-async function renderBatchPanel() {
-  const el = $('#batch-panel');
-  if (!el) return;
-  let bs = [], loose = [], pend = [];
-  try {
-    bs = (await api('/api/batches?limit=20')).batches;
-    const jd = await api('/api/jobs?limit=200');
-    loose = (jd.jobs || []).filter(j => !j.batch_id)
-      .filter(j => ['queued', 'pending_gate', 'running', 'failed', 'canceled'].includes(j.status))
-      .slice(0, 12);
-    try { pend = (await api('/api/mcp/pending')).pending || []; } catch { /* 忽略 */ }
-  } catch (e) {
-    el.innerHTML = `<p class="muted" style="padding:8px 0">加载失败: ${esc(e.message)}</p>`;
-    return;
-  }
-  pend = Array.isArray(pend) ? pend : [];
-  const active = bs.filter(b => b.active > 0);
-  const settled = bs.filter(b => b.active === 0).slice(0, 5);
-  active.forEach(b => state._batchOpen.add(b.batch_id));   // 活跃批次默认展开
-
-  const row = b => {
-    const badge = b.active > 0 ? ['run', '进行中']
-      : b.failed > 0 ? ['err', '有失败']
-      : b.done > 0 ? ['ok', '完成'] : ['priv', '已取消'];
-    const extra = [
-      b.failed ? `<span class="berr">${b.failed} 失败</span>` : '',
-      b.canceled ? `<span class="muted">${b.canceled} 取消</span>` : '',
-    ].filter(Boolean).join(' · ');
-    return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
-      <div class="bpanel-row head">
-        <span class="badge ${badge[0]}">${badge[1]}</span>
-        <b>${BATCH_TYPE_LABEL[b.job_type] || esc(b.job_type)}</b>
-        <span class="muted">${b.done}/${b.total}${extra ? ' · ' + extra : ''}</span>
-        <span class="spacer"></span>
-        <span class="muted" style="font-size:11px">${esc((b.updated_at || '').slice(5, 16))}</span>
-        <span class="ic">${icon('chevD')}</span>
-      </div>
-      <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
-    </div>`;
-  };
-
-  const st = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
-              failed: '失败', canceled: '已取消'};
-  const jobRow = j => `
-    <div class="bpanel-row sub">
-      <span class="badge ${j.status === 'failed' ? 'err' : j.status === 'done' ? 'ok' : 'run'}">${st[j.status] || esc(j.status)}</span>
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.title || j.paper_id || '')}</span>
-      <span class="muted" style="font-size:11px">${esc(j.job_type)}${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
-      ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
-      ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
-    </div>${j.error ? `<div class="bpanel-err">${esc(j.error.slice(0, 140))}</div>` : ''}`;
-
-  const pendHtml = pend.length
-    ? `<div class="bp-sec-title">MCP 待确认写操作（外部 AI 客户端发起）</div>` +
-      pend.map(p => `
-      <div class="bpanel-batch"><div class="bpanel-row head">
-        <span class="badge run">待确认</span>
-        <span style="flex:1;min-width:0">${esc(p.summary || p.tool)}</span>
-        <button class="btn small primary" onclick="mcpConfirm('${esc(p.action_id)}',true)">执行</button>
-        <button class="btn small danger" onclick="mcpConfirm('${esc(p.action_id)}',false)">丢弃</button>
-      </div></div>`).join('')
-    : '';
-
-  el.innerHTML = `
-    ${pendHtml}
-    <div class="bp-sec-title">进行中的批次${active.length ? `（${active.length}）` : ''}</div>
-    ${active.length ? active.map(row).join('') : '<p class="muted" style="padding:2px 0 8px">没有进行中的批次</p>'}
-    <div class="bp-sec-title">单篇任务（解析 / 翻译 / 导读等，非批量发起）</div>
-    ${loose.length ? `<div class="bpanel-batch">${loose.map(jobRow).join('')}</div>`
-      : '<p class="muted" style="padding:2px 0 8px">没有进行中的单篇任务</p>'}
-    ${settled.length ? `<div class="bp-sec-title">最近完成的批次（保留 5 条）</div>${settled.map(row).join('')}` : ''}`;
-  for (const bid of state._batchOpen) {
-    const box = el.querySelector(`[data-jobs="${bid}"]`);
-    if (box && !box.hidden) renderBatchJobs(bid, box);
-  }
-}
 
 async function renderBatchJobs(bid, box) {
   try {
@@ -2008,9 +2091,9 @@ async function showSynthesisReport(sid) {
 
 $('#page-batch').addEventListener('click', async e => {
   const retry = e.target.closest('[data-retry]');
-  if (retry) { await api(`/api/jobs/${retry.dataset.retry}/retry`, {method: 'POST'}); renderBatchPanel(); return; }
+  if (retry) { await api(`/api/jobs/${retry.dataset.retry}/retry`, {method: 'POST'}); renderTaskPanel(); return; }
   const cancel = e.target.closest('[data-cancel]');
-  if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderBatchPanel(); return; }
+  if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderTaskPanel(); return; }
   const synView = e.target.closest('[data-syn-view]');
   if (synView) { showSynthesisReport(synView.dataset.synView); return; }
   const synDl = e.target.closest('[data-syn-dl]');
@@ -2020,7 +2103,7 @@ $('#page-batch').addEventListener('click', async e => {
     if (await uiConfirm('删除这篇综述？（报告与矩阵将一并删除，进行中的任务同时取消）',
                         {title: '删除综述', danger: true, anchor: synDel})) {
       try { await api('/api/syntheses/' + encodeURIComponent(synDel.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
-      renderBatchPanel();
+      renderTaskPanel();
     }
     return;
   }
@@ -2039,7 +2122,7 @@ $('#page-batch').addEventListener('click', async e => {
 // 批量页可见时轮询进度（SSE 也会触发，双保险；面板不存在时静默跳过）
 setInterval(() => {
   const pg = $('#page-batch');
-  if (pg && pg.style.display !== 'none') { renderBatchPanel(); renderSynList(); }
+  if (pg && pg.style.display !== 'none') { renderTaskPanel(); renderSynList(); }
 }, 6000);
 
 let _batchSseAt = 0;
@@ -2186,7 +2269,7 @@ async function watchJobs() {
     // 批量中心打开时，批次事件实时刷新进度面板（2s 节流，避免逐篇事件风暴全量重建）
     if (ev.batch_id && $('#page-batch')?.style.display !== 'none' && Date.now() - _batchSseAt > 2000) {
       _batchSseAt = Date.now();
-      renderBatchPanel();
+      renderTaskPanel();
       renderSynList();
     }
     // 文库管理页打开时同步行内状态（批量导入时每块一事件，全量重建需节流）
