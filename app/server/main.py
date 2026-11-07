@@ -1608,6 +1608,66 @@ def export_summary(paper_id: str, request: Request):
     return _md_response("\n".join(lines), f"{canonical_name(p)}_reading-guide.md")
 
 
+@app.post("/api/papers/export-zip")
+async def export_papers_zip(request: Request):
+    """批量导出 ZIP：多论文 × 多格式（复用单篇 build_zip），内含每篇子目录 + 跳过清单。"""
+    import io
+    import zipfile
+
+    u = require(request)
+    body = await request.json()
+    ids = [x for x in (body.get("paper_ids") or [])][:50]
+    fmts = [x for x in (body.get("fmts") or [])
+            if x in ("pdf", "md", "bilingual_md", "bilingual_pdf", "zh_pdf", "en_pdf", "bibtex")]
+    if not ids:
+        raise HTTPException(400, "paper_ids 为空")
+    if not fmts:
+        raise HTTPException(400, "请选择导出内容")
+
+    from core.cite import format_citation
+    from core.exporter import _zip_base_name, build_zip
+
+    outer = io.BytesIO()
+    skipped = []
+    with zipfile.ZipFile(outer, "w", zipfile.ZIP_DEFLATED) as z:
+        n = 0
+        for pid in ids:
+            p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
+            if p is None:
+                skipped.append(f"{pid}: 不存在或已删除")
+                continue
+            try:
+                _require_visible(u, p)
+            except HTTPException:
+                skipped.append(f"{p['title']}: 无权访问")
+                continue
+            n += 1
+            base = _zip_base_name(dict(p))
+            folder = f"{n:02d}-{base}"
+            if "bibtex" in fmts:
+                z.writestr(f"{folder}/references.bib", format_citation(dict(p), "bibtex"))
+            sub = [f for f in fmts if f != "bibtex"]
+            if not sub:
+                continue
+            try:
+                data, _name = build_zip(pid, sub)
+            except Exception as e:  # noqa: BLE001 —— 单篇失败不拖垮整包
+                skipped.append(f"{base}: {str(e)[:120]}")
+                continue
+            with zipfile.ZipFile(io.BytesIO(data)) as sz:
+                for item in sz.infolist():
+                    z.writestr(f"{folder}/{item.filename}", sz.read(item.filename))
+        if skipped:
+            z.writestr("跳过清单.txt", "\n".join(skipped))
+        if n == 0 and not any(z.namelist()):
+            raise HTTPException(404, "没有可导出的论文")
+    from urllib.parse import quote
+    return Response(content=outer.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition":
+                             f"attachment; filename=\"papers-export.zip\"; "
+                             f"filename*=UTF-8''{quote('论文导出.zip')}"})
+
+
 @app.post("/api/papers/export/bibtex")
 async def export_bibtex(request: Request):
     """批量引用导出：多选论文 → 单 .bib 文件。"""

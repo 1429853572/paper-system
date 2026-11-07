@@ -1025,3 +1025,7 @@ table.list input[type=checkbox] { width: auto; }
 .task-title { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .up-bar.task { max-width: 300px; }
 .tasks-body { padding: 6px 16px 14px; }
+
+/* 文库管理·导出弹层 */
+.export-pop { position: absolute; z-index: 70; width: 300px; }
+.export-pop .tp-item input { width: auto; }

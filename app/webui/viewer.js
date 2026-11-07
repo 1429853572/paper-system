@@ -3953,6 +3953,16 @@ async function renderCollectionsPage(preset = null) {
         </div>
       </div>`;
 
+  // 导出弹层：范围（当前范围/勾选）× 内容（PDF/MD/对照/BibTeX）→ ZIP
+  {
+    state._libScopeKey = scopeKey;
+    state._libScopePapers = papers;
+    const scopeN = $('#exp-scope-n'), selN = $('#exp-sel-n'), selItem = $('#exp-sel-item');
+    if (scopeN) scopeN.textContent = papers.length;
+    const selCnt = libSelected(scopeKey).length;
+    if (selN) selN.textContent = selCnt;
+    if (selItem) selItem.hidden = !selCnt;
+  }
   // 搜索框：输入去抖后重渲染，并恢复焦点与光标（否则每敲一个字就失焦）
   // 勾选状态持久化在 state.selected（与侧栏/批量中心共享）——重渲染后恢复批量条
   {
@@ -3981,6 +3991,53 @@ async function renderCollectionsPage(preset = null) {
   }
 }
 window.renderCollectionsPage = renderCollectionsPage;   // 内联 onclick 在全局作用域求值
+
+/* 文库管理·导出弹层：与阅读页下载弹层同款交互（fixed 锚定按钮） */
+const exportPop = $('#export-pop');
+$('#export-btn')?.addEventListener('click', e => {
+  e.stopPropagation();
+  exportPop.hidden = !exportPop.hidden;
+  if (!exportPop.hidden) {
+    const r = e.currentTarget.getBoundingClientRect();
+    exportPop.style.position = 'fixed';
+    exportPop.style.top = (r.bottom + 6) + 'px';
+    exportPop.style.right = Math.max(8, innerWidth - r.right) + 'px';
+    exportPop.style.left = 'auto';
+  }
+});
+document.addEventListener('click', e => {
+  if (exportPop && !exportPop.hidden && !exportPop.contains(e.target) &&
+      !e.target.closest('#export-btn')) exportPop.hidden = true;
+});
+$('#export-zip-btn')?.addEventListener('click', async () => {
+  const scope = document.querySelector('input[name="exp-scope"]:checked')?.value || 'scope';
+  const ids = scope === 'sel'
+    ? libSelected(state._libScopeKey)
+    : (state._libScopePapers || []).map(p => p.id);
+  const fmts = $$('#export-pop input[data-fmt]').filter(x => x.checked).map(x => x.dataset.fmt);
+  if (!ids.length) { toast('当前范围没有论文'); return; }
+  if (!fmts.length) { toast('先勾选要导出的内容'); return; }
+  const btn = $('#export-zip-btn');
+  btn.disabled = true; btn.textContent = '打包中…';
+  try {
+    let url, payload;
+    if (fmts.length === 1 && fmts[0] === 'bibtex') {
+      url = '/api/papers/export/bibtex'; payload = {paper_ids: ids};   // 纯 BibTeX → 直接 .bib
+    } else {
+      url = '/api/papers/export-zip'; payload = {paper_ids: ids, fmts};
+    }
+    const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify(payload)});
+    if (!r.ok) throw new Error((await r.json()).detail || 'HTTP ' + r.status);
+    const blob = await r.blob();
+    const a = Object.assign(document.createElement('a'),
+      {href: URL.createObjectURL(blob), download: fmts.length === 1 && fmts[0] === 'bibtex' ? 'references.bib' : '论文导出.zip'});
+    a.click(); URL.revokeObjectURL(a.href);
+    toast(`已导出 ${ids.length} 篇`);
+    exportPop.hidden = true;
+  } catch (e) { toast('导出失败: ' + e.message); }
+  btn.disabled = false; btn.textContent = '⬇ 导出 ZIP';
+});
 window.toggleColOpen = cid => {
   const s = JSON.parse(localStorage.getItem('ps-col-open') || '{}');
   s[cid] = s[cid] === false ? true : false;
