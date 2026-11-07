@@ -14,6 +14,8 @@ const state = {
   qaSession: '', health: {},
   uploads: new Map(),     // 上传中占位：name → {pct, phase: uploading|saving|error, msg, file, cid}
   parseProg: {},          // 解析实时进度：paper_id → {done, total}（SSE 推送 + statuses 水合）
+  cmdtags: [],            // 自定义命令标签（服务端 settings 存储；内置标签在代码里）
+  qaHistory: [],          // 问答输入历史（↑↓ 回溯）
 };
 
 /* ---------------- 基础 ---------------- */
@@ -546,6 +548,31 @@ $('#url-import-btn').onclick = async () => {
   } catch (e) { toast('导入失败: ' + e.message); }
 };
 $('#url-import-input').onkeydown = e => { if (e.key === 'Enter') $('#url-import-btn').click(); };
+/* 标识符导入（zotero-mcp 式）：DOI / arXiv ID / BibTeX → 元数据 + OA PDF */
+$('#ident-btn').onclick = async () => {
+  const ta = $('#ident-input');
+  const text = ta.value.trim();
+  if (!text) { toast('先粘贴 DOI / arXiv ID 或 BibTeX'); return; }
+  const btn = $('#ident-btn');
+  btn.disabled = true; btn.textContent = '解析中…';
+  try {
+    const d = await api('/api/papers/import-identifier', {method: 'POST', body: JSON.stringify({
+      text, visibility: state.uploadPrivate ? 'private' : 'shared',
+      collection_id: state.currentCollection || null})});
+    const q = d.results.filter(x => x.status === 'queued').length;
+    const dup = d.results.filter(x => x.status === 'duplicate').length;
+    const nopdf = d.results.filter(x => x.status === 'no_pdf').length;
+    const nf = d.results.filter(x => x.status === 'not_found').length;
+    let msg = q ? `已导入 ${q} 篇并开始解析` : '没有可导入的条目';
+    if (dup) msg += `，${dup} 篇已在库跳过`;
+    if (nopdf) msg += `，${nopdf} 篇无公开 PDF`;
+    if (nf) msg += `，${nf} 条未识别`;
+    toast(msg, 4000);
+    if (q) { ta.value = ''; upPop.hidden = true; await refreshLib(); }
+  } catch (e) { toast('导入失败: ' + e.message); }
+  btn.disabled = false; btn.textContent = '导入';
+};
+$('#ident-input').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) $('#ident-btn').click(); };
 // 论文列表区 = 拖放上传目标
 const plist = $('#paper-list');
 ['dragover', 'dragenter'].forEach(ev => plist.addEventListener(ev, e => {
@@ -2249,10 +2276,12 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       <div class="qa-quote-text" id="qa-quote-text"></div>
       <button class="btn small" id="qa-quote-clear" title="移除引用">${icon('close')}</button>
     </div>
+    <div class="cmdtags" id="cmdtags"></div>
     <div class="qa-input">
-      <textarea id="qa-text" placeholder="对着文献提问…（添加 2 篇以上自动对比 · Ctrl+Enter 发送）"></textarea>
+      <textarea id="qa-text" placeholder="对着文献提问…（/ 选论文 · ↑↓ 历史 · Ctrl+Enter 发送）"></textarea>
       <button class="btn primary" id="qa-send">发送</button>
     </div>`;
+  renderCmdTags($('#cmdtags'));
   renderQaScope();
   populateQaPicker();
   api('/api/presets').then(presets => {
@@ -2282,7 +2311,41 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
   };
   $('#qa-send').onclick = sendQa;
   $('#qa-quote-clear').onclick = clearQuote;
-  $('#qa-text').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) sendQa(); };
+  $('#qa-text').onkeydown = e => {
+    if (e.key === 'Enter' && e.ctrlKey) { sendQa(); return; }
+    // ↑↓ 翻历史（zotero-gpt 式）：↑ 首次给最近一条、再按更早；↓ 逐条回来、到底回草稿
+    if (e.key === 'ArrowUp' && !e.shiftKey && state.qaHistory.length) {
+      if (state._histIdx == null) { e.target._preHist = e.target.value; state._histIdx = 0; }
+      else state._histIdx = Math.min(state._histIdx + 1, state.qaHistory.length - 1);
+      e.target.value = state.qaHistory[state._histIdx];
+      e.target.dispatchEvent(new Event('input'));
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'ArrowDown' && state._histIdx != null) {
+      if (state._histIdx > 0) {
+        state._histIdx--;
+        e.target.value = state.qaHistory[state._histIdx];
+      } else {
+        state._histIdx = null;
+        e.target.value = e.target._preHist ?? '';
+      }
+      e.target.dispatchEvent(new Event('input'));
+      e.preventDefault();
+      return;
+    }
+    // 输入 / 打开论文快选（复用选文面板）
+    if (e.key === '/' && e.target.value === '' && state.qaPapers.size) {
+      e.preventDefault();
+      const panel = $('#qa-pick-panel');
+      if (panel) {
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden) { renderPickList($('#qa-pick-filter')?.value.toLowerCase() || ''); $('#qa-pick-filter')?.focus(); }
+      }
+      return;
+    }
+    if (e.key.length === 1) state._histIdx = null;   // 打字即退出历史浏览
+  };
   $('#qa-text').oninput = e => {   // 自动长高（上限 150px）
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(150, e.target.scrollHeight) + 'px';
@@ -2639,6 +2702,8 @@ function sendQa() {
   });
   if (!parsedScope.length) { toast('所选论文尚未解析完成，请稍候'); return; }
   $('#qa-text').value = '';
+  state.qaHistory = [text, ...state.qaHistory.filter(x => x !== text)].slice(0, 30);
+  state._histIdx = null;
   collapsePresetList();      // 已提问 → 收起推荐问题，把版面让给回答
   const quote = state.qaQuote || '';
   $('#qa-msg-list').insertAdjacentHTML('beforeend',
@@ -2700,6 +2765,165 @@ $('#qa-open').onclick = () => {
   if (wasReader && state.qaOpen) closeQa();
   else openQaDock();
 };
+
+/* ---------------- 命令标签（zotero-gpt 式：短按执行 / 长按编辑） ---------------- */
+const BUILTIN_TAGS = [
+  {id: 'b1', label: '📝 总结本篇', prompt: '总结本篇论文：核心问题、方法要点、主要结果与局限，5 句以内。'},
+  {id: 'b2', label: '🔍 解读选中', prompt: '解释这段文字的含义与上下文（涉及的概念、方法、为什么重要）：\n「{选中文字}」'},
+  {id: 'b3', label: '❓ 就选中提问', prompt: '', prefill: '关于这段文字：「{选中文字}」\n我的问题：'},
+  {id: 'b4', label: '🔎 检索相似', prompt: '在当前文献范围内检索与下面内容最相关的段落，逐条说明它们与这段内容的关联：\n「{选中文字}」'},
+];
+state._lastSelection = '';
+
+function renderCmdTags(el) {
+  if (!el) return;
+  const all = [...BUILTIN_TAGS, ...state.cmdtags.map(t => ({...t, custom: true}))];
+  el.innerHTML = all.map(t =>
+    `<button class="cmdtag" data-tag="${esc(t.id)}" title="${esc(t.prompt || t.prefill || '')}（长按编辑）">${esc(t.label)}</button>`
+  ).join('') + '<button class="cmdtag add" id="cmdtag-add" title="新建自定义标签">＋</button>';
+  $$('.cmdtag[data-tag]', el).forEach(b => {
+    const tag = all.find(t => t.id === b.dataset.tag);
+    let press = 0, longFired = false;
+    b.onmousedown = b.ontouchstart = () => {
+      longFired = false;
+      press = setTimeout(() => { longFired = true; editTagDialog(tag); }, 550);
+    };
+    b.onmouseup = b.ontouchend = () => {
+      clearTimeout(press);
+      if (!longFired) executeTag(tag);
+    };
+    b.onmouseleave = () => clearTimeout(press);
+  });
+  $('#cmdtag-add', el).onclick = () => editTagDialog({label: '', prompt: '', custom: true, _new: true});
+}
+
+function resolveTagText(tpl) {
+  const cur = state.current || {};
+  return (tpl || '')
+    .replaceAll('{选中文字}', state._lastSelection || '')
+    .replaceAll('{当前论文标题}', cur.title || '')
+    .replaceAll('{当前论文摘要}', (cur.abstract || '').slice(0, 800));
+}
+
+async function executeTag(tag) {
+  const ta = $('#qa-text');
+  if (!ta) { toast('先打开论文问答'); return; }
+  const needsSel = (tag.prompt || tag.prefill || '').includes('{选中文字}');
+  if (needsSel && !state._lastSelection) { toast('先在正文中选中一段文字'); return; }
+  const text = resolveTagText(tag.prompt || tag.prefill || '');
+  if (!text.trim()) { toast('标签内容为空，长按可编辑'); return; }
+  if (!$('#page-reader') || $('#page-reader').style.display === 'none') switchPage('reader');
+  if (!state.qaOpen) openQaDock();
+  ta.value = text;
+  ta.dispatchEvent(new Event('input'));
+  if (tag.prefill) { ta.focus(); return; }   // 就选中提问：预填不发送
+  sendQa();
+}
+
+function editTagDialog(tag) {
+  const isCustom = !!tag.custom;
+  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
+  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop'});
+  pop.innerHTML = `
+    <div class="ui-pop-title">${isCustom && !tag._new ? '编辑标签' : tag._new ? '新建标签' : '内置标签 → 存为自定义'}</div>
+    <input class="ui-pop-input" id="tag-label" value="${esc(tag.label || '')}" placeholder="按钮名称（如 📐 分析公式）" style="margin-bottom:8px">
+    <textarea class="ui-pop-input" id="tag-prompt" rows="6" placeholder="提示词，可用占位符：{选中文字} {当前论文标题} {当前论文摘要}">${esc(tag.prompt || tag.prefill || '')}</textarea>
+    <div class="ui-pop-foot">
+      ${isCustom && !tag._new ? '<button class="btn small danger" data-del>删除</button>' : ''}
+      <span class="spacer"></span>
+      <button class="btn small" data-cancel>取消</button>
+      <button class="btn small primary" data-ok>保存</button>
+    </div>`;
+  backdrop.appendChild(pop);
+  document.body.appendChild(backdrop);
+  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
+  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  document.addEventListener('keydown', onKey, true);
+  backdrop.onclick = e => { if (e.target === backdrop) close(); };
+  pop.querySelector('[data-cancel]').onclick = close;
+  pop.querySelector('[data-ok]').onclick = () => {
+    saveTag(tag, pop.querySelector('#tag-label').value.trim(), pop.querySelector('#tag-prompt').value);
+    close();
+  };
+  const del = pop.querySelector('[data-del]');
+  if (del) del.onclick = () => { saveTag(tag, null, null); close(); };
+  pop.querySelector('#tag-label').focus();
+}
+
+async function saveTag(tag, label, prompt) {
+  if (label === null) {   // 删除
+    state.cmdtags = state.cmdtags.filter(t => t.id !== tag.id);
+  } else if (tag.custom || tag._new) {   // 自定义新建/更新
+    if (!label) { toast('标签名称不能为空'); return; }
+    const exist = state.cmdtags.find(t => t.id === tag.id);
+    if (exist) { exist.label = label; exist.prompt = prompt; }
+    else state.cmdtags.push({id: 'c' + Date.now().toString(36), label, prompt});
+  } else {   // 内置 → 存为自定义副本
+    if (!label) { toast('标签名称不能为空'); return; }
+    state.cmdtags.push({id: 'c' + Date.now().toString(36), label, prompt});
+    toast('已存为自定义标签（原内置标签保留）');
+  }
+  renderCmdTags($('#cmdtags'));
+  try { await api('/api/cmdtags', {method: 'PUT', body: JSON.stringify({tags: state.cmdtags})}); }
+  catch (e) { toast('保存失败: ' + e.message); }
+}
+api('/api/cmdtags').then(d => { state.cmdtags = d.tags || []; renderCmdTags($('#cmdtags')); }).catch(() => {});
+
+/* ---------------- 选中浮条（llm-for-zotero 式：解读/提问/翻译） ---------------- */
+function hideSelBar() {
+  const b = $('#sel-bar');
+  if (b) b.remove();
+}
+
+function showSelBar(sel, text) {
+  hideSelBar();
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  const bar = Object.assign(document.createElement('div'), {className: 'sel-bar', id: 'sel-bar'});
+  bar.innerHTML = `<button data-a="explain" title="解读选中文字">解读</button>
+    <button data-a="ask" title="拿选中文字提问">提问</button>
+    <button data-a="translate" title="翻译选中文字">译</button>`;
+  bar.style.top = Math.max(8, rect.top - 36) + 'px';
+  bar.style.left = Math.min(innerWidth - 140, Math.max(8, rect.left)) + 'px';
+  document.body.appendChild(bar);
+  $$('#sel-bar button').forEach(b => b.onclick = () => {
+    hideSelBar();
+    if (b.dataset.a === 'translate') translateSelection(text);
+    else executeTag(BUILTIN_TAGS[b.dataset.a === 'explain' ? 1 : 2]);
+  });
+}
+
+document.addEventListener('mouseup', e => {
+  if (e.target.closest?.('#sel-bar')) return;
+  const sel = window.getSelection();
+  const text = sel ? String(sel).trim() : '';
+  if (text.length < 2) { hideSelBar(); return; }
+  const node = sel.anchorNode;
+  if (!node?.parentElement?.closest?.('#content-view, .textLayer')) { hideSelBar(); return; }
+  state._lastSelection = text;
+  try { showSelBar(sel, text); } catch { /* range 已释放等边缘情况 */ }
+});
+document.addEventListener('selectionchange', () => {
+  if (!window.getSelection()?.toString()) hideSelBar();
+});
+
+async function translateSelection(text) {
+  const card = Object.assign(document.createElement('div'), {className: 'sel-result', id: 'sel-result'});
+  card.innerHTML = `<div class="sr-head"><b>译文</b><span class="spacer"></span>
+    <button class="btn small" data-copy>复制</button>
+    <button class="btn small" data-close>✕</button></div>
+    <div class="sr-body">翻译中…</div>`;
+  document.body.appendChild(card);
+  card.querySelector('[data-close]').onclick = () => card.remove();
+  try {
+    const d = await api('/api/translate-selection', {method: 'POST',
+      body: JSON.stringify({text, paper_id: state.current?.id || null})});
+    card.querySelector('.sr-body').textContent = d.translation || '（空结果）';
+    card.querySelector('[data-copy]').onclick = async () =>
+      toast(await window.copyText(d.translation) ? '已复制' : '复制失败');
+  } catch (e) {
+    card.querySelector('.sr-body').textContent = '翻译失败: ' + e.message;
+  }
+}
 
 /* ---------------- 启动 ---------------- */
 async function boot() {

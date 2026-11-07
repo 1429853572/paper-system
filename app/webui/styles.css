@@ -911,3 +911,28 @@ table.list input[type=checkbox] { width: auto; }
 .dp-abs { font-size: var(--fs-xs); color: var(--muted); display: -webkit-box;
           -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .dp-foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
+
+/* ---- 命令标签排（问答框上方） ---- */
+.cmdtags { display: flex; gap: 5px; flex-wrap: wrap; padding: 0 10px 6px; }
+.cmdtag { border: 1px solid var(--border); background: var(--panel-soft); color: var(--text-2);
+          border-radius: var(--r-pill); padding: 3px 10px; font-size: var(--fs-xs); cursor: pointer;
+          user-select: none; white-space: nowrap; }
+.cmdtag:hover { border-color: var(--primary); color: var(--primary); }
+.cmdtag.add { border-style: dashed; }
+/* ---- 选中浮条 + 译文卡 ---- */
+.sel-bar { position: fixed; z-index: 90; display: flex; gap: 2px; background: var(--panel);
+           border: 1px solid var(--border); border-radius: var(--r-md); padding: 3px;
+           box-shadow: 0 4px 16px rgba(0, 0, 0, .18); }
+.sel-bar button { border: none; background: none; padding: 4px 10px; font-size: var(--fs-sm);
+                  cursor: pointer; border-radius: var(--r-xs); color: var(--text); }
+.sel-bar button:hover { background: var(--tint-primary); color: var(--primary); }
+.sel-result { position: fixed; right: 24px; top: 70px; z-index: 90; width: min(460px, 44vw);
+              background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
+              box-shadow: 0 8px 28px rgba(0, 0, 0, .22); padding: 10px 12px; }
+.sr-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.sr-body { font-size: var(--fs-base); line-height: 1.7; white-space: pre-wrap;
+           max-height: 46vh; overflow: auto; }
+/* ---- 标识符粘贴区（上传弹层） ---- */
+.ident-import { padding: 4px 12px 8px; display: flex; gap: 6px; align-items: flex-end; }
+.ident-import textarea { flex: 1; font-size: var(--fs-xs); resize: vertical; min-height: 38px;
+                         max-height: 90px; }

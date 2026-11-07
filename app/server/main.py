@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import secrets
 import time
 import uuid
@@ -2077,6 +2078,125 @@ def paper_discover(paper_id: str, request: Request, mode: str = "rec", limit: in
                          (it["title"].lower(),))
         out.append({**it, "in_library": dup["id"] if dup else None})
     return {"items": out, "mode": mode}
+
+
+# ---------------- 标识符导入（DOI / arXiv / BibTeX，zotero-mcp 式） ----------------
+@app.post("/api/papers/import-identifier")
+async def import_identifier(request: Request):
+    """粘贴 DOI / arXiv ID / BibTeX / 标题 → 元数据 + OA PDF 自动获取 → 走导入链路。
+
+    逐条独立返回（部分失败不拖垮整批）。
+    """
+    u = require(request)
+    body = await request.json()
+    from core.identifier import parse_identifiers, resolve_identifier
+    idents = parse_identifiers(body.get("text") or "")
+    if not idents:
+        raise HTTPException(400, "未识别到 DOI / arXiv ID / BibTeX 条目")
+    out = []
+    for ident in idents:
+        try:
+            meta = resolve_identifier(ident["kind"], ident["value"])
+        except ValueError as e:
+            out.append({"ident": ident, "status": "not_found", "message": str(e)})
+            continue
+        except Exception as e:  # noqa: BLE001
+            out.append({"ident": ident, "status": "error", "message": str(e)[:150]})
+            continue
+        title = meta.get("title") or ""
+        # 查重（DOI / 标题）
+        dup = None
+        if meta.get("doi"):
+            dup = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL", (meta["doi"],))
+        if dup is None and title:
+            dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL",
+                         (title.lower(),))
+        if dup:
+            out.append({"ident": ident, "status": "duplicate", "paper_id": dup["id"],
+                        "metadata": meta})
+            continue
+        url = meta.get("pdf_url") or ""
+        if not url.startswith(("http://", "https://")):
+            out.append({"ident": ident, "status": "no_pdf", "metadata": meta})
+            continue
+        try:
+            _assert_public_url(url)
+        except HTTPException:
+            out.append({"ident": ident, "status": "no_pdf", "metadata": meta})
+            continue
+        file_hash = "url:" + ingest.sha256_bytes(url.encode())
+        exist = db.one("SELECT id FROM papers WHERE file_hash=? AND deleted_at IS NULL", (file_hash,))
+        if exist:
+            out.append({"ident": ident, "status": "duplicate", "paper_id": exist["id"],
+                        "metadata": meta})
+            continue
+        name = Path(url.split("?")[0]).name or "document.pdf"
+        if "." not in name:
+            name += ".pdf"
+        paper_id, _ = ingest.create_paper(u["id"], file_hash, 0, 0,
+                                          body.get("visibility", "shared"), name)
+        cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+        with db.write() as c:
+            c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
+            c.execute("UPDATE papers SET title=?, authors=?, year=?, journal=?, doi=?, abstract=? WHERE id=?",
+                      (title, meta.get("authors") or "", meta.get("year") or "",
+                       meta.get("journal") or "", meta.get("doi") or "",
+                       meta.get("abstract") or "", paper_id))
+        scheduler.enqueue(u["id"], "parse", paper_id, {"tier": "standard", "url": url},
+                          priority="interactive")
+        out.append({"ident": ident, "status": "queued", "paper_id": paper_id, "metadata": meta})
+    return {"results": out}
+
+
+# ---------------- 命令标签（zotero-gpt 式：问答框上方一键快捷指令） ----------------
+@app.get("/api/cmdtags")
+def get_cmdtags(request: Request):
+    u = require(request)
+    row = db.one("SELECT value FROM settings WHERE key=?", (f"cmdtags:{u['id']}",))
+    try:
+        tags = json.loads(row["value"]) if row else []
+    except Exception:  # noqa: BLE001
+        tags = []
+    return {"tags": [t for t in tags if isinstance(t, dict) and t.get("label")][:20]}
+
+
+@app.put("/api/cmdtags")
+async def set_cmdtags(request: Request):
+    u = require(request)
+    body = await request.json()
+    tags = [t for t in (body.get("tags") or [])[:20]
+            if isinstance(t, dict) and (t.get("label") or "").strip()]
+    for t in tags:
+        t["label"] = str(t["label"])[:20]
+        t["prompt"] = str(t.get("prompt") or "")[:2000]
+    with db.write() as c:
+        c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (f"cmdtags:{u['id']}", json.dumps(tags, ensure_ascii=False)))
+    return {"ok": True, "tags": tags}
+
+
+# ---------------- 选中文字翻译（阅读页浮条「翻译」用，单次 LLM 调用不落库） ----------------
+@app.post("/api/translate-selection")
+async def translate_selection(request: Request):
+    u = require(request)
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "text 为空")
+    if len(text) > 6000:
+        text = text[:6000]
+    from core.llm import LLMClient, resolve_llm
+    cfg = resolve_llm(u["id"], "chat")
+    client = LLMClient(cfg, user_id=u["id"], paper_id=body.get("paper_id"))
+    zh = bool(re.search(r"[一-鿿]", text))
+    direction = "译成英文，保留术语与公式" if zh else "翻译成中文，术语首次出现保留英文原文"
+    out = client.complete([
+        {"role": "system", "content":
+            f"你是学术翻译。{direction}。只输出译文，不要解释。"},
+        {"role": "user", "content": text},
+    ], max_tokens=3000)
+    return {"translation": out.strip()}
 
 
 @app.post("/api/papers/discover-import")

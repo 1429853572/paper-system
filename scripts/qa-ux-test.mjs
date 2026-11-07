@@ -1,0 +1,216 @@
+/**
+ * 阶段④问答/上传 UX 回归（jsdom 无头）
+ * 用法: node scripts/qa-ux-test.mjs
+ * 覆盖: 命令标签渲染与执行/长按编辑保存 / 选中浮条与译文卡 / ↑↓历史 / / 快选 / 标识符导入
+ */
+import { JSDOM } from 'jsdom';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const UI = path.join(ROOT, 'app', 'webui');
+const html = fs.readFileSync(path.join(UI, 'index.html'), 'utf8');
+const js = fs.readFileSync(path.join(UI, 'viewer.js'), 'utf8');
+
+const DATA = {
+  '/api/me': { id: 1, username: 'tester', role: 'admin', llm_configured: { chat: true, translate: true } },
+  '/api/presets': { questions: [] },
+  '/api/chat/sessions': { sessions: [] },
+  '/api/collections': { total: 1, collections: [{ id: 'c1', name: '默认文献库', parent_id: null, papers: 1, papers_total: 1 }] },
+  '/api/papers': { total: 1, papers: [{ id: 'p1', title: 'Test Paper', parse_status: 'parsed', visibility: 'shared', owner_id: 1, page_count: 10, file_size: 1024 }] },
+  '/api/papers/p1': {
+    paper: { id: 'p1', title: 'Test Paper', authors: 'A', year: '2025', journal: 'J', doi: '',
+             keywords: '[]', abstract: 'This paper studies testing.', parse_status: 'parsed',
+             visibility: 'shared', owner_id: 1, page_count: 10, file_size: 1024 },
+    blocks: [], total: 0, offset: 0, limit: 40,
+  },
+  '/api/papers/p1/bilingual': { pairs: [], versions: [] },
+  '/api/papers/p1/notes': { notes: {} },
+  '/api/papers/p1/assets': { figures: [], tables: [] },
+  '/api/papers/p1/references': { references: [] },
+  '/api/papers/p1/cite': { styles: {}, labels: {}, default: 'gbt7714' },
+  '/api/papers/p1/summary': { summary: null },
+  '/api/papers/p1/jobstate': { parse_status: 'parsed', parsing: false, translating: false, translated: false },
+  '/api/statuses': { statuses: {} },
+  '/api/batches': { batches: [] },
+  '/api/cmdtags': { tags: [{ id: 'c1', label: '📐 分析公式', prompt: '分析论文中的关键公式：{当前论文标题}' }] },
+  '/api/usage': { by_user: [], by_day: [] },
+  '/api/glossary': { terms: [] },
+  '/api/admin/users': { users: [] },
+  '/api/admin/pool': { enabled: false },
+};
+
+let chatCalls = [], tagSaves = [], identCalls = [], translateCalls = [];
+const dom = new JSDOM(html, { url: 'http://localhost:7861/', runScripts: 'outside-only', pretendToBeVisual: true });
+const { window } = dom;
+const errors = [];
+
+window.fetch = async (url, opts = {}) => {
+  const u = String(url).split('?')[0];
+  if (u === '/api/chat/stream') {
+    chatCalls.push(JSON.parse(opts.body || '{}'));
+    return { ok: true, status: 200, body: { getReader: () => ({ read: async () => ({ done: true }) }) } };
+  }
+  if (u === '/api/cmdtags' && opts.method === 'PUT') {
+    tagSaves.push(JSON.parse(opts.body || '{}'));
+    return { ok: true, status: 200, json: async () => ({ ok: true, tags: tagSaves.at(-1)?.tags || [] }) };
+  }
+  if (u === '/api/papers/import-identifier') {
+    identCalls.push(JSON.parse(opts.body || '{}'));
+    return { ok: true, status: 200, json: async () => ({ results: [
+      { ident: { kind: 'doi', value: '10.1/x' }, status: 'queued', paper_id: 'pnew' },
+      { ident: { kind: 'doi', value: '10.1/y' }, status: 'duplicate' }] }) };
+  }
+  if (u === '/api/translate-selection') {
+    translateCalls.push(JSON.parse(opts.body || '{}'));
+    return { ok: true, status: 200, json: async () => ({ translation: '这是译文。' }) };
+  }
+  const body = DATA[u] ?? {};
+  return { ok: true, status: 200, json: async () => body };
+};
+window.EventSource = class { constructor() { this.onmessage = null; } close() {} };
+window.alert = window.confirm = () => true;
+window.prompt = () => 'x';
+window.isSecureContext = false;
+window.scrollTo = () => {};
+window.matchMedia = window.matchMedia || (q => ({ matches: false, media: q, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }));
+window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+window.IntersectionObserver = class { constructor(cb) { this.cb = cb; } observe() {} unobserve() {} disconnect() {} };
+
+window.addEventListener('error', (e) => errors.push('window error: ' + e.message));
+process.on('unhandledRejection', (r) => {
+  const m = String(r?.message ?? r);
+  if (/pdf\.min\.mjs|Cannot find module/.test(m)) return;
+  if (/reading 'configured'/.test(m)) return;
+  errors.push('rejection: ' + m);
+});
+
+try {
+  window.eval(js + '\n;window.__T = { state, openPaper, sendQa, executeTag, renderCmdTags };');
+} catch (e) {
+  errors.push('eval: ' + e.stack.split('\n').slice(0, 3).join(' | '));
+}
+for (let i = 0; i < 40; i++) {
+  await new Promise((r) => setTimeout(r, 100));
+  if (window.__T?.state?.me) break;
+}
+await new Promise((r) => setTimeout(r, 250));
+
+const doc = window.document;
+const results = [];
+const ok = (name, cond, extra = '') => {
+  results.push(`${cond ? 'OK' : 'FAIL'} ${name}${extra ? ' — ' + extra : ''}`);
+  if (!cond) errors.push(`${name}${extra ? ': ' + extra : ''}`);
+};
+
+// 准备：打开论文 + 打开问答 dock
+await window.__T.openPaper('p1');
+await new Promise((r) => setTimeout(r, 150));
+doc.querySelector('#qa-open').click();
+await new Promise((r) => setTimeout(r, 250));
+window.__T.state.qaPapers.add('p1');
+window.__T.state.qaAllPapers = [{ id: 'p1', parse_status: 'parsed' }];
+
+// 1) 命令标签渲染
+const tags = [...doc.querySelectorAll('#cmdtags .cmdtag')];
+ok('命令标签 4 内置+1 自定义+＋', tags.length === 6, `实际 ${tags.length}`);
+ok('自定义标签渲染', tags.some(t => t.textContent.includes('分析公式')));
+
+// 2) 总结本篇（短按执行 → 发送）
+tags.find(t => t.textContent.includes('总结本篇')).dispatchEvent(new window.Event('mousedown'));
+tags.find(t => t.textContent.includes('总结本篇')).dispatchEvent(new window.Event('mouseup'));
+await new Promise((r) => setTimeout(r, 150));
+ok('总结本篇触发发送', chatCalls.length === 1 && chatCalls[0].question.includes('核心问题'),
+   chatCalls[0]?.question?.slice(0, 40));
+
+// 3) 解读选中：无选中 → 不发送
+window.__T.state._lastSelection = '';
+tags.find(t => t.textContent.includes('解读选中')).dispatchEvent(new window.Event('mousedown'));
+tags.find(t => t.textContent.includes('解读选中')).dispatchEvent(new window.Event('mouseup'));
+await new Promise((r) => setTimeout(r, 100));
+ok('无选中时解读不发送', chatCalls.length === 1);
+// 有选中 → 占位符替换后发送
+window.__T.state._lastSelection = 'the loss function converges';
+tags.find(t => t.textContent.includes('解读选中')).dispatchEvent(new window.Event('mousedown'));
+tags.find(t => t.textContent.includes('解读选中')).dispatchEvent(new window.Event('mouseup'));
+await new Promise((r) => setTimeout(r, 100));
+ok('解读选中占位符替换并发送', chatCalls.length === 2 &&
+   chatCalls[1].question.includes('the loss function converges'));
+
+// 4) 就选中提问 = 只预填
+tags.find(t => t.textContent.includes('就选中提问')).dispatchEvent(new window.Event('mousedown'));
+tags.find(t => t.textContent.includes('就选中提问')).dispatchEvent(new window.Event('mouseup'));
+await new Promise((r) => setTimeout(r, 100));
+ok('就选中提问只预填不发送', chatCalls.length === 2 &&
+   doc.querySelector('#qa-text').value.includes('我的问题：'));
+
+// 5) ↑↓ 历史
+doc.querySelector('#qa-text').value = '';
+window.__T.state.qaHistory = ['历史问题甲', '历史问题乙'];
+doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+ok('↑ 翻出最近历史', doc.querySelector('#qa-text').value === '历史问题甲');
+doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+ok('再 ↑ 到更早', doc.querySelector('#qa-text').value === '历史问题乙');
+doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+ok('↓ 回到较近', doc.querySelector('#qa-text').value === '历史问题甲');
+doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+ok('↓ 到底回草稿', doc.querySelector('#qa-text').value === '');
+
+// 6) / 快选面板
+doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', { key: '/', bubbles: true }));
+await new Promise((r) => setTimeout(r, 100));
+ok(' / 打开论文快选面板', !doc.querySelector('#qa-pick-panel').hidden);
+doc.querySelector('#qa-pick-panel').hidden = true;
+
+// 7) 新建标签（＋键直接打开编辑器）→ 保存走 PUT
+const addBtn = doc.querySelector('#cmdtag-add');
+addBtn.click();
+await new Promise((r) => setTimeout(r, 150));
+const dlg = [...doc.querySelectorAll('.ui-pop')].at(-1);
+ok('长按打开标签编辑器', !!dlg && !!dlg.querySelector('#tag-prompt'));
+if (dlg) {
+  dlg.querySelector('#tag-label').value = '🧪 新标签';
+  dlg.querySelector('#tag-prompt').value = '测试 {选中文字}';
+  dlg.querySelector('[data-ok]').click();
+  await new Promise((r) => setTimeout(r, 150));
+  ok('保存走 PUT /api/cmdtags', tagSaves.length === 1 &&
+     tagSaves[0].tags.some(t => t.label === '🧪 新标签'));
+  ok('新标签出现在标签排', [...doc.querySelectorAll('#cmdtags .cmdtag')]
+     .some(t => t.textContent.includes('新标签')));
+}
+
+// 8) 选中浮条：模拟 mouseup + 选区
+const fakeNode = { parentElement: { closest: () => ({}) } };
+window.getSelection = () => ({
+  toString: () => 'a selected passage about gaussians',
+  anchorNode: fakeNode,
+  getRangeAt: () => ({ getBoundingClientRect: () => ({ top: 120, left: 120 }) }),
+});
+doc.body.dispatchEvent(new window.Event('mouseup', { bubbles: true }));
+await new Promise((r) => setTimeout(r, 100));
+const selBar = doc.querySelector('#sel-bar');
+ok('选中浮条出现', !!selBar);
+ok('浮条三键', selBar && selBar.querySelectorAll('button').length === 3);
+selBar.querySelector('[data-a="translate"]').click();
+await new Promise((r) => setTimeout(r, 150));
+ok('翻译请求发出', translateCalls.length === 1 && translateCalls[0].text.includes('gaussians'));
+ok('译文卡显示', !!doc.querySelector('#sel-result') &&
+   doc.querySelector('#sel-result .sr-body').textContent.includes('译文'));
+
+// 9) 标识符导入
+doc.querySelector('#upload-arrow').click();
+doc.querySelector('#ident-input').value = '10.1234/abc\narXiv:2401.12345';
+doc.querySelector('#ident-btn').click();
+await new Promise((r) => setTimeout(r, 200));
+ok('标识符导入请求发出', identCalls.length === 1 &&
+   identCalls[0].text.includes('10.1234/abc'));
+ok('上传弹层关闭+列表刷新', doc.querySelector('#upload-pop').hidden);
+
+console.log(results.join('\n'));
+if (errors.length) {
+  console.error('\n❌ 失败:\n' + errors.join('\n'));
+  process.exit(1);
+}
+console.log('\n✅ 全部通过');
+process.exit(0);
