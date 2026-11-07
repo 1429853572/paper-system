@@ -195,25 +195,29 @@ if (head) {
   ok('再点收起', doc.querySelector('[data-jobs="bt1"]').hidden);
 }
 
-// 6) 批量条新按钮
-ok('#batch-reparse 存在', !!doc.querySelector('#batch-reparse'));
-ok('#batch-tocenter 存在', !!doc.querySelector('#batch-tocenter'));
-// 带勾选进批量中心
-doc.querySelector('#sel-toggle').click();          // 进选择模式
-doc.querySelectorAll('.paper-item')[0]?.click();   // 勾第一篇（打开 paper 或 toggle——selectMode 下 toggle）
-await new Promise((r) => setTimeout(r, 100));
-const toCenter = doc.querySelector('#batch-tocenter');
-if (toCenter) {
-  toCenter.click();
+// 6) 批量选择主入口在文库管理页：勾选 → 批量中心 »（耦合流）
+window.__T.state.libLevel = 2;   // 进第二层（库内论文表），第一层是库列表
+window.__T.state.libSel = '';
+window.__T.switchPage('collections');
+await new Promise((r) => setTimeout(r, 300));
+const libCk = doc.querySelector('.lib-ck');
+ok('文库页论文复选框存在', !!libCk);
+if (libCk) {
+  libCk.checked = true;
+  window.libCk(libCk.dataset.cid);
+  await new Promise((r) => setTimeout(r, 80));
+  ok('勾选同步 state.selected', window.__T.state.selected.has(libCk.dataset.pid));
+  window.libToBatchCenter(libCk.dataset.cid);
   await new Promise((r) => setTimeout(r, 400));
   ok('批量中心按钮切页', doc.querySelector('#page-batch').style.display !== 'none');
-  // preset 圈定（若选择模式勾选成功，计数≥1）
   const cnt = doc.querySelector('#bp-count')?.textContent || '';
-  ok('preset 圈定生效', /1 篇|0 篇/.test(cnt), cnt);
+  ok('preset 圈定生效', /1 篇/.test(cnt), cnt);
+  window.__T.state.selected.clear();
 }
 
 // 6.5) 自由勾选面板：分页 / 复选 / 全选本页 / 搜索
 window.__T.switchPage('batch');
+window.__T.state.batchSel = new Set();   // 清掉步骤6 preset 残留，计数从零起算
 await new Promise((r) => setTimeout(r, 300));
 doc.querySelector('#bp-pick-toggle').click();
 await new Promise((r) => setTimeout(r, 250));

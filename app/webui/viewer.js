@@ -350,10 +350,6 @@ function renderCollections() {
   $('#col-new-ok').onclick = createCol;
   $('#col-new-name').onkeydown = e => { if (e.key === 'Enter') createCol(); if (e.key === 'Escape') $('#col-new-form').hidden = true; };
   $('#col-new-cancel').onclick = () => { $('#col-new-form').hidden = true; };
-  // 批量移动下拉（树形缩进标签）
-  $('#batch-move').innerHTML = '<option value="">移入…</option>' +
-    nodes.map(c => `<option value="${c.id}">${'　'.repeat(treeDepth(c.id))}${esc(c.name)}</option>`).join('') +
-    '<option value="__none__">未分库</option>';
 }
 function treeDepth(cid) {
   let d = 0, cur = state.collections.find(c => c.id === cid);
@@ -467,7 +463,6 @@ function renderPapers() {
       ? `<div class="up-bar parse"><i style="width:${Math.min(100, Math.round(100 * pr.done / pr.total))}%"></i></div>` : '';
     return `
     <div class="paper-item ${state.current?.id === p.id ? 'sel' : ''}" data-id="${p.id}">
-      ${state.selectMode ? `<input type="checkbox" ${state.selected.has(p.id) ? 'checked' : ''}>` : ''}
       <div class="info">
         <div class="name">${esc(p.title || p.id)}</div>
         <div class="meta">${statusBadge(p)}
@@ -485,10 +480,8 @@ function renderPapers() {
     const id = item.dataset.id;
     if (!id) return;   // 上传占位行无 paper id（由下方 up-act 接管）
     item.onclick = e => {
-      if (e.target.type === 'checkbox') { toggleSelect(id, e.target.checked); return; }
       if (e.target.closest?.('.pi-del')) { quickDelete(id, e.target.closest('.pi-del')); return; }   // closest：按钮内嵌 SVG 图标，e.target 常是 svg/path
-      if (state.selectMode) { toggleSelect(id, !state.selected.has(id)); return; }
-      openPaper(id);   // 普通模式：单击任意位置直接打开
+      openPaper(id);   // 单击任意位置直接打开（批量选择在文库管理页）
     };
   });
   // 上传占位行：重试 / 移除
@@ -501,10 +494,6 @@ function renderPapers() {
     state.uploads.delete(name);
     uploadFiles([u.file], u.cid);   // 重试保留原目标库
   });
-}
-function toggleSelect(id, on) {
-  on ? state.selected.add(id) : state.selected.delete(id);
-  $('#batch-bar').classList.toggle('show', state.selectMode && state.selected.size > 0);
 }
 
 /* 上传：入口是工具条图标 + 直接把文件拖到论文列表区（不再有独立大拖放框） */
@@ -660,7 +649,6 @@ async function uploadFiles(files, targetCid) {
 }
 
 /* 多选模式与批量操作 */
-state.selectMode = false;
 /* ---- 筛选与排序菜单（▾）---- */
 const FILTERS = [['', '全部'], ['parsed', '已解析'], ['parsing', '解析中'], ['failed', '失败'], ['private', '仅私人']];
 const SORTS = [['recent', '最近更新'], ['title', '标题'], ['pages', '页数'], ['size', '文件大小']];
@@ -763,59 +751,8 @@ $('#side-expand').onclick = () => {
 };
 applySidebarCollapse();
 
-const _toggleSelectMode = () => {
-  state.selectMode = !state.selectMode;
-  ['#sel-toggle', '#sel-toggle2'].forEach(sel => {
-    const b = $(sel); if (!b) return;
-    b.classList.toggle('has-val', state.selectMode);
-    b.classList.toggle('primary', state.selectMode);
-    b.title = state.selectMode ? '退出批量选择' : '批量选择';
-  });
-  if (!state.selectMode) { state.selected.clear(); $('#batch-bar').classList.remove('show'); }
-  renderPapers();
-};
-$('#sel-toggle')?.addEventListener('click', _toggleSelectMode);
-$('#sel-toggle2')?.addEventListener('click', _toggleSelectMode);
-$('#batch-cancel').onclick = () => {
-  state.selected.clear(); $('#batch-bar').classList.remove('show');
-  state.selectMode = false; const sb = $('#sel-toggle'); sb.classList.remove('has-val'); sb.title = '批量选择';
-  renderPapers();
-};
-$('#batch-translate').onclick = async () => {
-  await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [...state.selected]})});
-  toast(`已加入翻译队列（${state.selected.size} 篇）`); $('#batch-cancel').click();
-};
-$('#batch-delete').onclick = async e => {
-  if (!(await uiConfirm(`删除选中的 ${state.selected.size} 篇？（进回收站，${state.health.trash_days || 30} 天内可恢复）`,
-                         {title: '批量删除', anchor: e?.currentTarget}))) return;
-  await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: [...state.selected]})});
-  toast(`已移入回收站 ${state.selected.size} 篇`);
-  state.selected.clear(); $('#batch-bar').classList.remove('show');
-  await refreshLib();
-};
-$('#batch-reparse').onclick = async e => {
-  if (!state.selected.size) return;
-  if (!(await uiConfirm(`重新解析选中的 ${state.selected.size} 篇？（仅自己上传的会执行；译文与旧版本的对应关系将作废）`,
-                        {title: '批量重解析', anchor: e?.currentTarget}))) return;
-  try {
-    const d = await api('/api/batch/parse', {method: 'POST', body: JSON.stringify({paper_ids: [...state.selected]})});
-    toast(`已入队 ${d.queued.length} 篇${d.skipped.length ? `，跳过 ${d.skipped.length} 篇（非本人上传）` : ''}`);
-    $('#batch-cancel').click();
-  } catch (err) { toast('批量重解析失败: ' + err.message); }
-};
-$('#batch-tocenter').onclick = () => {
-  state._batchPreset = new Set(state.selected);   // 带勾选进批量中心
-  switchPage('batch');
-};
-$('#batch-move').onchange = async e => {
-  if (!state.selected.size) return;
-  const v = e.target.value;
-  if (!v) return;
-  const cid = v === '__none__' ? null : v;
-  for (const id of state.selected) await api('/api/papers/' + id, {method: 'PATCH', body: JSON.stringify({collection_id: cid})});
-  toast(`已移动 ${state.selected.size} 篇`);
-  e.target.value = ''; $('#batch-cancel').click(); await refreshLib();
-};
+/* 批量选择已收敛到「文库管理」页（勾选 → 完整批量条）与「批量中心」页；
+   侧栏回归纯导航。state.selected 仍由文库页复选框维护（全站共享）。 */
 
 /* 搜索 + 快捷范围 chips */
 let _libSearchTimer = 0;

@@ -53,7 +53,7 @@
         <div class="tp-item" data-f="failed">失败</div>
         <div class="tp-item" data-f="private">仅私人</div>
       </div>
-      <button class="tool-arrow" id="sel-toggle" title="批量选择">
+      <button class="tool-arrow" id="sel-hint" title="批量选择在「文库管理」页：勾选论文 → 批量条操作" style="opacity:.45;cursor:help">
         <svg class="ic" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none">
           <path d="M2.2 4.3l1.5 1.5 2.7-3"/>
           <path d="M2.2 11.3l1.5 1.5 2.7-3"/>
@@ -99,14 +99,6 @@
       </div>
       <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
     </div>
-    <div class="batch-bar" id="batch-bar">
-      <button class="btn small primary" id="batch-translate">批量翻译</button>
-      <button class="btn small" id="batch-reparse" title="重新提取全文（仅自己上传的可执行）">重解析</button>
-      <button class="btn small danger" id="batch-delete">删除</button>
-      <select id="batch-move" style="width:auto; font-size:12px"><option value="">移入…</option></select>
-      <button class="btn small" id="batch-tocenter" title="带勾选进入批量中心（导读/元数据/BibTeX/综述）">批量中心 »</button>
-      <button class="btn small" id="batch-cancel">取消</button>
-    </div>
     <div class="paper-list" id="paper-list"></div>
     <div class="sidebar-foot">
       <button class="btn small primary" id="upload-arrow" title="上传文献（也可直接把文件拖到列表区）">
@@ -114,11 +106,7 @@
         上传
       </button>
       <span class="spacer"></span>
-      <button class="btn small" id="sel-toggle2" title="批量选择（也可直接在条目上勾选）">
-        <svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M2.2 4.3l1.5 1.5 2.7-3"/><path d="M2.2 11.3l1.5 1.5 2.7-3"/><path d="M9.2 4.4h4.6M9.2 11.6h4.6"/>
-        </svg>
-      </button>
+      <button class="btn small" id="lib-link" title="文库管理：批量选择与批量操作的主入口" onclick="switchPage('collections')">📚 文库</button>
     </div>
   </aside>
   <div class="side-rail" id="side-rail" hidden><button id="side-expand" title="展开侧栏（文库）" aria-label="展开侧栏"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.5 4l4 4-4 4M4.5 4l4 4-4 4"/></svg></button></div>
