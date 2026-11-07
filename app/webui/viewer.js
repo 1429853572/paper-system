@@ -1438,6 +1438,7 @@ async function renderMeta() {
     api('/api/papers/' + pid), api(`/api/papers/${pid}/notes`), api(`/api/papers/${pid}/references`),
     api(`/api/papers/${pid}/cite`)
   ]);
+  if (state.view !== 'meta' || state.current?.id !== pid) return;   // 用户已切走：丢弃迟到渲染，否则文献信息的导出条/重解析会覆盖图表等新视图
   state._cite = {...cite, paper_id: pid};
   const paper = d.paper;
   state._refs = refs.references;
@@ -2492,6 +2493,7 @@ async function renderAssets() {
   // 原先对 const 解构变量重新赋值直接 TypeError，图表页签必崩）
   const figures = rawFigures.filter(f => f.image_path);
   const tables = rawTables.filter(t => (t.html && t.html.trim()) || t.bbox);
+  if (state.view !== 'assets' || state.current?.id !== pid) return;   // 用户已切走：丢弃迟到渲染
   setTimeout(() => {   // 兜底：裁剪失败且无兜底内容的卡片隐藏
     $$('.asset', $('#content-view')).forEach(a => {
       const hasImg = [...a.querySelectorAll('img')].some(i => i.naturalWidth > 0);
