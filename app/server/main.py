@@ -1097,28 +1097,21 @@ def _assert_public_url(url: str) -> None:
 
 @app.post("/api/papers/import-url")
 async def import_url(request: Request):
-    """URL 直接导入（MinerU 服务端抓取；支持 pdf/arxiv 直链等）."""
+    """URL 直接导入：先本地落盘（PDF 预览/页数可用），失败退回 MinerU 代抓。"""
     u = require(request)
     body = await request.json()
     url = (body.get("url") or "").strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "无效 URL")
     _assert_public_url(url)
-    name = Path(url.split("?")[0]).name or "document.pdf"
-    if "." not in name:
-        name += ".pdf"
-    file_hash = "url:" + ingest.sha256_bytes(url.encode())
-    exist = db.one("SELECT id FROM papers WHERE file_hash=? AND deleted_at IS NULL", (file_hash,))
-    if exist:
-        return {"paper_id": exist["id"], "status": "duplicate"}
-    paper_id, _ = ingest.create_paper(u["id"], file_hash, 0, 0,
-                                      body.get("visibility", "shared"), name)
-    cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
-    with db.write() as c:
-        c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
-    scheduler.enqueue(u["id"], "parse", paper_id, {"tier": "standard", "url": url},
-                      priority="interactive")
-    return {"paper_id": paper_id, "status": "queued"}
+    from core.urlimport import import_paper_from_url
+    r = import_paper_from_url(
+        u["id"], url,
+        visibility=body.get("visibility", "shared"),
+        collection_id=body.get("collection_id") or get_or_create_default_collection(u["id"]),
+        priority="interactive",
+        is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"]))
+    return {"paper_id": r["paper_id"], "status": r["status"]}
 
 
 _status_cache: dict[str, tuple[float, Any]] = {}
@@ -2263,27 +2256,18 @@ async def import_identifier(request: Request):
         except HTTPException:
             out.append({"ident": ident, "status": "no_pdf", "metadata": meta})
             continue
-        file_hash = "url:" + ingest.sha256_bytes(url.encode())
-        exist = db.one("SELECT id FROM papers WHERE file_hash=? AND deleted_at IS NULL", (file_hash,))
-        if exist:
-            out.append({"ident": ident, "status": "duplicate", "paper_id": exist["id"],
-                        "metadata": meta})
-            continue
-        name = Path(url.split("?")[0]).name or "document.pdf"
-        if "." not in name:
-            name += ".pdf"
-        paper_id, _ = ingest.create_paper(u["id"], file_hash, 0, 0,
-                                          body.get("visibility", "shared"), name)
-        cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
-        with db.write() as c:
-            c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
-            c.execute("UPDATE papers SET title=?, authors=?, year=?, journal=?, doi=?, abstract=? WHERE id=?",
-                      (title, meta.get("authors") or "", meta.get("year") or "",
-                       meta.get("journal") or "", meta.get("doi") or "",
-                       meta.get("abstract") or "", paper_id))
-        scheduler.enqueue(u["id"], "parse", paper_id, {"tier": "standard", "url": url},
-                          priority="interactive")
-        out.append({"ident": ident, "status": "queued", "paper_id": paper_id, "metadata": meta})
+        from core.urlimport import import_paper_from_url
+        r = import_paper_from_url(
+            u["id"], url,
+            visibility=body.get("visibility", "shared"),
+            collection_id=body.get("collection_id") or get_or_create_default_collection(u["id"]),
+            title=title,
+            meta={"authors": meta.get("authors"), "year": meta.get("year"),
+                  "journal": meta.get("journal"), "doi": meta.get("doi"),
+                  "abstract": meta.get("abstract")},
+            is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"]))
+        out.append({"ident": ident, "status": r["status"], "paper_id": r["paper_id"],
+                    "metadata": meta})
     return {"results": out}
 
 
@@ -2375,27 +2359,18 @@ async def discover_import(request: Request):
         except HTTPException:
             out.append({"title": title, "status": "no_pdf"})
             continue
-        file_hash = "url:" + ingest.sha256_bytes(url.encode())
-        exist = db.one("SELECT id FROM papers WHERE file_hash=? AND deleted_at IS NULL", (file_hash,))
-        if exist:
-            out.append({"title": title, "status": "duplicate", "paper_id": exist["id"]})
-            continue
-        name = Path(url.split("?")[0]).name or "document.pdf"
-        if "." not in name:
-            name += ".pdf"
-        paper_id, _ = ingest.create_paper(u["id"], file_hash, 0, 0,
-                                          body.get("visibility", "shared"), name)
-        cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
-        with db.write() as c:
-            c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
-            # 元数据先行：S2 已给全，MinerU 解析完成后的标题提取会再校准一次
-            c.execute("UPDATE papers SET title=?, authors=?, year=?, journal=?, doi=? WHERE id=?",
-                      (title, it.get("authors") or "", it.get("year") or "",
-                       it.get("venue") or "", it.get("doi") or "", paper_id))
-        scheduler.enqueue(u["id"], "parse", paper_id, {"tier": "standard", "url": url},
-                          priority="interactive")
-        out.append({"title": title, "status": "queued", "paper_id": paper_id})
-        imported += 1
+        from core.urlimport import import_paper_from_url
+        r = import_paper_from_url(
+            u["id"], url,
+            visibility=body.get("visibility", "shared"),
+            collection_id=body.get("collection_id") or get_or_create_default_collection(u["id"]),
+            title=title,
+            meta={"authors": it.get("authors"), "year": it.get("year"),
+                  "journal": it.get("venue"), "doi": it.get("doi")},
+            is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"]))
+        out.append({"title": title, "status": r["status"], "paper_id": r["paper_id"]})
+        if r["status"] == "queued":
+            imported += 1
     if imported:
         audit(u["id"], "discover-import", f"{imported} 篇")
     return {"results": out}

@@ -100,30 +100,20 @@ def _execute(act: dict) -> dict:
             c.execute(f"UPDATE papers SET {sets} WHERE id=?", (*fields.values(), pid))
         return inverse
     if act["tool"] == "import_by_doi":
-        from . import identifier, ingest
+        from . import identifier
         meta = identifier.resolve_identifier("doi", act["args"]["doi"])
         url = meta.get("pdf_url") or ""
         if not url.startswith(("http://", "https://")):
             raise ValueError("该 DOI 无公开 PDF，导入中止")
-        exist = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL", (meta["doi"],))
-        if exist:
+        if db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL", (meta["doi"],)):
             raise ValueError("该 DOI 已在库中")
-        from pathlib import Path
-        name = Path(url.split("?")[0]).name or "document.pdf"
-        if "." not in name:
-            name += ".pdf"
-        paper_id, _ = ingest.create_paper(act["user_id"], "url:" + ingest.sha256_bytes(url.encode()),
-                                          0, 0, "shared", name)
-        with db.write() as c:
-            c.execute("UPDATE papers SET collection_id=? WHERE id=?",
-                      (ingest_default_collection(act["user_id"]), paper_id))
-            c.execute("UPDATE papers SET title=?, authors=?, year=?, journal=?, doi=?, abstract=? WHERE id=?",
-                      (meta["title"], meta["authors"], meta["year"], meta["journal"],
-                       meta["doi"], meta["abstract"], paper_id))
-        from .jobs import scheduler
-        scheduler.enqueue(act["user_id"], "parse", paper_id,
-                          {"tier": "standard", "url": url}, priority="background")
-        return {"tool": "import_by_doi", "paper_id": paper_id}
+        from .urlimport import import_paper_from_url
+        r = import_paper_from_url(act["user_id"], url, title=meta["title"],
+                                  collection_id=ingest_default_collection(act["user_id"]),
+                                  meta={"authors": meta.get("authors"), "year": meta.get("year"),
+                                        "journal": meta.get("journal"), "doi": meta.get("doi"),
+                                        "abstract": meta.get("abstract")})
+        return {"tool": "import_by_doi", "paper_id": r["paper_id"]}
     raise ValueError("未知动作类型")
 
 
