@@ -988,3 +988,12 @@ table.list input[type=checkbox] { width: auto; }
 /* 批次进度分组标题 */
 .bp-sec-title { font-size: var(--fs-xs); color: var(--muted); font-weight: 600;
                 padding: 6px 0 4px; letter-spacing: .02em; }
+
+/* ---- 我的综述列表 ---- */
+.syn-list-card { margin-bottom: 0; padding: 0; }
+.syn-list-card #syn-list { padding: 4px 16px 12px; }
+.syn-item { display: flex; align-items: center; gap: 10px; padding: 9px 4px;
+            border-bottom: 1px dashed var(--line-soft); }
+.syn-item:last-child { border-bottom: none; }
+.syn-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.syn-item-main b { font-size: var(--fs-sm); }

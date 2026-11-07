@@ -1560,6 +1560,13 @@ async function renderBatchPage() {
           </div>
         </div>
       </div>
+      <div class="card syn-list-card">
+        <div class="bp-head"><b>📑 我的综述</b>
+          <span class="muted" style="font-size:11px">历史报告永久保存——查看 / 导出 / 删除；进行中的显示实时进度</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="syn-refresh">${icon('retry')} 刷新</button></div>
+        <div id="syn-list"><p class="muted" style="padding:8px 16px">加载中…</p></div>
+      </div>
       <div class="card batch-prog">
         <div class="bp-head"><b>③ 批次进度</b>
           <span class="muted" style="font-size:11px">点击批次展开逐篇状态；失败项可单独重试</span></div>
@@ -1604,8 +1611,57 @@ async function renderBatchPage() {
   }
   loadBpPicker();          // 勾选面板常驻，进页即加载
   await renderBatchPanel();
+  renderSynList();
   updateBatchOpsState();
 }
+
+/* ---- 我的综述：历史报告列表（syntheses 表永久记录） ---- */
+async function renderSynList() {
+  const el = $('#syn-list');
+  if (!el) return;
+  let items;
+  try { items = (await api('/api/syntheses')).syntheses; }
+  catch (e) { el.innerHTML = `<p class="muted" style="padding:8px 16px">加载失败: ${esc(e.message)}</p>`; return; }
+  if (!items.length) {
+    el.innerHTML = '<p class="muted" style="padding:8px 16px">还没有综述——圈定 2 篇以上论文，点上方「📑 综述报告」发起</p>';
+    return;
+  }
+  el.innerHTML = items.map(s => {
+    const stTxt = { done: '完成', failed: '失败', running: '进行中' }[s.status] || s.status;
+    const cls = { done: 'ok', failed: 'err', running: 'run' }[s.status] || 'run';
+    const pct = s.progress_total ? Math.min(100, Math.round(100 * s.progress_done / s.progress_total)) : 0;
+    return `<div class="syn-item" data-sid="${esc(s.id)}">
+      <span class="badge ${cls}">${stTxt}</span>
+      <span class="syn-item-main">
+        <b>${esc(s.title)}</b>
+        <span class="muted" style="font-size:11px">${s.papers ?? ''} 篇 · ${esc(s.model || '')} · ${esc((s.updated_at || '').slice(5, 16))}</span>
+        ${s.status === 'running' ? `<div class="up-bar parse" style="max-width:280px"><i style="width:${pct}%"></i></div>` : ''}
+        ${s.status === 'failed' && s.error ? `<div class="bpanel-err">${esc(s.error.slice(0, 120))}</div>` : ''}
+      </span>
+      <span class="spacer"></span>
+      ${s.status === 'done' ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
+        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">⬇MD</button>
+        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">⬇CSV</button>` : ''}
+      <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
+    </div>`;
+  }).join('');
+}
+$('#page-batch').addEventListener('click', async e => {
+  if (e.target.closest('#syn-refresh')) { renderSynList(); return; }
+  const sv = e.target.closest('#syn-list [data-syn-view]');
+  if (sv) { showSynthesisReport(sv.dataset.synView); return; }
+  const sd = e.target.closest('#syn-list [data-syn-dl]');
+  if (sd) { location.href = `/api/syntheses/${encodeURIComponent(sd.dataset.synDl)}/export?fmt=${sd.dataset.fmt}`; return; }
+  const sdl = e.target.closest('#syn-list [data-syn-del]');
+  if (sdl) {
+    if (await uiConfirm('删除这篇综述？（报告与矩阵一并删除；进行中的任务同时取消）',
+                        {title: '删除综述', danger: true, anchor: sdl})) {
+      try { await api('/api/syntheses/' + encodeURIComponent(sdl.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
+      renderSynList();
+      renderBatchPanel();
+    }
+  }
+});
 
 function setBatchSel(ids, srcName) {
   state.batchSel = ids;
@@ -1967,7 +2023,7 @@ $('#page-batch').addEventListener('click', async e => {
 // 批量页可见时轮询进度（SSE 也会触发，双保险；面板不存在时静默跳过）
 setInterval(() => {
   const pg = $('#page-batch');
-  if (pg && pg.style.display !== 'none') renderBatchPanel();
+  if (pg && pg.style.display !== 'none') { renderBatchPanel(); renderSynList(); }
 }, 6000);
 
 let _batchSseAt = 0;
@@ -2115,6 +2171,7 @@ async function watchJobs() {
     if (ev.batch_id && $('#page-batch')?.style.display !== 'none' && Date.now() - _batchSseAt > 2000) {
       _batchSseAt = Date.now();
       renderBatchPanel();
+      renderSynList();
     }
     // 文库管理页打开时同步行内状态（批量导入时每块一事件，全量重建需节流）
     const cp = $('#page-collections');

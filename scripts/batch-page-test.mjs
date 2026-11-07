@@ -34,6 +34,10 @@ const DATA = {
     { batch_id: 'synb', job_type: 'synthesis', total: 1, done: 1, failed: 0, canceled: 0, active: 0,
       started_at: '2026-11-07 11:00:00', updated_at: '2026-11-07 11:09:00' },
   ] },
+  '/api/syntheses': { syntheses: [
+    { id: 's1', title: '文献综述 · 2 篇', status: 'done', papers: 2, model: 'test-model',
+      progress_done: 3, progress_total: 3, error: null,
+      created_at: '2026-11-07 11:00:00', updated_at: '2026-11-07 11:09:00' } ] },
   '/api/synthesize/estimate': { valid: 2, missing_summaries: 1, groups: 1, calls: 3, no_parse: [] },
   '/api/synthesize': { synthesis_id: 's1', batch_id: 'synb', estimate: { valid: 2, missing_summaries: 1, groups: 1, calls: 3 } },
   '/api/jobs': { jobs: [
@@ -251,6 +255,11 @@ ok('未圈定时操作卡置灰', [...doc.querySelectorAll('#page-batch .batch-c
 ok('综述卡排第一且主色高亮', doc.querySelector('.batch-card').dataset.act === 'review' &&
    doc.querySelector('.batch-card').classList.contains('primary'));
 ok('下一页可用（45 篇 → 3 页）', !doc.querySelector('#bpp-next').disabled);
+// 我的综述区块（历史报告常驻入口）
+const synItem = doc.querySelector('#syn-list .syn-item');
+ok('我的综述列表渲染', !!synItem && synItem.textContent.includes('文献综述 · 2 篇'));
+ok('综述历史操作键（查看/MD/CSV/删除）', !!synItem && !!synItem.querySelector('[data-syn-view]') &&
+   !!synItem.querySelector('[data-syn-dl][data-fmt="csv"]') && !!synItem.querySelector('[data-syn-del]'));
 ok('行显示所属库', doc.body.textContent.includes('test') &&
    doc.body.textContent.includes('默认文献库'));
 ok('库筛选下拉存在（全部库+2）', doc.querySelectorAll('#bpp-lib option').length === 3);
