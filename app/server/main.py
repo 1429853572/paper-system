@@ -2657,9 +2657,33 @@ def login_page():
     return FileResponse(WEBUI_DIR / "login.html")
 
 
+_ASSET_VER: list[tuple[float, str]] = [0.0, ""]
+
+
+def _asset_version() -> str:
+    """styles.css/viewer.js 内容指纹 → 资源链接 ?v=。改版即换 URL，杜绝
+    『换版瞬间新 JS + 旧 CSS』的浏览器缓存错配（布局重叠正是这么来的）。"""
+    import hashlib
+
+    sig = []
+    for name in ("styles.css", "viewer.js"):
+        p = WEBUI_DIR / name
+        sig.append(f"{name}:{p.stat().st_mtime_ns}:{p.stat().st_size}")
+    key = "|".join(sig)
+    if _ASSET_VER[1] != key:
+        h = hashlib.sha1(key.encode()).hexdigest()[:12]
+        _ASSET_VER[:] = [time.time(), h]
+    return _ASSET_VER[1]
+
+
 @app.get("/")
 def index():
-    return FileResponse(WEBUI_DIR / "index.html")
+    html = (WEBUI_DIR / "index.html").read_text(encoding="utf-8")
+    v = _asset_version()
+    html = html.replace("/static/styles.css", f"/static/styles.css?v={v}")
+    html = html.replace("/static/viewer.js", f"/static/viewer.js?v={v}")
+    from fastapi.responses import Response as _Resp
+    return _Resp(html, media_type="text/html")
 
 
 app.mount("/static", StaticFiles(directory=str(WEBUI_DIR)), name="static")
