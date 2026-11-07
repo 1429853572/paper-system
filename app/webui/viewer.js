@@ -2460,7 +2460,8 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     <div class="qa-scope" id="qa-scope"></div>
     <div class="qa-picker">
       <div class="qa-pick-panel" id="qa-pick-panel" hidden>
-        <div class="qa-pick-head">添加参与问答的论文 <span class="muted">2 篇以上自动对比 · 已选 <b id="qa-pick-count">0</b></span></div>
+        <div class="qa-pick-head">添加参与问答的论文 <span class="muted">2 篇以上自动对比 · 已选 <b id="qa-pick-count">0</b></span>
+        <button class="btn small" id="qa-pick-close" title="收起（Esc / 点面板外也可关）">${icon('close')}</button></div>
         <div class="qa-pick-tools">
           <input id="qa-pick-filter" placeholder="搜索标题…" style="font-size:12px">
           <select id="qa-pick-sort" title="组内排序" style="font-size:12px;width:auto;flex:none">
@@ -2513,6 +2514,8 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     panel.hidden = !panel.hidden;
     if (!panel.hidden) { renderPickList($('#qa-pick-filter').value.toLowerCase()); $('#qa-pick-filter').focus(); }
   };
+  const pickClose = $('#qa-pick-close');
+  if (pickClose) pickClose.onclick = () => { $('#qa-pick-panel').hidden = true; };
   // 选文搜索接线在 populateQaPicker（200ms 防抖）
   // 历史会话面板（当前范围）
   const sessToggle = $('#qa-sess-toggle');
@@ -2753,6 +2756,17 @@ function renderQaScope() {
 }
 window.qaRemove = pid => { state.qaPapers.delete(pid); renderQaScope(); renderSumBubble(); renderQaTab(); };
 window.askPreset = q => { $('#qa-text').value = q; sendQa(); };
+/* 选文面板全局关闭途径：Esc / 点击面板外（✕ 在面板头；＋添加论文 chip 本身也是开关）。
+   模块级只挂一次；弹窗栈非空时让位（栈顶的 Esc 自己处理）。 */
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || _uiStack.length) return;
+  const p = $('#qa-pick-panel');
+  if (p && !p.hidden) { p.hidden = true; e.stopPropagation(); }
+});
+document.addEventListener('click', e => {
+  const p = $('#qa-pick-panel');
+  if (p && !p.hidden && !p.contains(e.target) && !e.target.closest('#qa-pick-toggle')) p.hidden = true;
+});
 /* 推荐问题：展开/收起（默认收起，避免长期占用阅读空间） */
 function togglePresetList(force) {
   const list = $('#preset-list'), tg = $('#preset-toggle');

@@ -157,11 +157,24 @@ ok('↓ 回到较近', doc.querySelector('#qa-text').value === '历史问题甲'
 doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
 ok('↓ 到底回草稿', doc.querySelector('#qa-text').value === '');
 
-// 6) / 快选面板
+// 6) / 快选面板 + 三条关闭路径（Esc / ✕ / 点面板外）
 doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', { key: '/', bubbles: true }));
 await new Promise((r) => setTimeout(r, 100));
 ok(' / 打开论文快选面板', !doc.querySelector('#qa-pick-panel').hidden);
-doc.querySelector('#qa-pick-panel').hidden = true;
+doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+await new Promise((r) => setTimeout(r, 50));
+ok('Esc 关闭选文面板', doc.querySelector('#qa-pick-panel').hidden);
+doc.querySelector('#qa-pick-toggle').click();
+await new Promise((r) => setTimeout(r, 80));
+ok('＋添加论文 chip 再开', !doc.querySelector('#qa-pick-panel').hidden);
+doc.querySelector('#qa-pick-close').click();
+await new Promise((r) => setTimeout(r, 50));
+ok('✕ 关闭选文面板', doc.querySelector('#qa-pick-panel').hidden);
+doc.querySelector('#qa-pick-toggle').click();
+await new Promise((r) => setTimeout(r, 80));
+doc.body.click();
+await new Promise((r) => setTimeout(r, 50));
+ok('点面板外关闭', doc.querySelector('#qa-pick-panel').hidden);
 
 // 7) 新建标签（＋键直接打开编辑器）→ 保存走 PUT
 const addBtn = doc.querySelector('#cmdtag-add');
