@@ -3493,13 +3493,23 @@ function libLevel1Html(d) {
       ? `<div class="lib-cards">${cards || '<p class="muted" style="padding:16px">还没有文献库——点上方「新建库」</p>'}</div>`
       : `<div class="card"><table class="list">
           <tr><th>库名</th><th>论文</th><th>子库</th><th></th></tr>
-          ${d.collections.map(c => `<tr class="lib-row" onclick="libOpenLib('${c.id}')">
-            <td>${'　'.repeat(treeDepth(c.id))}${icon('folder')} ${esc(c.name)}</td>
-            <td>${c.papers ?? 0}</td><td>${(children[c.id] || []).length}</td>
-            <td class="row-actions" onclick="event.stopPropagation()">
-              <button class="btn small" onclick="libUpload('${c.id}')">${icon('upload')}</button>
-              <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">${icon('edit')}</button>
-            </td></tr>`).join('') || '<tr><td colspan="4" class="muted">还没有库</td></tr>'}
+          ${(() => {
+            // 树序遍历（父库紧跟其子库，缩进才对得上层级）——原先按 API 返回顺序平铺，
+            // 子库排在前一个兄弟后面时会被误看成它的子库
+            const kidsOf = cid => (children[cid] || [])
+              .slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh'));
+            const ordered = [];
+            const walk = cid => { for (const k of kidsOf(cid)) { ordered.push(k); walk(k.id); } };
+            walk('root');
+            if (!ordered.length) return '<tr><td colspan="4" class="muted">还没有库</td></tr>';
+            return ordered.map(c => `<tr class="lib-row" onclick="libOpenLib('${c.id}')">
+              <td>${'　'.repeat(treeDepth(c.id))}${icon('folder')} ${esc(c.name)}</td>
+              <td>${c.papers ?? 0}</td><td>${(children[c.id] || []).length}</td>
+              <td class="row-actions" onclick="event.stopPropagation()">
+                <button class="btn small" onclick="libUpload('${c.id}')">${icon('upload')}</button>
+                <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">${icon('edit')}</button>
+              </td></tr>`).join('');
+          })()}
         </table></div>`}`;
 }
 
