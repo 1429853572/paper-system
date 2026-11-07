@@ -24,7 +24,8 @@ PROMPT_VERSION = "v1"
 _BATCH_TARGET_CHARS = 850
 _MAX_BATCH_BLOCKS = 8
 
-_SKIP_TYPES = {"equation", "image", "chart"}   # 原样保留不翻译的块
+_SKIP_TYPES = {"equation", "image", "chart", "page_number", "footer", "header"}   # 原样保留不翻译的块（页眉/页脚/页码是版面噪声，MinerU 官网阅读流同样不带）
+_CHROME_TYPES = {"page_number", "footer", "header"}   # 阅读流/双语对照不显示的纯版面块
 _REF_HEADING = re.compile(r"^\s*(references|bibliography|works cited|参考文献)\s*$", re.I)
 _FORMULA = re.compile(r"(\$\$?.*?\$\$|\\\(.*?\\\)|\\\[.*?\\\])", re.S)
 
@@ -231,6 +232,8 @@ def bilingual_pairs(paper_id: str, run_id: str, cache_key: str | None = None) ->
         "WHERE parse_run_id=? ORDER BY page_index, block_index",
         (run_id,),
     ):
+        if r["type"] in _CHROME_TYPES:
+            continue   # 页码/页眉/页脚：阅读流与导出物都不带（与原文视图口径一致）
         pairs.append({
             "block_id": r["block_id"], "type": r["type"], "section_path": r["section_path"],
             "page_index": r["page_index"], "en": r["text"], "zh": zh_map.get(r["block_id"], ""),
