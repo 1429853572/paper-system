@@ -139,7 +139,32 @@ else {
   const inReader = !!qaBtn.closest('#page-reader');
   results.push(`提问按钮位置: ${inTop ? '顶栏' : inReader ? '阅读页' : '未知'}`);
   if (inTop) errors.push('提问按钮应在阅读页内，不该在顶栏');
+  // 提问键 = 开关：阅读页内点一下关、再点一下开
+  qaBtn.click();
+  await new Promise((r) => setTimeout(r, 100));
+  const closedAfterFirst = window.__T.state.qaOpen === false;
+  qaBtn.click();
+  await new Promise((r) => setTimeout(r, 100));
+  const openAfterSecond = window.__T.state.qaOpen === true;
+  results.push(`提问键开关: 第一次关=${closedAfterFirst} 第二次开=${openAfterSecond}`);
+  if (!closedAfterFirst) errors.push('提问键第一次点击应关闭问答框');
+  if (!openAfterSecond) errors.push('提问键第二次点击应打开问答框');
 }
+
+// 2.6) 下载弹层：开启后应为 fixed 浮动定位（工具条 overflow 会裁掉 absolute 弹层）
+try {
+  const dlBtn = doc.querySelector('#download-btn');
+  const dlPop = doc.querySelector('#download-pop');
+  if (!dlBtn || !dlPop) errors.push('下载按钮/弹层缺失');
+  else {
+    dlBtn.click();
+    await new Promise((r) => setTimeout(r, 120));
+    const fixed = dlPop.style.position === 'fixed' && !dlPop.hidden;
+    results.push(`下载弹层浮动: ${fixed ? 'OK' : '未生效 position=' + dlPop.style.position}`);
+    if (!fixed) errors.push('下载弹层应 fixed 浮动定位');
+    dlBtn.click();
+  }
+} catch (e) { errors.push('下载弹层: ' + e.message); }
 
 // 3) 关键函数存在性
 // window 挂载的关键函数（内联 onclick 依赖它们）

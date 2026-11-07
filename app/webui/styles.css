@@ -818,7 +818,8 @@ table.list input[type=checkbox] { width: auto; }
               min-width: 240px; z-index: 70; }
 
 /* ===== 下载菜单 ===== */
-.dl-pop { position: absolute; top: 38px; right: 12px; z-index: 70; min-width: 210px; }
+.dl-pop { position: absolute; top: 38px; right: 12px; z-index: 70; min-width: 210px;
+          max-height: 70vh; overflow-y: auto; }   /* 开启时由 JS 改为 fixed 锚定按钮（逃出工具条裁剪） */
 .dl-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; padding: 6px 12px; }
 .dl-checks label { display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; }
 .dl-checks input { width: auto; }

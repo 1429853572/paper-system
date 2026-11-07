@@ -2014,7 +2014,14 @@ document.addEventListener('click', e => {
     sb.classList.remove('open');
   }
 });
-$('#qa-open').onclick = () => { switchPage('reader'); openQaDock(); };   // 顶栏「问答」= 唯一入口：关→打开，开→聚焦
+$('#qa-open').onclick = () => {
+  const wasReader = $('#page-reader') && $('#page-reader').style.display !== 'none';
+  switchPage('reader');
+  // 提问键 = 开关（tooltip 承诺的 显示/隐藏）：阅读页内点一下开、再点一下关；
+  // 从其他页过来则总是打开
+  if (wasReader && state.qaOpen) closeQa();
+  else openQaDock();
+};
 
 /* ---------------- 启动 ---------------- */
 async function boot() {
@@ -3342,11 +3349,13 @@ window.linkDiag = () => {
 };
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') { e.preventDefault(); linkDiag(); }
-  // 提问按钮 tooltip 承诺的快捷键：Ctrl+Q 开关问答框
+  // 提问按钮 tooltip 承诺的快捷键：Ctrl+Q 开关问答框（与提问键同语义）
   if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'q') {
     e.preventDefault();
+    const wasReader = $('#page-reader') && $('#page-reader').style.display !== 'none';
     switchPage('reader');
-    openQaDock();
+    if (wasReader && state.qaOpen) closeQa();
+    else openQaDock();
   }
 });
 // Esc 统一关闭所有浮层（原先只有灯箱响应 Esc）
@@ -3531,7 +3540,15 @@ window.setLibView = v => { state.libView = v; renderCollectionsPage(); };
   btn.addEventListener('click', e => {
     e.stopPropagation();
     pop.hidden = !pop.hidden;
-    if (!pop.hidden) loadDlOptions();
+    if (!pop.hidden) {
+      loadDlOptions();
+      // 浮动定位（fixed）：工具条 overflow-x:auto 会把 absolute 弹层裁掉——原先整框被剪到不可见
+      const r = btn.getBoundingClientRect();
+      pop.style.position = 'fixed';
+      pop.style.top = (r.bottom + 6) + 'px';
+      pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
+      pop.style.left = 'auto';
+    }
   });
   document.addEventListener('click', e => {
     if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) pop.hidden = true;
