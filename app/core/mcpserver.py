@@ -47,6 +47,21 @@ _WRITE_TOOLS = [
     ("undo_last_action", "撤销最近一次写操作", {"type": "object", "properties": {}}),
 ]
 
+# 中文文献采集（宿主浏览器服务；需该服务在运行）
+_ACQ_TOOLS = [
+    ("search_cnki", "检索中文文献（chinaxiv 预印本 / 知网），返回候选与下载直链", {
+        "type": "object", "properties": {
+            "query": {"type": "string", "description": "关键词（中文主题/标题）"},
+            "site": {"type": "string", "enum": ["chinaxiv", "cnki"], "default": "chinaxiv"},
+            "limit": {"type": "integer", "default": 10}},
+        "required": ["query"]}),
+    ("acquire_cnki", "把中文文献候选下载并入库（复用既有解析管线）", {
+        "type": "object", "properties": {
+            "items": {"type": "array", "description": "search_cnki 结果中的候选（含 pdf_url/title）",
+                      "items": {"type": "object"}}},
+        "required": ["items"]}),
+]
+
 
 def writes_enabled() -> bool:
     return "write" in (os.environ.get("PAPERSYS_MCP_TOOLSETS") or "read").lower()
@@ -223,6 +238,65 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
                 "message": "已生成待确认动作——请在 paper-system 网页「队列」浮层中确认执行"}
     if name == "undo_last_action":
         return undo_last(user_id)
+    if name == "search_cnki":
+        from . import acquire
+        q = (args.get("query") or "").strip()
+        if not q:
+            raise ValueError("query 必填")
+        site = (args.get("site") or "chinaxiv").strip()
+        try:
+            items = acquire.search(site, q, 1, min(int(args.get("limit") or 10), 30))
+        except ValueError as e:
+            raise ValueError(str(e)) from None
+        titles = {r[0].lower() for r in db.all("SELECT title FROM papers WHERE deleted_at IS NULL")}
+        for it in items:
+            it["in_library"] = (it.get("title") or "").strip().lower() in titles
+        return {"site": site, "count": len(items), "items": items}
+    if name == "acquire_cnki":
+        from . import acquire
+        picks = [x for x in (args.get("items") or []) if isinstance(x, dict)][:10]
+        if not picks:
+            raise ValueError("items 为空")
+        out, skipped = [], []
+        for it in picks:
+            url = (it.get("pdf_url") or "").strip()
+            title = (it.get("title") or "").strip() or "未命名"
+            if not url.startswith(("http://", "https://")):
+                skipped.append({"title": title, "reason": "无 pdf_url"})
+                continue
+            try:
+                data, _ct, fname = acquire.fetch(url)
+            except ValueError as e:
+                skipped.append({"title": title, "reason": str(e)[:120]})
+                continue
+            if not data or data[:5] != b"%PDF-":
+                skipped.append({"title": title, "reason": "非 PDF 内容"})
+                continue
+            from . import ingest
+            try:
+                pages, _k = ingest.preflight_doc(data, fname or "paper.pdf", is_admin=True, overrides={})
+            except Exception as e:  # noqa: BLE001
+                skipped.append({"title": title, "reason": str(e)[:100]})
+                continue
+            fh = ingest.sha256_bytes(data)
+            pid, dup = ingest.create_paper(user_id, fh, pages, len(data), "shared", fname or "paper.pdf")
+            if dup:
+                skipped.append({"title": title, "reason": "已在库中"})
+                continue
+            with db.write() as c:
+                c.execute("UPDATE papers SET title=COALESCE(NULLIF(title,''),?) WHERE id=?", (title, pid))
+                c.execute("UPDATE papers SET meta_source=COALESCE(meta_source,'acquire') WHERE id=?", (pid,))
+                if it.get("authors"):
+                    c.execute("UPDATE papers SET authors=? WHERE id=?", (it["authors"][:500], pid))
+                if it.get("year"):
+                    c.execute("UPDATE papers SET year=? WHERE id=?", (it["year"][:10], pid))
+            ingest.store_pdf(pid, data, "original.pdf")
+            from .jobs import scheduler
+            scheduler.enqueue(user_id, "parse", pid,
+                              {"tier": "standard", "original_name": fname or "paper.pdf",
+                               "source_url": url}, priority="background")
+            out.append({"title": title, "paper_id": pid})
+        return {"imported": out, "skipped": skipped}
     raise ValueError(f"未知工具: {name}")
 
 
@@ -249,6 +323,8 @@ def handle(user_id: int, payload: dict) -> dict:
         if method == "tools/list":
             tools = [{"name": n, "description": d, "inputSchema": s}
                      for n, d, s in _READ_TOOLS]
+            tools += [{"name": n, "description": d, "inputSchema": s}
+                      for n, d, s in _ACQ_TOOLS]          # 采集是写动作但走既有入库管线，不需确认卡
             if writes_enabled():
                 tools += [{"name": n, "description": d, "inputSchema": s}
                           for n, d, s in _WRITE_TOOLS]
@@ -257,6 +333,9 @@ def handle(user_id: int, payload: dict) -> dict:
             name = params.get("name") or ""
             if name in {n for n, _, _ in _WRITE_TOOLS} and not writes_enabled():
                 return err(-32601, "写工具未启用（设置 PAPERSYS_MCP_TOOLSETS=read,write）")
+            if name in {n for n, _, _ in _ACQ_TOOLS} and name == "acquire_cnki" \
+                    and not writes_enabled():
+                return err(-32601, "采集入库属写操作，请开启 PAPERSYS_MCP_TOOLSETS=read,write")
             result = run_tool(user_id, name, params.get("arguments") or {})
             return ok({"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]})
         return err(-32601, f"未知方法: {method}")

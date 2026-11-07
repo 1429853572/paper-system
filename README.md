@@ -26,6 +26,18 @@
 | 设置 | BYOK 配置（加密存储）、测试连接、解析过滤默认值 |
 | 回收站 | 软删除 30 天可恢复 |
 
+## 中文文献获取（三条路，按需选）
+
+| 路径 | 适用 | 前提 |
+|---|---|---|
+| **📥 采集**（批量中心） | 关键词检索 → 勾选 → 浏览器下载入库 | 宿主 `acquire-service`（Playwright + 宿主 Chrome） |
+| **📁 目录导入**（上传弹层） | 已下载到 `data/inbox/` 的整目录批量入库（PDF 直通、CAJ 自动转 PDF） | 无 |
+| **🔗 标识符导入** | 已知 DOI/arXiv/BibTeX | 无 |
+
+- 知网/预印本普遍软封（403/滑块验证码/CAJ 私有格式），**必须真实浏览器 + 人工过一次验证码**（Cookie 存 `~/.cnki_acquire_state.json` 复用）
+- 中文期刊在 CrossRef/Unpaywall 几乎无覆盖 → 现有英文链路对中文期刊无效，这是采集链路的意义
+- 采集入库的论文会记录 `meta_source`（来源站点）与作者/摘要/年份，来源可追溯
+
 ## MCP（让 ZCode / Claude 直连你的文献库）
 
 `.env` 的 `PAPERSYS_API_TOKEN` 即访问令牌，任意 MCP 客户端以 JSON-RPC POST `/api/mcp` 接入：
@@ -35,7 +47,8 @@
   "headers": {"Authorization": "Bearer <PAPERSYS_API_TOKEN>"}}}}
 ```
 
-- 读工具直接执行：`search_papers` / `read_paper` / `search_text` / `get_summary` / `cite`
+- 读工具直接执行：`search_papers` / `read_paper` / `search_text` / `get_summary` / `cite` / `search_cnki`（中文文献检索）
+- `acquire_cnki`（下载入库）属写操作，需开 `PAPERSYS_MCP_TOOLSETS=read,write`
 - 写工具默认关闭：`.env` 设 `PAPERSYS_MCP_TOOLSETS=read,write` 开放 `update_meta` / `import_by_doi` / `undo_last_action`——写动作生成待确认卡片，在网页「队列」浮层人工执行/丢弃，执行后可撤销（最近 10 条）
 
 ## 调度规则（GPU 共享）

@@ -112,3 +112,24 @@ bash scripts/setup-xinference.sh # 重载 embedding/rerank 模型
 | embedding 报错 | `curl localhost:9997/v1/models` 应列出 bge-m3 / bge-reranker-v2-m3；没有就跑 `bash scripts/setup-xinference.sh` |
 | 导出 PDF 失败 | `systemctl status papersystem-render`；存活 `curl localhost:8801/health`；鉴权 `curl -H "X-Render-Token: $(grep ^PAPERSYS_RENDER_TOKEN .env | cut -d= -f2)" -X POST localhost:8801/render -d '{\"html\":\"<p>t</p>\"}'` |
 | 翻译/问答 401 | 各用户设置页测试连接；公共池需 admin 开启 |
+
+
+## 宿主浏览器采集服务（中文文献获取）
+
+与 `render-service` 同构的第二个宿主服务：Playwright 驱动宿主 Chrome 访问知网/预印本
+（这些站点对纯 HTTP 软封，必须真实浏览器）。
+
+```bash
+# 1) 宿主装 playwright（复用系统 Chrome，不必再下 300MB Chromium）
+pip install playwright
+
+# 2) 起服务（token 与 render-service 同款，.env 的 PAPERSYS_ACQUIRE_TOKEN）
+python3 scripts/acquire-service.py --port 8802
+
+# 3) 容器侧联通检查
+curl -s http://127.0.0.1:8001/api/acquire/status
+```
+
+- 知网首次检索会遇滑块验证码：在有头模式人工过一次，Cookie 持久化到 `~/.cnki_acquire_state.json` 后复用
+- `install.sh` 会自动装 `papersystem-acquire` systemd 单元（宿主无 playwright 时跳过并提示）
+- 容器通过 `host.docker.internal:8802` 访问（compose 已配 extra_hosts 与 token 注入）
