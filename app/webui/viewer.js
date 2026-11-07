@@ -1544,7 +1544,14 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     <div class="qa-picker">
       <div class="qa-pick-panel" id="qa-pick-panel" hidden>
         <div class="qa-pick-head">添加参与问答的论文 <span class="muted">2 篇以上自动对比 · 已选 <b id="qa-pick-count">0</b></span></div>
-        <input id="qa-pick-filter" placeholder="搜索标题…" style="font-size:12px">
+        <div class="qa-pick-tools">
+          <input id="qa-pick-filter" placeholder="搜索标题…" style="font-size:12px">
+          <select id="qa-pick-sort" title="组内排序" style="font-size:12px;width:auto;flex:none">
+            <option value="recent">最近添加</option>
+            <option value="title">标题 A-Z</option>
+            <option value="year">年份（新→旧）</option>
+          </select>
+        </div>
         <div id="qa-pick-list"></div>
       </div>
     </div>
@@ -1587,8 +1594,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     panel.hidden = !panel.hidden;
     if (!panel.hidden) { renderPickList($('#qa-pick-filter').value.toLowerCase()); $('#qa-pick-filter').focus(); }
   };
-  const pickFilter = $('#qa-pick-filter');
-  if (pickFilter) pickFilter.oninput = e => renderPickList(e.target.value.toLowerCase());
+  // 选文搜索接线在 populateQaPicker（200ms 防抖）
   // 历史会话面板（当前范围）
   const sessToggle = $('#qa-sess-toggle');
   if (sessToggle) sessToggle.onclick = () => {
@@ -1818,6 +1824,26 @@ async function populateQaPicker() {
     state.qaAllPapers = d.papers;
   }
   if (!state.collections?.length) await loadCollections();   // 分组依赖文献库列表
+  // 选文面板状态：组折叠记忆 + 组内排序（持久化）
+  state.qaPickOpen = new Set(JSON.parse(localStorage.getItem('ps-pick-open') || '[]'));
+  state.qaPickSort = localStorage.getItem('ps-pick-sort') || 'recent';
+  const sortSel = $('#qa-pick-sort');
+  if (sortSel) {
+    sortSel.value = state.qaPickSort;
+    sortSel.onchange = () => {
+      state.qaPickSort = sortSel.value;
+      localStorage.setItem('ps-pick-sort', sortSel.value);
+      renderPickList($('#qa-pick-filter')?.value.toLowerCase() || '');
+    };
+  }
+  const fl = $('#qa-pick-filter');
+  if (fl) {
+    let t = 0;
+    fl.oninput = () => {   // 防抖：大库逐键全量重渲染会卡
+      clearTimeout(t);
+      t = setTimeout(() => renderPickList(fl.value.toLowerCase()), 200);
+    };
+  }
   const toggle = $('#qa-pick-toggle');
   if (!toggle) return;
   $('#qa-pick-count').textContent = state.qaPapers.size;
@@ -1830,29 +1856,51 @@ function renderPickList(filter) {
       ? `<span class="badge run">${p.parse_status === 'failed' ? '解析失败' : icon('clock', 12) + "解析中"}</span>` : '';
     return `<label class="qa-pick-item ${state.qaPapers.has(p.id) ? 'on' : ''}">
       <input type="checkbox" ${state.qaPapers.has(p.id) ? 'checked' : ''} data-id="${p.id}">
-      <span>${esc(p.title || p.id)}</span>${st}
+      <span class="qp-title">${esc(p.title || p.id)}</span>
+      ${p.year ? `<span class="qp-year">${esc(p.year)}</span>` : ''}${st}
     </label>`;};
-  // 按文献库分组（过滤时跨组匹配；空组隐藏）
+  // 按文献库分组；库多时默认折叠（展开状态记忆），搜索时自动全展开（跨组匹配要一眼可见）
   const papers = state.qaAllPapers || state.papers || [];   // boot 早期 qaAllPapers 可能未加载
   const match = p => !filter || (p.title || '').toLowerCase().includes(filter);
+  const sorters = {
+    recent: (a, b) => (b.created_at || '').localeCompare(a.created_at || ''),
+    title:  (a, b) => (a.title || '').localeCompare(b.title || '', 'zh'),
+    year:   (a, b) => (b.year || '').localeCompare(a.year || ''),
+  };
+  const sortFn = sorters[state.qaPickSort] || sorters.recent;
   const cols = [...(state.collections || [])].sort((a, b) =>
-    (b.name === '默认文献库') - (a.name === '默认文献库'));
+    (b.name === '默认文献库') - (a.name === '默认文献库') ||
+    (a.name || '').localeCompare(b.name || '', 'zh'));
   const groups = cols.map(c => ({
-    name: c.name, papers: papers.filter(p => p.collection_id === c.id && match(p)),
+    id: c.id, name: c.name, papers: papers.filter(p => p.collection_id === c.id && match(p)),
   }));
   const orphan = papers.filter(p => !p.collection_id && match(p));
-  if (orphan.length) groups.push({name: '未分库', papers: orphan});
+  if (orphan.length) groups.push({id: '__orphan', name: '未分库', papers: orphan});
+  groups.forEach(g => g.papers.sort(sortFn));
   const visible = groups.filter(g => g.papers.length);
   const matched = visible.reduce((s, g) => s + g.papers.length, 0);
+  const open = state.qaPickOpen;
+  // 单组不折叠（没意义）；搜索中全展开
+  const expandAll = !!filter || visible.length === 1;
   el.innerHTML = (matched
-    ? visible.map((g, i) => `
-      <div class="qa-pick-group" data-gi="${i}">
-        <div class="qa-pick-ghead" onclick="this.nextElementSibling.hidden=!this.nextElementSibling.hidden">
-          <span>${icon('folder')} ${esc(g.name)}</span><span class="muted" style="font-size:11px">${g.papers.length} 篇 ${icon('chevD')}</span>
+    ? visible.map(g => {
+        const isOpen = expandAll || open.has(g.id);
+        const selN = g.papers.filter(p => state.qaPapers.has(p.id)).length;
+        return `
+      <div class="qa-pick-group" data-g="${esc(g.id)}">
+        <div class="qa-pick-ghead" data-g="${esc(g.id)}">
+          <span>${icon('folder')} ${esc(g.name)}</span>
+          <span class="muted" style="font-size:11px">${selN ? `<b class="qp-sel">${selN} 已选</b> · ` : ''}${g.papers.length} 篇 <span class="qp-caret ${isOpen ? 'open' : ''}">${icon('chevD')}</span></span>
         </div>
-        <div class="qa-pick-gbody">${g.papers.map(item).join('')}</div>
-      </div>`).join('')
+        <div class="qa-pick-gbody" ${isOpen ? '' : 'hidden'}>${g.papers.map(item).join('')}</div>
+      </div>`;}).join('')
     : '<p class="muted" style="padding:8px">无匹配</p>');
+  $$('.qa-pick-ghead', el).forEach(h => h.onclick = () => {
+    const gid = h.dataset.g;
+    open.has(gid) ? open.delete(gid) : open.add(gid);
+    localStorage.setItem('ps-pick-open', JSON.stringify([...open]));
+    renderPickList($('#qa-pick-filter')?.value.toLowerCase() || '');
+  });
   const panelWasOpen = !$('#qa-pick-panel')?.hidden;
   const panelFilter = $('#qa-pick-filter')?.value.toLowerCase() || '';
   $$('.qa-pick-item input', el).forEach(cb => cb.onchange = () => {
