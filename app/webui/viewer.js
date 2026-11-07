@@ -285,7 +285,8 @@ function renderCollections() {
     e.stopPropagation();
     const cid = e.target.closest('.col-item').dataset.id;
     const name = state.collections.find(c => c.id === cid)?.name || '';
-    if (!(await uiConfirm(`删除文献库「${name}」？子库与论文保留`, {title: '删除文献库', anchor: e.currentTarget}))) return;
+    if (!(await uiConfirm(`删除文献库「${name}」？其子库与库内论文将一并移入回收站（30 天内可恢复）`,
+                           {title: '删除文献库', anchor: e.currentTarget}))) return;
     await api('/api/collections/' + cid, {method: 'DELETE'});
     if (state.currentCollection === cid) state.currentCollection = '';
     await refreshLib();
@@ -2935,7 +2936,16 @@ window.renameLib = async (cid, oldName) => {
   toast('已重命名'); await refreshLib();
 };
 window.delLib = async (cid, name) => {
-  if (!(await uiConfirm(`删除文献库「${name}」？库内论文保留（变为未分库）`, {title: '删除文献库'}))) return;
+  // 子树统计（子库数 + 论文数），确认框里交代清楚删除范围
+  const kids = state.collections || [];
+  const sub = cid2 => kids.filter(c => c.parent_id === cid2).map(c => c.id);
+  let libN = 0, paperN = 0;
+  const walk = id => { for (const k of sub(id)) { libN++; paperN += (kids.find(c => c.id === k)?.papers_total ?? 0); walk(k); } };
+  walk(cid);
+  paperN += (kids.find(c => c.id === cid)?.papers_total ?? 0);
+  const scope = `${libN ? `${libN} 个子库、` : ''}库内 ${paperN} 篇论文`;
+  if (!(await uiConfirm(`删除文献库「${name}」？${scope}将一并移入回收站（30 天内可恢复）`,
+                        {title: '删除文献库'}))) return;
   await api('/api/collections/' + cid, {method: 'DELETE'});
   toast('已删除'); await refreshLib();
 };

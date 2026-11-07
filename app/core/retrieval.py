@@ -282,7 +282,8 @@ def search(query: str, *, user_id: int, is_admin: bool,
         mat, ids = _load_matrix(
             scope_key,
             "SELECT c.id, c.embedding FROM chunks c JOIN papers p ON p.id=c.paper_id "
-            f"WHERE c.embedding IS NOT NULL{vis_clause.replace('visibility', 'p.visibility').replace('owner_id', 'p.owner_id')}{paper_clause}",
+            f"WHERE c.embedding IS NOT NULL AND p.deleted_at IS NULL"
+            f"{vis_clause.replace('visibility', 'p.visibility').replace('owner_id', 'p.owner_id')}{paper_clause}",
             (*vis_args, *paper_args),
         )
         if len(ids) and mat.shape[1] == len(qn):

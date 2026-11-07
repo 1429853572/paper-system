@@ -925,16 +925,54 @@ async def rename_collection(cid: str, request: Request):
     return {"ok": True}
 
 
+def _subtree_ids(cid: str) -> list[str]:
+    """库 + 全部后代子库（BFS）。"""
+    ids = [cid]
+    frontier = [cid]
+    while frontier:
+        ph = ",".join("?" * len(frontier))
+        rows = db.all(f"SELECT id FROM collections WHERE parent_id IN ({ph})", frontier)
+        frontier = [r["id"] for r in rows if r["id"] not in ids]
+        ids.extend(frontier)
+    return ids
+
+
 @app.delete("/api/collections/{cid}")
 def delete_collection(cid: str, request: Request):
+    """删除文献库（整个子树）；库内论文一并移入回收站（30 天可恢复）。
+
+    member 删含他人共享论文的库 → 403（共享论文的回收是 admin 权限）。
+    """
     u = require(request)
     row = db.one("SELECT owner_id FROM collections WHERE id=?", (cid,))
     if row is None or (row["owner_id"] != u["id"] and u["role"] != "admin"):
         raise HTTPException(404, "文献库不存在")
+    ids = _subtree_ids(cid)
+    ph = ",".join("?" * len(ids))
+    papers = db.all(
+        f"SELECT id, owner_id, visibility, title FROM papers "
+        f"WHERE collection_id IN ({ph}) AND deleted_at IS NULL", ids)
+    if u["role"] != "admin" and any(
+            p["visibility"] == "shared" and p["owner_id"] != u["id"] for p in papers):
+        raise HTTPException(403, "库内含他人共享的论文——整库删除（含论文入回收站）仅管理员可执行")
+    n = 0
+    for p in papers:
+        for j in db.all("SELECT * FROM jobs WHERE paper_id=? AND status IN ('queued','pending_gate','running')",
+                        (p["id"],)):
+            if j["remote_task_id"]:
+                mineru.cancel(j["remote_task_id"])
+            with db.write() as c:
+                c.execute("UPDATE jobs SET status='canceled' WHERE id=?", (j["id"],))
+        with db.write() as c:
+            c.execute("UPDATE papers SET deleted_at=datetime('now') WHERE id=?", (p["id"],))
+            c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (p["id"],))
+        audit(u["id"], "batch-delete", p["title"])
+        n += 1
     with db.write() as c:
-        c.execute("UPDATE papers SET collection_id=NULL WHERE collection_id=?", (cid,))
-        c.execute("DELETE FROM collections WHERE id=?", (cid,))
-    return {"ok": True}
+        c.execute(f"DELETE FROM collections WHERE id IN ({ph})", ids)
+    from core.retrieval import invalidate_vec_cache
+    invalidate_vec_cache()
+    return {"ok": True, "libs": len(ids), "trashed": n}
 
 
 @app.patch("/api/papers/{paper_id}")
