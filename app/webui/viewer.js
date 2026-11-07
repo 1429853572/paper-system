@@ -102,11 +102,39 @@ window.icon = (name, size = 14) =>
 async function pollHealth() {
   try {
     state.health = await api('/api/health');
-    const ok = state.health.db && state.health.ollama;
+    // 注意键名：/api/health 返回 db/mineru/ai（xinference 替换 ollama 后 ai 为检索服务总开关）
+    const ok = state.health.db && state.health.mineru && state.health.ai;
     $('#health-dot').className = 'health-dot ' + (ok ? 'ok' : 'bad');
-    $('#health-dot').title = `db:${state.health.db} mineru:${state.health.mineru} ollama:${state.health.ollama}`;
+    $('#health-dot').title = ok ? '服务正常（点击查看详情）' : '部分服务异常（点击查看详情）';
   } catch { $('#health-dot').className = 'health-dot bad'; }
+  renderHealthPop();
 }
+function renderHealthPop() {
+  const pop = $('#health-pop');
+  if (!pop || pop.hidden) return;
+  const h = state.health || {};
+  const row = (name, okv, extra = '') =>
+    `<div class="hp-row"><span class="hp-dot ${okv ? 'ok' : 'bad'}"></span>${name}` +
+    (extra ? ` <span class="muted" style="font-size:11px">${esc(extra)}</span>` : '') + `</div>`;
+  pop.innerHTML =
+    `<div class="hp-head">服务状态 <button class="btn small" id="hp-recheck">${icon('retry')} 重新检测</button></div>` +
+    row('数据库', h.db) +
+    row('解析服务（MinerU GPU）', h.mineru) +
+    row('语义检索（embedding/rerank）', h.ai, (h.models || []).join(' / ')) +
+    `<div class="muted" style="font-size:11px;margin-top:6px">检测于 ${new Date().toLocaleTimeString()}</div>`;
+  $('#hp-recheck').onclick = e => { e.stopPropagation(); pop.hidden = true; pollHealth(); };
+}
+$('#health-dot').onclick = e => {
+  e.stopPropagation();
+  const pop = $('#health-pop');
+  if (!pop) return;
+  pop.hidden = !pop.hidden;
+  renderHealthPop();
+};
+document.addEventListener('click', e => {
+  const pop = $('#health-pop');
+  if (pop && !pop.hidden && !pop.contains(e.target) && e.target.id !== 'health-dot') pop.hidden = true;
+});
 setInterval(pollHealth, 20000);
 
 /* ---------------- 文献库 ---------------- */
@@ -3194,7 +3222,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   let closed = false;
   for (const sel of ['#acc-pop', '#filter-pop', '#upload-pop', '#download-pop',
-                     '#queue-pop', '#qa-picker-pop', '#col-new-form']) {
+                     '#queue-pop', '#qa-picker-pop', '#col-new-form', '#health-pop']) {
     const el = document.querySelector(sel);
     if (el && !el.hidden) { el.hidden = true; closed = true; }
   }

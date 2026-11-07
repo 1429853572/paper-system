@@ -111,8 +111,17 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
 /* ---------- 顶栏 ---------- */
 .topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .topbar .title { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.health-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.health-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; cursor: pointer; flex: none; }
 .health-dot.ok { background: var(--ok); } .health-dot.bad { background: var(--err); }
+/* 健康状态弹层（点击侧栏标题旁的小圆点） */
+.sidebar header { position: relative; }
+.health-pop { position: absolute; top: 42px; left: 12px; z-index: 60; min-width: 250px;
+              background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
+              box-shadow: 0 10px 30px rgba(0,0,0,.14); padding: 10px 12px; font-size: var(--fs-sm); }
+.hp-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; margin-bottom: 4px; }
+.hp-row { display: flex; align-items: center; gap: 7px; padding: 3px 0; }
+.hp-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.hp-dot.ok { background: var(--ok); } .hp-dot.bad { background: var(--err); }
 .topnav { display: flex; gap: 2px; }
 .topnav button { border: none; background: none; padding: 7px 12px; border-radius: var(--r-sm); color: var(--muted); }
 .topnav button.on { background: var(--tint-primary); color: var(--primary); }
