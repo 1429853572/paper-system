@@ -1789,11 +1789,13 @@ def paper_cite(paper_id: str, request: Request):
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
-    from core.cite import STYLES, DEFAULT_STYLE, all_styles
+    from core.cite import STYLES, DEFAULT_STYLE, all_styles, csl_json, CSL_STYLES
     return {
-        "styles": all_styles(dict(p)),
+        "styles": all_styles(dict(p)),          # 旧内置渲染：bibtex 用；CSL 失败时兜底
         "labels": {k: v for k, v in STYLES},
         "default": DEFAULT_STYLE,
+        "csl_json": csl_json(dict(p)),          # citeproc-js 输入
+        "csl_list": CSL_STYLES,                 # [(style_id, label)]
     }
 
 

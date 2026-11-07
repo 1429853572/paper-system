@@ -180,6 +180,34 @@ ensure_vendor() {
        KaTeX   ${KATEX_VER}  → $VENDOR/katex/   (dist/katex.mjs, dist/katex.min.css, dist/fonts/*.woff2)"
     fi
 }
+
+ensure_citeproc() {
+  # 引用样式引擎（citeproc-js + CSL 官方样式）：仓库 vendor/ 已自带，这里只做缺失修复
+  local V="app/webui/vendor/citeproc" C="app/webui/vendor/csl" VER="2.4.63"
+  local STYLES=(china-national-standard-gb-t-7714-2015-numeric china-national-standard-gb-t-7714-2015-author-date
+                apa modern-language-association chicago-author-date ieee nature science
+                american-chemical-society american-medical-association elsevier-harvard springer-basic-author-date)
+  if [[ ! -s "$V/citeproc.js" ]]; then
+    mkdir -p "$V"
+    curl -fsSL --retry 2 -o /tmp/citeproc.tgz "https://registry.npmmirror.com/citeproc/-/citeproc-${VER}.tgz" \
+      && { { echo '/* citeproc-js UMD 壳（npm citeproc@'"${VER}"'）*/';
+             echo '(function (global) { var module = { exports: {} }; var exports = module.exports;';
+             tar -xOzf /tmp/citeproc.tgz package/citeproc_commonjs.js; echo '';
+             echo 'global.citeproc = module.exports; })(typeof window !== "undefined" ? window : globalThis);'; } > "$V/citeproc.js"; } \
+      || warn "citeproc.js 下载失败——引用预览将走后端兜底样式"
+    rm -f /tmp/citeproc.tgz
+  fi
+  for L in en-US zh-CN; do
+    [[ -s "$V/locales-$L.xml" ]] || curl -fsSL --retry 2 -o "$V/locales-$L.xml" \
+      "https://cdn.jsdelivr.net/gh/citation-style-language/locales@master/locales-$L.xml" || true
+  done
+  mkdir -p "$C"
+  for S in "${STYLES[@]}"; do
+    [[ -s "$C/$S.csl" ]] || curl -fsSL --retry 2 -o "$C/$S.csl" \
+      "https://cdn.jsdelivr.net/gh/citation-style-language/styles@master/$S.csl" || warn "CSL 样式缺失: $S"
+  done
+}
+ensure_citeproc
 ensure_vendor
 
 # ---------- 4. 构建镜像 ----------

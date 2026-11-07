@@ -219,6 +219,10 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
   min-height: 44px;
 }
 .cite-card .cite-preview i { font-style: italic; }
+/* citeproc 输出的数字型样式布局（[1] 左标 + 正文）压成行内 */
+.cite-preview .csl-entry, .cite-preview .csl-left-margin, .cite-preview .csl-right-inline { display: inline; }
+.cite-preview .csl-left-margin { margin-right: .4em; }
+.cite-preview .csl-bib-body, .cite-preview .csl-bib-item { display: inline; }
 .cite-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .cite-bar label { color: var(--muted); font-size: var(--fs-sm); flex: none; }
 .cite-bar select { width: auto; min-width: 150px; padding: 5px 8px; font-size: var(--fs-sm); }

@@ -21,6 +21,58 @@ STYLES: list[tuple[str, str]] = [
 STYLE_IDS = [s for s, _ in STYLES]
 DEFAULT_STYLE = "gbt7714"
 
+# CSL 样式（citeproc-js 渲染，文件在 webui/vendor/csl/；BibTeX 保留手写实现）
+CSL_STYLES: list[tuple[str, str]] = [
+    ("china-national-standard-gb-t-7714-2015-numeric", "GB/T 7714-2015（顺序编码）"),
+    ("china-national-standard-gb-t-7714-2015-author-date", "GB/T 7714-2015（著者-出版年）"),
+    ("apa", "APA 7"),
+    ("modern-language-association", "MLA"),
+    ("chicago-author-date", "Chicago（author-date）"),
+    ("ieee", "IEEE"),
+    ("nature", "Nature"),
+    ("science", "Science"),
+    ("american-chemical-society", "ACS"),
+    ("american-medical-association", "AMA"),
+    ("elsevier-harvard", "Elsevier（Harvard）"),
+    ("springer-basic-author-date", "Springer"),
+]
+
+
+def csl_json(p: dict) -> dict:
+    """paper 行 → CSL-JSON（citeproc-js 的输入）。
+
+    item.language 驱动 GB/T 等样式的 等/et al. 切换（citeproc 按 item 语言
+    自动选 locale）；中文作者整体作 family（ CSL 中文惯例）。
+    """
+    zh = bool(re.search(r"[一-鿿]", (p.get("title") or "") + (p.get("authors") or "")))
+    authors = []
+    for a in _split_authors(p.get("authors") or ""):
+        if re.search(r"[一-鿿]", a):
+            authors.append({"family": a, "given": ""})
+        else:
+            fam, given = _name_parts(a)
+            authors.append({"family": fam or a, "given": given or ""})
+    item = {
+        "id": p.get("id") or "item",
+        "type": "article-journal",
+        "title": p.get("title") or "",
+        "author": authors,
+        "language": "zh-CN" if zh else "en-US",
+        "DOI": p.get("doi") or "",
+    }
+    year = (p.get("year") or "").strip()
+    if year[:4].isdigit():
+        item["issued"] = {"date-parts": [[int(year[:4])]]}
+    if p.get("journal"):
+        item["container-title"] = p["journal"]
+    if p.get("volume"):
+        item["volume"] = p["volume"]
+    if p.get("issue"):
+        item["issue"] = p["issue"]
+    if p.get("pages"):
+        item["page"] = p["pages"]
+    return item
+
 # 形如 "W." / "X.-L." / "A.B." 的缩写（用于识别 "姓, 名" 里的"名"）
 _INITIAL_RE = re.compile(r"^[A-Z]\.?([.-][A-Z]\.?)*$")
 

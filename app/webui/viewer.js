@@ -1606,29 +1606,83 @@ window.extractMeta = async (pid) => {
     toast('提取完成'); openPaper(pid); renderMeta();
   } catch (e) { toast('提取失败: ' + e.message); }
 };
-/* 引用：卡片里选样式 + 即时预览 + 复制。不再弹 prompt 输入序号。 */
+/* 引用：卡片里选样式 + 即时预览 + 复制。
+   CSL 样式（12 种）经 citeproc-js 本地渲染（vendor），BibTeX 与兜底用后端预渲染。 */
+const _cslCache = {xml: {}, locale: {}};
+async function _fetchText(url, cache, key) {
+  if (cache[key]) return cache[key];
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const t = await r.text();
+  cache[key] = t;
+  return t;
+}
+async function cslRender(item, styleId) {
+  if (!window.citeproc) throw new Error('citeproc 未加载');
+  const styleXml = await _fetchText(`/static/vendor/csl/${styleId}.csl`, _cslCache.xml, styleId);
+  const lang = item.language || 'en-US';
+  await _fetchText(`/static/vendor/citeproc/locales-${lang}.xml`, _cslCache.locale, lang);
+  const sys = {
+    retrieveLocale: l => _cslCache.locale[l] || null,
+    retrieveItem: () => item,
+  };
+  // forceLang=true：GB 官方样式自带 default-locale="zh-CN"，不强制会被压过——
+  // 条目语言（en→et al. / zh→等）必须赢
+  const eng = new window.citeproc.Engine(sys, styleXml, lang, true);
+  eng.updateItems([item.id]);
+  const bib = eng.makeBibliography();
+  // 数字型样式的 csl-left-margin/right-inline div 间有源码换行——
+  // cite-preview 是 pre-wrap，会渲染成多余空行，压掉标签间空白
+  return ((bib && bib[1] && bib[1][0]) || '').replace(/>\s+</g, '><');
+}
+const DEFAULT_STYLE_MAP = {gbt7714: 'china-national-standard-gb-t-7714-2015-numeric'};
 function renderCiteCard() {
   const box = $('#cite-preview'), sel = $('#cite-style');
   if (!box || !sel) return;
   const c = state._cite;
   if (!c) { box.textContent = '（引用加载失败）'; return; }
-  if (!c.styles[state.citeStyle]) state.citeStyle = c.default || 'gbt7714';
-  sel.innerHTML = Object.entries(c.labels || {})
-    .map(([k, v]) => `<option value="${k}"${k === state.citeStyle ? ' selected' : ''}>${esc(v)}</option>`).join('');
-  box.innerHTML = c.styles[state.citeStyle]?.html || '';
+  const opts = [...(c.csl_list || []), ['bibtex', 'BibTeX（导出）']];
+  if (DEFAULT_STYLE_MAP[state.citeStyle]) state.citeStyle = DEFAULT_STYLE_MAP[state.citeStyle];
+  if (DEFAULT_STYLE_MAP[c.default]) c.default = DEFAULT_STYLE_MAP[c.default];
+  if (!opts.some(x => x[0] === state.citeStyle)) state.citeStyle = c.default || opts[0][0];
+  sel.innerHTML = opts.map(([k, v]) => `<option value="${k}"${k === state.citeStyle ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  _renderCiteBox(box, c, state.citeStyle);
   sel.onchange = () => {
     state.citeStyle = sel.value;
     localStorage.setItem('ps-cite-style', sel.value);
-    box.innerHTML = c.styles[sel.value]?.html || '';
+    _renderCiteBox(box, c, sel.value);
   };
+}
+async function _renderCiteBox(box, c, styleId) {
+  if (styleId === 'bibtex' || !window.citeproc) {
+    const html = c.styles?.[styleId]?.html || '（该样式需要 citeproc 支持库）';
+    box.innerHTML = html;
+    state._citeRendered = {styleId, html};
+    return;
+  }
+  box.innerHTML = '<span class="muted">渲染中…</span>';
+  try {
+    const html = await cslRender(c.csl_json, styleId);
+    if (state.citeStyle !== styleId) return;   // 用户已切走样式：丢弃迟到渲染
+    box.innerHTML = html || '（渲染为空）';
+    state._citeRendered = {styleId, html};
+  } catch (e) {
+    box.innerHTML = c.styles?.[styleId]?.html || `<span class="muted">CSL 渲染失败：${esc(e.message)}</span>`;
+    state._citeRendered = {styleId, html: box.innerHTML};
+  }
 }
 window.copyCite = async (pid) => {
   const c = state._cite && state._cite.paper_id === pid ? state._cite
             : await api(`/api/papers/${pid}/cite`);
   const st = state.citeStyle || c.default || 'gbt7714';
-  const txt = c.styles[st]?.text || '';
+  let txt = c.styles?.[st]?.text || '';
+  if (state._citeRendered?.styleId === st && state._citeRendered.html) {
+    const d = document.createElement('div');
+    d.innerHTML = state._citeRendered.html;
+    txt = (d.textContent || '').replace(/\s+/g, ' ').trim();
+  }
   if (!txt) { toast('引用为空'); return; }
-  try { await navigator.clipboard.writeText(txt); toast(`${c.labels?.[st] || st} 已复制`); }
+  try { await navigator.clipboard.writeText(txt); toast('已复制'); }
   catch { toast('复制失败，请手动选中复制'); }
 };
 
