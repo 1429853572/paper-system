@@ -2818,13 +2818,23 @@ window.openQaDock = () => {
   applyQaLayout();
   $('#qa-dock-close').onclick = closeQa;
   $('#qa-export').onclick = exportChat;
-  // 标题栏提示：上下箭头（点击不触发拖拽，仅作可拖提示）
+  // 标题栏拖拽提示 ⇕：可拖动（随标题栏同一套逻辑），单击则循环预设高度
   const qaHead = document.querySelector('.qa-dock-head');   // 只有 class，无 id
   if (qaHead && !qaHead.querySelector('.qa-drag-hint')) {
     const hint = document.createElement('span');
     hint.className = 'qa-drag-hint';
-    hint.title = '拖动此栏可调整问答区高度';
+    hint.title = '拖动调整问答区高度；单击切换 1/3 · 1/2 · 2/3';
     hint.textContent = '⇕';
+    hint.addEventListener('click', () => {
+      const presets = [33, 50, 25, 66];
+      const cur = state.rpane.top;
+      const next = presets.find(p => p > cur + 2) ?? presets[0];
+      state.rpane.top = next;
+      const top = $('#rpane-top');
+      if (top) { top.style.flex = 'none'; top.style.height = next + '%'; }
+      localStorage.setItem('ps-rpane-top', String(next));
+      toast(`问答区高度 ${next}%`);
+    });
     qaHead.insertBefore(hint, qaHead.querySelector('#qa-sess-toggle'));
   }
   // 拖拽改 Pointer Events + 文档级委托：不依赖把手的直接监听（免疫任何层叠/重建问题），
