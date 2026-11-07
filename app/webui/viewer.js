@@ -1520,8 +1520,8 @@ async function renderBatchPage() {
           <b>📚 导出 BibTeX</b><span class="muted">圈定论文合并为一个 .bib 文件直接下载</span></div>
         <div class="batch-card" data-act="delete">
           <b>🗑 移入回收站</b><span class="muted">圈定论文整体入回收站（${state.health.trash_days || 30} 天内可恢复）</span></div>
-        <div class="batch-card soon">
-          <b>📑 综述报告</b><span class="muted">多文献自动分组、逐组比对、跨组综合 · 即将上线</span></div>
+        <div class="batch-card review" data-act="review" title="自动分组→组内比对→跨组综合，生成可导出的综述报告">
+          <b>📑 综述报告</b><span class="muted">自动分组 · 逐组比对 · 跨组综合 · 导出 MD/CSV（2~90 篇）</span></div>
       </div>
       <div class="card batch-prog">
         <div class="bp-head"><b>② 批次进度</b>
@@ -1581,6 +1581,7 @@ function setBatchSel(ids, srcName) {
 async function runBatchAction(act, anchor) {
   if (!state.batchSel.size) { toast('请先在上方圈定论文'); return; }
   const ids = [...state.batchSel];
+  if (act === 'review') { await runSynthesis(anchor); return; }
   if (act === 'bibtex') {
     try {
       const r = await fetch('/api/papers/export/bibtex', {method: 'POST',
@@ -1621,7 +1622,31 @@ async function runBatchAction(act, anchor) {
   } catch (e) { toast('批量操作失败: ' + e.message); }
 }
 
-const BATCH_TYPE_LABEL = {translate: '批量翻译', meta: '元数据补全', summary: '批量导读', parse: '批量重解析'};
+const BATCH_TYPE_LABEL = {translate: '批量翻译', meta: '元数据补全', summary: '批量导读', parse: '批量重解析', synthesis: '📑 综述'};
+
+/* ---- 综述流水线（批量页核心卡）----
+   圈定 → 成本预估确认（缺导读自动补齐 + 组内比对 + 跨组综合 = N 次调用）
+   → synthesis job 进批次面板（四阶段进度）→ 完成后查看报告/导出 MD·CSV */
+async function runSynthesis(anchor) {
+  const ids = [...state.batchSel];
+  if (ids.length < 2) { toast('综述至少需要圈定 2 篇'); return; }
+  let est;
+  try {
+    est = await api('/api/synthesize/estimate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
+  } catch (e) { toast(e.message); return; }
+  const msg = `将综述 ${est.valid} 篇论文：\n· 自动聚成 ${est.groups} 个主题组\n` +
+    (est.missing_summaries ? `· ${est.missing_summaries} 篇缺导读，将自动补齐\n` : '· 导读已全部就绪（零补齐成本）\n') +
+    `· 预计 ${est.calls} 次 LLM 调用` +
+    (est.no_parse?.length ? `\n· ${est.no_parse.length} 篇未解析完成，将被剔除` : '');
+  if (!(await uiConfirm(msg, {title: '📑 发起综述', okText: '开始', anchor}))) return;
+  try {
+    const d = await api('/api/synthesize', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
+    toast(`综述已启动（预计 ${d.estimate.calls} 次调用），进度见下方批次面板`);
+    state._batchOpen = new Set([d.batch_id]);
+    await renderBatchPanel();
+    $('#batch-panel')?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  } catch (e) { toast('综述启动失败: ' + e.message); }
+}
 const BATCH_ST = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
                   failed: '失败', canceled: '已取消'};
 
@@ -1660,6 +1685,12 @@ async function renderBatchPanel() {
 async function renderBatchJobs(bid, box) {
   try {
     const d = await api('/api/jobs?batch_id=' + encodeURIComponent(bid) + '&limit=300');
+    const j0 = d.jobs[0];
+    if (d.jobs.length === 1 && j0?.job_type === 'synthesis') {
+      let sid = '';
+      try { sid = JSON.parse(j0.payload || '{}').synthesis_id || ''; } catch { /* ignore */ }
+      if (sid) { await renderSynJob(sid, box); return; }
+    }
     box.innerHTML = d.jobs.map(j => `
       <div class="bpanel-row sub">
         <span class="badge ${j.status === 'failed' ? 'err' : j.status === 'done' ? 'ok' : 'run'}">${BATCH_ST[j.status] || esc(j.status)}</span>
@@ -1672,11 +1703,84 @@ async function renderBatchJobs(bid, box) {
   } catch (e) { box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
 }
 
+async function renderSynJob(sid, box) {
+  let s = null;
+  try { s = (await api('/api/syntheses/' + encodeURIComponent(sid))).synthesis; } catch { /* ignore */ }
+  if (!s) { box.innerHTML = '<p class="muted" style="padding:6px">综述记录不存在（可能已删除）</p>'; return; }
+  const stageTxt = {cluster: '聚类分组', group: '组内精读比对', final: '跨组综合'}[s.stage] || s.stage;
+  const stTxt = {done: '完成', failed: '失败', running: '进行中'}[s.status] || s.status;
+  const pct = s.progress_total ? Math.min(100, Math.round(100 * s.progress_done / s.progress_total)) : 0;
+  box.innerHTML = `
+    <div class="bpanel-row sub">
+      <span class="badge ${s.status === 'done' ? 'ok' : s.status === 'failed' ? 'err' : 'run'}">${stTxt}</span>
+      <span style="flex:1;min-width:0">${esc(s.title)} · ${esc(stageTxt)}${s.status === 'running' ? ` ${s.progress_done}/${s.progress_total}` : ''}</span>
+      ${s.status === 'done' ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
+        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">⬇MD</button>
+        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">⬇CSV</button>` : ''}
+      <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
+    </div>
+    ${s.status === 'running' ? `<div class="up-bar parse" style="margin:0 12px 10px"><i style="width:${pct}%"></i></div>` : ''}
+    ${s.error ? `<div class="bpanel-err">${esc(s.error)}</div>` : ''}`;
+}
+
+/* ---- 综述报告视图（批量页内全屏切换）---- */
+async function showSynthesisReport(sid) {
+  const el = $('#page-batch');
+  let s;
+  try { s = (await api('/api/syntheses/' + encodeURIComponent(sid))).synthesis; }
+  catch (e) { toast(e.message); return; }
+  let clusters = [];
+  try { clusters = JSON.parse(s.clusters || '[]'); } catch { /* ignore */ }
+  const byId = new Map([...state.papers, ...state._batchPapers].map(p => [p.id, p]));
+  const nav = clusters.map((c, i) => `
+    <div class="syn-nav-group">
+      <b>${esc(c.name || '组 ' + (i + 1))} <span class="muted">(${(c.paper_ids || []).length} 篇)</span></b>
+      ${(c.paper_ids || []).map(pid => {
+        const p = byId.get(pid);
+        return `<a href="javascript:void 0" data-syn-paper="${esc(pid)}" title="打开阅读">${esc(p ? (p.title || pid) : pid)}</a>`;
+      }).join('')}
+    </div>`).join('');
+  el.innerHTML = `
+    <div class="batch-wrap">
+      <div class="card syn-head">
+        <button class="btn small" id="syn-back">← 返回批量</button>
+        <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title)}</b>
+        <span class="muted" style="font-size:11px">${esc(s.model || '')} · ${esc((s.updated_at || '').slice(0, 16))}</span>
+        <button class="btn small" id="syn-dl-md">⬇ MD</button>
+        <button class="btn small" id="syn-dl-csv">⬇ CSV</button>
+      </div>
+      <div class="syn-body">
+        <aside class="syn-nav card"><b>主题分组</b>${clusters.length ? nav : '<p class="muted">无分组信息</p>'}</aside>
+        <div class="syn-report card" id="syn-report">${mdLite((s.report_md || '报告尚未生成').replace(/^# /gm, '## '))}</div>
+      </div>
+    </div>`;
+  $('#syn-back').onclick = () => renderBatchPage();
+  $('#syn-dl-md').onclick = () => { location.href = `/api/syntheses/${encodeURIComponent(sid)}/export?fmt=md`; };
+  $('#syn-dl-csv').onclick = () => { location.href = `/api/syntheses/${encodeURIComponent(sid)}/export?fmt=csv`; };
+  $$('#page-batch [data-syn-paper]').forEach(a => a.onclick = () => {
+    switchPage('reader');
+    openPaper(a.dataset.synPaper);
+  });
+}
+
 $('#page-batch').addEventListener('click', async e => {
   const retry = e.target.closest('[data-retry]');
   if (retry) { await api(`/api/jobs/${retry.dataset.retry}/retry`, {method: 'POST'}); renderBatchPanel(); return; }
   const cancel = e.target.closest('[data-cancel]');
   if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderBatchPanel(); return; }
+  const synView = e.target.closest('[data-syn-view]');
+  if (synView) { showSynthesisReport(synView.dataset.synView); return; }
+  const synDl = e.target.closest('[data-syn-dl]');
+  if (synDl) { location.href = `/api/syntheses/${encodeURIComponent(synDl.dataset.synDl)}/export?fmt=${synDl.dataset.fmt}`; return; }
+  const synDel = e.target.closest('[data-syn-del]');
+  if (synDel) {
+    if (await uiConfirm('删除这篇综述？（报告与矩阵将一并删除，进行中的任务同时取消）',
+                        {title: '删除综述', danger: true, anchor: synDel})) {
+      try { await api('/api/syntheses/' + encodeURIComponent(synDel.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
+      renderBatchPanel();
+    }
+    return;
+  }
   const card = e.target.closest('.batch-card');
   if (card && !card.classList.contains('soon')) { runBatchAction(card.dataset.act, card); return; }
   const head = e.target.closest('.bpanel-row.head');

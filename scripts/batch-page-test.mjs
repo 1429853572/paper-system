@@ -27,11 +27,23 @@ const DATA = {
   '/api/batches': { batches: [
     { batch_id: 'bt1', job_type: 'summary', total: 3, done: 2, failed: 1, active: 0,
       started_at: '2026-11-07 10:00:00', updated_at: '2026-11-07 10:05:00' },
+    { batch_id: 'synb', job_type: 'synthesis', total: 1, done: 1, failed: 0, active: 0,
+      started_at: '2026-11-07 11:00:00', updated_at: '2026-11-07 11:09:00' },
   ] },
+  '/api/synthesize/estimate': { valid: 2, missing_summaries: 1, groups: 1, calls: 3, no_parse: [] },
+  '/api/synthesize': { synthesis_id: 's1', batch_id: 'synb', estimate: { valid: 2, missing_summaries: 1, groups: 1, calls: 3 } },
   '/api/jobs': { jobs: [
     { id: 11, job_type: 'summary', status: 'done', title: 'Paper One', paper_id: 'p1', batch_id: 'bt1', progress_done: 1, progress_total: 1 },
     { id: 12, job_type: 'summary', status: 'failed', title: 'Paper Two', paper_id: 'p2', batch_id: 'bt1', progress_done: 0, progress_total: 1, error: 'LLM 超时' },
   ] },
+  '/api/syntheses/s1': { synthesis: {
+    id: 's1', title: '文献综述 · 2 篇', status: 'done', stage: 'final',
+    progress_done: 3, progress_total: 3, model: 'test-model',
+    paper_ids: JSON.stringify(['p1', 'p2']),
+    clusters: JSON.stringify([{ name: '三维重建', paper_ids: ['p1', 'p2'] }]),
+    report_md: '# 文献综述\n## 一、总体概览\n两篇论文都研究三维重建。\n## 二、分主题梳理\n### 组 1: 三维重建\n- Paper One: 方法A\n- Paper Two: 方法B\n',
+    matrix_csv: '主题组,标题\n三维重建,Paper One\n', error: null,
+    created_at: '2026-11-07 11:00:00', updated_at: '2026-11-07 11:09:00' } },
   '/api/papers/p1': { paper: { id: 'p1', title: 'Paper One', parse_status: 'parsed', visibility: 'shared', owner_id: 1 }, blocks: [], total: 0 },
   '/api/papers/p1/bilingual': { pairs: [], versions: [] },
   '/api/papers/p1/notes': { notes: {} },
@@ -51,8 +63,18 @@ const { window } = dom;
 const errors = [];
 
 window.fetch = async (url, opts = {}) => {
-  const u = String(url).split('?')[0];
-  const body = DATA[u] ?? {};
+  const u = String(url);
+  const path = u.split('?')[0];
+  const q = new URLSearchParams(u.split('?')[1] || '');
+  // synthesis 批次的 job 明细（payload 携带 synthesis_id）
+  if (path === '/api/jobs' && q.get('batch_id') === 'synb') {
+    return { ok: true, status: 200, json: async () => ({ jobs: [
+      { id: 21, job_type: 'synthesis', status: 'done', title: null, paper_id: null,
+        batch_id: 'synb', payload: JSON.stringify({ synthesis_id: 's1' }),
+        progress_done: 3, progress_total: 3 },
+    ] }) };
+  }
+  const body = DATA[path] ?? {};
   return { ok: true, status: 200, json: async () => body, blob: async () => ({ size: 10 }) };
 };
 window.EventSource = class { constructor() { this.onmessage = null; } close() {} };
@@ -107,7 +129,8 @@ if (btn) {
 ok('圈定器渲染', !!doc.querySelector('#page-batch .batch-pick'));
 ok('操作卡数量≥6', doc.querySelectorAll('#page-batch .batch-card').length >= 6,
    `实际 ${doc.querySelectorAll('#page-batch .batch-card').length}`);
-ok('综述卡为 soon 占位', !!doc.querySelector('#page-batch .batch-card.soon'));
+ok('综述卡已激活', !!doc.querySelector('#page-batch .batch-card[data-act="review"]') &&
+   !doc.querySelector('#page-batch .batch-card[data-act="review"]').classList.contains('soon'));
 ok('进度面板渲染', !!doc.querySelector('#page-batch #batch-panel'));
 
 // 3) 圈定：当前列表
@@ -171,6 +194,40 @@ if (toCenter) {
   // preset 圈定（若选择模式勾选成功，计数≥1）
   const cnt = doc.querySelector('#bp-count')?.textContent || '';
   ok('preset 圈定生效', /1 篇|0 篇/.test(cnt), cnt);
+}
+
+// 7) 综述流：卡片激活 → 预估确认 → 批次面板综述行 → 报告视图
+const reviewCard = doc.querySelector('.batch-card[data-act="review"]');
+ok('综述卡已激活（无 soon）', !!reviewCard && !reviewCard.classList.contains('soon'));
+// 切回批量页重新渲染（前面 tocenter 已切页）
+window.__T.switchPage('batch');
+await new Promise((r) => setTimeout(r, 300));
+window.__T.state.batchSel = new Set(['p1', 'p2']);
+doc.querySelector('.batch-card[data-act="review"]').click();
+await new Promise((r) => setTimeout(r, 200));
+const synPop = [...doc.querySelectorAll('.ui-pop')].find(p => p.textContent.includes('发起综述'));
+ok('综述预估确认弹窗出现', !!synPop && synPop.textContent.includes('3 次 LLM 调用'),
+   synPop ? synPop.textContent.slice(0, 80) : '未找到弹窗');
+if (synPop) {
+  synPop.querySelector('[data-ok]').click();
+  await new Promise((r) => setTimeout(r, 350));
+  // 新批次自动展开（_batchOpen=synb）→ renderSynJob
+  const synRow = doc.querySelector('[data-syn-view="s1"]');
+  ok('综述行出现查看报告键', !!synRow);
+  ok('综述行有导出键', !!doc.querySelector('[data-syn-dl="s1"][data-fmt="csv"]'));
+  if (synRow) {
+    synRow.click();
+    await new Promise((r) => setTimeout(r, 250));
+    ok('报告视图渲染', !!doc.querySelector('#syn-report') &&
+       doc.querySelector('#syn-report').textContent.includes('总体概览'));
+    ok('组导航渲染', doc.querySelectorAll('.syn-nav-group').length === 1 &&
+       doc.querySelector('.syn-nav-group b').textContent.includes('三维重建'));
+    ok('论文可点回阅读', !!doc.querySelector('[data-syn-paper="p1"]'));
+    ok('导出键存在', !!doc.querySelector('#syn-dl-md') && !!doc.querySelector('#syn-dl-csv'));
+    doc.querySelector('#syn-back').click();
+    await new Promise((r) => setTimeout(r, 250));
+    ok('返回批量页', !!doc.querySelector('.batch-ops'));
+  }
 }
 
 console.log(results.join('\n'));

@@ -94,6 +94,7 @@ class Scheduler:
             ("meta-worker", self._meta_loop),
             ("translate-worker", self._translate_loop),
             ("summary-worker", self._summary_loop),
+            ("synthesis-worker", self._synthesis_loop),
             ("janitor", self._janitor_loop),
         ):
             t = threading.Thread(target=fn, name=name, daemon=True)
@@ -121,7 +122,7 @@ class Scheduler:
                                 (r["id"],),
                             )
                         log.info("job %s 远程任务失效，已重排队", r["id"])
-            elif r["job_type"] in ("embed_backfill", "translate"):
+            elif r["job_type"] in ("embed_backfill", "translate", "synthesis"):
                 with db.write() as c:
                     c.execute("UPDATE jobs SET status='queued' WHERE id=?", (r["id"],))
 
@@ -484,6 +485,30 @@ class Scheduler:
                     self._update(job["id"], status="failed", error=str(e)[:300])
             except Exception:  # noqa: BLE001
                 log.exception("summary worker 循环异常（继续运行）")
+                time.sleep(5)
+
+    # ================= 综述 worker（LLM 长任务，单并发） =================
+    def _synthesis_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                job = self._next_job("synthesis")
+                if job is None:
+                    time.sleep(3)
+                    continue
+                if not self._claim(job["id"]):
+                    continue
+                try:
+                    from . import synthesis
+                    payload = json.loads(job["payload"] or "{}")
+                    synthesis.run({"id": job["user_id"]}, payload.get("synthesis_id"),
+                                  job_update=lambda **f: self._update(job["id"], **f))
+                    self._update(job["id"], status="done", progress_done=1, progress_total=1)
+                    log.info("综述完成 %s", payload.get("synthesis_id"))
+                except Exception as e:  # noqa: BLE001
+                    log.exception("synthesis job %s 异常", job["id"])
+                    self._update(job["id"], status="failed", error=str(e)[:300])
+            except Exception:  # noqa: BLE001
+                log.exception("synthesis worker 循环异常（继续运行）")
                 time.sleep(5)
 
     # ================= 管家：回收站清理 + 每日备份 =================

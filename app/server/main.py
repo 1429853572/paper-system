@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from core import auth, ingest, qa, retrieval, summarizer
+from core import auth, ingest, qa, retrieval, summarizer, synthesis
 from core.config import (DATA_DIR, MINERU_BASE_URL, OLLAMA_BASE_URL,
                            PAPERSYS_API_TOKEN, config)
 from core.db import db
@@ -737,6 +737,111 @@ def list_batches(request: Request, limit: int = 12):
         f"FROM jobs WHERE batch_id IS NOT NULL AND batch_id!=''{scope} "
         f"GROUP BY batch_id ORDER BY MAX(updated_at) DESC LIMIT {int(limit)}")
     return {"batches": [dict(r) for r in rows]}
+
+
+# ---------------- 综述流水线（批量中心核心卡） ----------------
+
+@app.post("/api/synthesize/estimate")
+async def synthesize_estimate(request: Request):
+    """综述成本预估：预计 LLM 调用数（缺导读逐篇补齐 + 组内比对 + 跨组综合）。"""
+    u = require(request)
+    body = await request.json()
+    ids = [x for x in (body.get("paper_ids") or []) if x]
+    if not ids:
+        raise HTTPException(400, "请先圈定论文")
+    est = synthesis.estimate(ids)
+    if len(est["valid"]) < 2:
+        raise HTTPException(400, "有效论文不足 2 篇（未解析完成的已剔除）")
+    if len(est["valid"]) > synthesis.MAX_PAPERS:
+        raise HTTPException(400, f"一次综述最多 {synthesis.MAX_PAPERS} 篇，请分卷进行")
+    return {"valid": len(est["valid"]), "missing_summaries": est["missing_summaries"],
+            "groups": est["groups"], "calls": est["calls"],
+            "no_parse": est["no_parse"]}
+
+
+@app.post("/api/synthesize")
+async def synthesize_start(request: Request):
+    """发起综述：建 syntheses 行 + synthesis job（batch_id 进批次面板）。"""
+    u = require(request)
+    body = await request.json()
+    ids = [x for x in (body.get("paper_ids") or []) if x]
+    est = synthesis.estimate(ids)
+    if len(est["valid"]) < 2:
+        raise HTTPException(400, "有效论文不足 2 篇（未解析完成的已剔除）")
+    if len(est["valid"]) > synthesis.MAX_PAPERS:
+        raise HTTPException(400, f"一次综述最多 {synthesis.MAX_PAPERS} 篇，请分卷进行")
+    # 并发上限：同一用户同时只跑一篇综述（LLM 长任务）
+    live = db.one("SELECT id FROM syntheses WHERE user_id=? AND status='running' LIMIT 1", (u["id"],))
+    if live:
+        raise HTTPException(409, "已有一篇综述在进行中，请等它完成或先删除")
+    sid = synthesis.create(u["id"], ids, est)
+    batch_id = uuid.uuid4().hex[:12]
+    scheduler.enqueue(u["id"], "synthesis", None, {"synthesis_id": sid, "batch_id": batch_id},
+                      priority="background", progress_total=est["calls"])
+    audit(u["id"], "synthesize", f"{len(est['valid'])} 篇 batch={batch_id}")
+    return {"synthesis_id": sid, "batch_id": batch_id, "estimate": est}
+
+
+@app.get("/api/syntheses")
+def list_syntheses(request: Request, limit: int = 20):
+    u = require(request)
+    scope = "" if u["role"] == "admin" else " WHERE s.user_id=" + str(int(u["id"]))
+    rows = db.all(
+        "SELECT s.id, s.title, s.status, s.stage, s.progress_done, s.progress_total, "
+        "s.error, s.model, s.created_at, s.updated_at, "
+        "json_array_length(s.paper_ids) AS papers "
+        f"FROM syntheses s{scope} ORDER BY s.updated_at DESC LIMIT {int(limit)}")
+    return {"syntheses": [dict(r) for r in rows]}
+
+
+def _own_synthesis(u: dict, sid: str):
+    row = db.one("SELECT * FROM syntheses WHERE id=?", (sid,))
+    if row is None:
+        raise HTTPException(404, "综述不存在")
+    if u["role"] != "admin" and row["user_id"] != u["id"]:
+        raise HTTPException(403, "无权访问他人综述")
+    return row
+
+
+@app.get("/api/syntheses/{sid}")
+def get_synthesis(sid: str, request: Request):
+    u = require(request)
+    row = _own_synthesis(u, sid)
+    return {"synthesis": dict(row)}
+
+
+@app.delete("/api/syntheses/{sid}")
+def delete_synthesis(sid: str, request: Request):
+    u = require(request)
+    row = _own_synthesis(u, sid)
+    if row["status"] == "running":   # 在途：连带取消队列任务
+        for j in db.all("SELECT * FROM jobs WHERE payload LIKE ? AND status IN ('queued','pending_gate','running')",
+                        (f'%{sid}%',)):
+            with db.write() as c:
+                c.execute("UPDATE jobs SET status='canceled' WHERE id=?", (j["id"],))
+    with db.write() as c:
+        c.execute("DELETE FROM syntheses WHERE id=?", (sid,))
+    return {"ok": True}
+
+
+@app.get("/api/syntheses/{sid}/export")
+def export_synthesis(sid: str, request: Request, fmt: str = "md"):
+    u = require(request)
+    row = _own_synthesis(u, sid)
+    if fmt == "csv":
+        data = (row["matrix_csv"] or "").encode("utf-8-sig")   # BOM：Excel 直接打开不乱码
+        fname = f"synthesis-{sid}.csv"
+        media = "text/csv"
+    else:
+        data = (row["report_md"] or "").encode("utf-8")
+        fname = f"synthesis-{sid}.md"
+        media = "text/markdown"
+    if not data:
+        raise HTTPException(404, "报告尚未生成")
+    from urllib.parse import quote
+    return Response(content=data, media_type=media,
+                    headers={"Content-Disposition":
+                             f"attachment; filename=\"{fname}\"; filename*=UTF-8''{quote(fname)}"})
 
 
 @app.get("/api/jobs/stream")

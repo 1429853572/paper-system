@@ -15,7 +15,7 @@ from typing import Any, Iterator
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -259,6 +259,25 @@ CREATE TABLE IF NOT EXISTS section_summaries (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY(paper_id, run_id, section_path, level)
 );
+
+CREATE TABLE IF NOT EXISTS syntheses (
+    id          TEXT PRIMARY KEY,                     -- syn+随机串
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL DEFAULT '文献综述',
+    paper_ids   TEXT NOT NULL,                        -- JSON 数组
+    clusters    TEXT,                                 -- JSON [{name, paper_ids}]（聚类完成后）
+    status      TEXT NOT NULL DEFAULT 'running',      -- running|done|failed
+    stage       TEXT NOT NULL DEFAULT 'cluster',      -- cluster|group|final
+    progress_done   INTEGER NOT NULL DEFAULT 0,       -- 以 LLM 调用为单位
+    progress_total  INTEGER NOT NULL DEFAULT 0,
+    report_md   TEXT,                                 -- 最终报告 Markdown
+    matrix_csv  TEXT,                                 -- 全篇对比矩阵 CSV（本地拼装，零 LLM 成本）
+    error       TEXT,
+    model       TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_syntheses_user ON syntheses(user_id, updated_at DESC);
 """
 
 
