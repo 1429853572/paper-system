@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -567,7 +568,8 @@ def restore_paper(paper_id: str, request: Request):
 
 # ---------------- 任务中心 ----------------
 @app.get("/api/jobs")
-def list_jobs(request: Request, status: str = "", job_type: str = "", limit: int = 100):
+def list_jobs(request: Request, status: str = "", job_type: str = "",
+              batch_id: str = "", limit: int = 100):
     u = require(request)
     cond, args = "", []
     if u["role"] != "admin":
@@ -579,6 +581,9 @@ def list_jobs(request: Request, status: str = "", job_type: str = "", limit: int
     if job_type:
         cond += " AND j.job_type=?"
         args.append(job_type)
+    if batch_id:
+        cond += " AND j.batch_id=?"
+        args.append(batch_id)
     rows = db.all(
         "SELECT j.*, u.username, p.title FROM jobs j "
         "LEFT JOIN users u ON u.id=j.user_id LEFT JOIN papers p ON p.id=j.paper_id "
@@ -630,6 +635,108 @@ def queue_resume(job_type: str, request: Request):
     require_admin(request)
     scheduler.pause_resume(job_type, pause=False)
     return {"ok": True}
+
+
+# ---------------- 批量中心 ----------------
+# 批次机制：一次批量操作 → 同一 batch_id 的一组 jobs。进度面板按 batch_id 聚合，
+# SSE 事件透传 batch_id（_emit），失败项复用既有 /api/jobs/{id}/retry。
+BATCH_LIMIT = 200   # 单批圈定上限（90 篇综述场景绰绰有余）
+
+
+def _batch_papers(u: dict, paper_ids: list[str]) -> list[tuple[str, Any]]:
+    """批量圈定校验：存在且可见的论文才有资格入批。"""
+    out = []
+    for pid in paper_ids[:BATCH_LIMIT]:
+        p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
+        if p is not None:
+            _require_visible(u, p)
+            out.append((pid, p))
+    return out
+
+
+@app.post("/api/batch/{action}")
+async def batch_action(action: str, request: Request):
+    """批量中心：对圈定论文发起一批同型任务，返回 batch_id 供进度面板跟踪。
+
+    bibtex/删除不走这里：bibtex 是同步导出（既有 /api/papers/export/bibtex），
+    删除是即时操作（既有 /api/papers/batch-delete）。
+    """
+    u = require(request)
+    body = await request.json()
+    ids = [x for x in (body.get("paper_ids") or []) if x][:BATCH_LIMIT]
+    if not ids:
+        raise HTTPException(400, "请先圈定论文")
+    batch_id = uuid.uuid4().hex[:12]
+    papers = _batch_papers(u, ids)
+    queued, skipped = [], []
+
+    if action == "translate":
+        for pid, _p in papers:
+            in_flight = db.one(
+                "SELECT id FROM jobs WHERE paper_id=? AND job_type='translate' "
+                "AND status IN ('queued','pending_gate','running')", (pid,))
+            if in_flight:
+                skipped.append(pid)
+                continue
+            from core.translator import translation_status
+            if translation_status(pid)["complete_any"]:
+                skipped.append(pid)   # 已有完整译文，缓存零成本不重跑
+                continue
+            scheduler.enqueue(u["id"], "translate", pid, {"batch_id": batch_id},
+                              priority="background")
+            queued.append(pid)
+    elif action == "meta":
+        for pid, _p in papers:
+            scheduler.enqueue(u["id"], "meta", pid, {"batch_id": batch_id},
+                              priority="background")
+            queued.append(pid)
+    elif action == "summary":
+        for pid, _p in papers:
+            has = db.one("SELECT id FROM summaries WHERE paper_id=? LIMIT 1", (pid,))
+            if has and not body.get("force"):
+                skipped.append(pid)   # 已有导读，跳过（强制重跑传 force）
+                continue
+            scheduler.enqueue(u["id"], "summary", pid, {"batch_id": batch_id},
+                              priority="background")
+            queued.append(pid)
+    elif action == "parse":
+        for pid, p in papers:
+            if p["owner_id"] != u["id"] and u["role"] != "admin":
+                skipped.append(pid)   # 重解析仅属主
+                continue
+            _cancel_paper_jobs(pid, "parse")
+            prev = db.one(
+                "SELECT payload FROM jobs WHERE paper_id=? AND job_type='parse' "
+                "AND payload LIKE '%\"url\"%' ORDER BY id DESC LIMIT 1", (pid,))
+            url = (json.loads(prev["payload"]).get("url") if prev else None)
+            scheduler.enqueue(u["id"], "parse", pid,
+                              {"tier": "standard", "reparse": True, "batch_id": batch_id,
+                               **({"url": url} if url else {})},
+                              priority="interactive")
+            with db.write() as c:
+                c.execute("UPDATE papers SET parse_status='pending' WHERE id=?", (pid,))
+            queued.append(pid)
+    else:
+        raise HTTPException(404, f"未知批量操作 {action}")
+
+    audit(u["id"], f"batch-{action}", f"{len(queued)} queued / {len(skipped)} skipped batch={batch_id}")
+    return {"batch_id": batch_id, "queued": queued, "skipped": skipped,
+            "skipped_reason": "进行中或已完成的任务自动跳过；重解析仅限自己上传的论文"}
+
+
+@app.get("/api/batches")
+def list_batches(request: Request, limit: int = 12):
+    """批次汇总（批量中心进度面板：每批次一行聚合）。"""
+    u = require(request)
+    scope = "" if u["role"] == "admin" else f" AND user_id={int(u['id'])}"
+    rows = db.all(
+        "SELECT batch_id, MIN(job_type) AS job_type, COUNT(*) AS total, "
+        "SUM(status='done') AS done, SUM(status='failed') AS failed, "
+        "SUM(status IN ('queued','pending_gate','running')) AS active, "
+        "MIN(created_at) AS started_at, MAX(updated_at) AS updated_at "
+        f"FROM jobs WHERE batch_id IS NOT NULL AND batch_id!=''{scope} "
+        f"GROUP BY batch_id ORDER BY MAX(updated_at) DESC LIMIT {int(limit)}")
+    return {"batches": [dict(r) for r in rows]}
 
 
 @app.get("/api/jobs/stream")
@@ -1339,7 +1446,7 @@ async def export_bibtex(request: Request):
     """批量引用导出：多选论文 → 单 .bib 文件。"""
     u = require(request)
     body = await request.json()
-    ids = [x for x in (body.get("paper_ids") or [])][:50]
+    ids = [x for x in (body.get("paper_ids") or [])][:300]
     if not ids:
         raise HTTPException(400, "paper_ids 必填")
     from core.meta import canonical_name

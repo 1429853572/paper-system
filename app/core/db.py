@@ -181,9 +181,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE TABLE IF NOT EXISTS jobs (
     id         INTEGER PRIMARY KEY,
     user_id    INTEGER NOT NULL REFERENCES users(id),
-    job_type   TEXT NOT NULL,                        -- parse|translate|embed_backfill|summary
+    job_type   TEXT NOT NULL,                        -- parse|translate|embed_backfill|summary|meta
     paper_id   TEXT,
     payload    TEXT NOT NULL DEFAULT '{}',           -- JSON
+    batch_id   TEXT,                                 -- 批量中心批次号（单篇任务为 NULL）
     priority   TEXT NOT NULL DEFAULT 'interactive',  -- interactive | background
     status     TEXT NOT NULL DEFAULT 'queued',       -- queued|pending_gate|running|done|failed|canceled
     progress_done INTEGER NOT NULL DEFAULT 0,
@@ -323,6 +324,9 @@ class Database:
                       "ON papers(deleted_at, created_at DESC)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_paper "
                       "ON jobs(paper_id, job_type, status)")
+            # 批量中心进度面板按批次聚合
+            c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_batch "
+                      "ON jobs(batch_id) WHERE batch_id IS NOT NULL")
             c.execute("CREATE INDEX IF NOT EXISTS idx_llm_calls_paper "
                       "ON llm_calls(paper_id)")
             # WAL 常开
@@ -344,6 +348,7 @@ class Database:
         self._add_col(c, "blocks", "bbox_pages", "TEXT")
         self._add_col(c, "users", "token_ver", "INTEGER NOT NULL DEFAULT 0")
         self._add_col(c, "users", "disabled", "INTEGER NOT NULL DEFAULT 0")
+        self._add_col(c, "jobs", "batch_id", "TEXT")
 
     def _migrate(self, c: sqlite3.Connection, from_v: int) -> None:
         # 列级变更统一由 _ensure_columns 幂等处理；这里只做数据迁移与死表清理。

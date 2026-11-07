@@ -56,11 +56,19 @@ bus = EventBus()
 
 
 def _emit(job_row: Any) -> None:
+    # batch_id 以列为准（summary 完成时会整体覆写 payload，JSON 里可能已丢）
+    batch_id = job_row["batch_id"]
+    if batch_id is None:
+        try:
+            batch_id = json.loads(job_row["payload"] or "{}").get("batch_id")
+        except Exception:
+            batch_id = None
     bus.publish({
         "job_id": job_row["id"],
         "user_id": job_row["user_id"],
         "job_type": job_row["job_type"],
         "paper_id": job_row["paper_id"],
+        "batch_id": batch_id,
         "status": job_row["status"],
         "done": job_row["progress_done"],
         "total": job_row["progress_total"],
@@ -121,11 +129,13 @@ class Scheduler:
     def enqueue(self, user_id: int, job_type: str, paper_id: str | None,
                 payload: dict, priority: str = "interactive",
                 progress_total: int = 0) -> int:
+        # 批量任务：payload.batch_id 同步落到列上（进度面板按列聚合，SSE 从 payload 透传）
+        batch_id = payload.get("batch_id") if isinstance(payload, dict) else None
         with db.write() as c:
             cur = c.execute(
-                "INSERT INTO jobs(user_id,job_type,paper_id,payload,priority,progress_total) "
-                "VALUES(?,?,?,?,?,?)",
-                (user_id, job_type, paper_id, json.dumps(payload), priority, progress_total),
+                "INSERT INTO jobs(user_id,job_type,paper_id,payload,batch_id,priority,progress_total) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (user_id, job_type, paper_id, json.dumps(payload), batch_id, priority, progress_total),
             )
             job_id = cur.lastrowid
         self._notify_queue(job_id)

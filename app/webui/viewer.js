@@ -742,6 +742,20 @@ $('#batch-delete').onclick = async e => {
   state.selected.clear(); $('#batch-bar').classList.remove('show');
   await refreshLib();
 };
+$('#batch-reparse').onclick = async e => {
+  if (!state.selected.size) return;
+  if (!(await uiConfirm(`重新解析选中的 ${state.selected.size} 篇？（仅自己上传的会执行；译文与旧版本的对应关系将作废）`,
+                        {title: '批量重解析', anchor: e?.currentTarget}))) return;
+  try {
+    const d = await api('/api/batch/parse', {method: 'POST', body: JSON.stringify({paper_ids: [...state.selected]})});
+    toast(`已入队 ${d.queued.length} 篇${d.skipped.length ? `，跳过 ${d.skipped.length} 篇（非本人上传）` : ''}`);
+    $('#batch-cancel').click();
+  } catch (err) { toast('批量重解析失败: ' + err.message); }
+};
+$('#batch-tocenter').onclick = () => {
+  state._batchPreset = new Set(state.selected);   // 带勾选进批量中心
+  switchPage('batch');
+};
 $('#batch-move').onchange = async e => {
   if (!state.selected.size) return;
   const v = e.target.value;
@@ -1404,12 +1418,12 @@ $$('.r-subtabs [data-s]').forEach(b => b.onclick = () => switchView('read', b.da
 $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.dataset.page));
 function switchPage(page) {
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
-  $('#page-title').textContent = {reader: '阅读', collections: '文库管理',
+  $('#page-title').textContent = {reader: '阅读', collections: '文库管理', batch: '批量中心',
     trash: '回收站', settings: '设置'}[page];
-  for (const p of ['reader', 'collections', 'trash', 'settings']) {
+  for (const p of ['reader', 'collections', 'batch', 'trash', 'settings']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
-  ({collections: renderCollectionsPage, trash: renderTrash,
+  ({collections: renderCollectionsPage, batch: renderBatchPage, trash: renderTrash,
     settings: renderSettings})[page]?.();
 }
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
@@ -1462,6 +1476,227 @@ window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: '
 window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); };
 setInterval(refreshQueueBadge, 8000);
 
+/* ---------------- 批量中心 ----------------
+   圈定（勾选/当前列表/按库）→ 操作卡发起一批同型任务（后端 /api/batch/{action}）
+   → 批次进度面板按 batch_id 聚合跟踪（轮询 + SSE），失败项单独重试。 */
+state.batchSel = new Set();     // 批量页圈定的论文
+state._batchOpen = new Set();   // 进度面板里展开的批次
+state._batchPreset = null;      // 从文库批量条带过来的圈定
+state._batchPapers = [];        // 圈定来源论文缓存（供明细显示标题）
+
+const BATCH_ACTS = {
+  summary:   {label: '🧠 批量导读', desc: '为圈定论文生成 9 字段导读；已有导读的自动跳过'},
+  translate: {label: '🌐 批量翻译', desc: '翻译圈定论文；已有完整译文的自动跳过'},
+  meta:      {label: '🏷 元数据补全', desc: '联网校准（arXiv/S2/CrossRef）+ AI 补缺失字段'},
+  parse:     {label: '♻️ 批量重解析', desc: '重新提取全文；仅自己上传的论文可执行，译文对应关系作废'},
+};
+
+async function renderBatchPage() {
+  const el = $('#page-batch');
+  const cols = state.collections || [];
+  el.innerHTML = `
+    <div class="batch-wrap">
+      <div class="card batch-pick">
+        <div class="bp-head"><b>① 圈定论文</b>
+          <span class="badge ok" id="bp-count">${state.batchSel.size} 篇</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="bp-clear" ${state.batchSel.size ? '' : 'hidden'}>清空</button></div>
+        <div class="bp-sources">
+          <button class="btn small" id="bp-sel">我的勾选（<span id="bp-sel-n">${state.selected.size}</span>）</button>
+          <button class="btn small" id="bp-list">当前列表（<span id="bp-list-n">${state.papers.length}</span>）</button>
+          <select id="bp-col" style="width:auto;font-size:12px">
+            <option value="">按库圈定…</option>
+            ${cols.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="bp-detail" id="bp-detail" hidden></div>
+      </div>
+      <div class="batch-ops">
+        ${Object.entries(BATCH_ACTS).map(([k, v]) => `
+          <div class="batch-card" data-act="${k}" title="${esc(v.desc)}">
+            <b>${v.label}</b><span class="muted">${esc(v.desc)}</span>
+          </div>`).join('')}
+        <div class="batch-card" data-act="bibtex">
+          <b>📚 导出 BibTeX</b><span class="muted">圈定论文合并为一个 .bib 文件直接下载</span></div>
+        <div class="batch-card" data-act="delete">
+          <b>🗑 移入回收站</b><span class="muted">圈定论文整体入回收站（${state.health.trash_days || 30} 天内可恢复）</span></div>
+        <div class="batch-card soon">
+          <b>📑 综述报告</b><span class="muted">多文献自动分组、逐组比对、跨组综合 · 即将上线</span></div>
+      </div>
+      <div class="card batch-prog">
+        <div class="bp-head"><b>② 批次进度</b>
+          <span class="muted" style="font-size:11px">点击批次展开逐篇状态；失败项可单独重试</span></div>
+        <div id="batch-panel"><p class="muted" style="padding:8px">加载中…</p></div>
+      </div>
+    </div>`;
+  $('#bp-sel').onclick = () => setBatchSel(new Set(state.selected), '我的勾选');
+  $('#bp-list').onclick = () => setBatchSel(new Set(state.papers.map(p => p.id)), '当前列表');
+  $('#bp-clear').onclick = () => setBatchSel(new Set(), '');
+  $('#bp-col').onchange = async e => {
+    const cid = e.target.value;
+    if (!cid) return;
+    try {
+      const scope = [cid, ...colDescendants(cid)].join(',');
+      const d = await api('/api/papers?collection_id=' + encodeURIComponent(scope) + '&page_size=300');
+      state._batchPapers = d.papers;
+      setBatchSel(new Set(d.papers.map(p => p.id)),
+        (state.collections.find(c => c.id === cid) || {}).name || '文献库');
+    } catch (err) { toast('圈定失败: ' + err.message); }
+    e.target.value = '';
+  };
+  if (state._batchPreset) {
+    const preset = state._batchPreset;
+    state._batchPreset = null;
+    setBatchSel(preset, preset.size ? '我的勾选' : '');
+  }
+  await renderBatchPanel();
+}
+
+function setBatchSel(ids, srcName) {
+  state.batchSel = ids;
+  const cnt = $('#bp-count');
+  if (!cnt) return;
+  cnt.textContent = `${ids.size} 篇` + (srcName ? `（来自${srcName}）` : '');
+  $('#bp-clear').hidden = !ids.size;
+  const det = $('#bp-detail');
+  if (!ids.size) { det.hidden = true; det.innerHTML = ''; return; }
+  const byId = new Map([...state.papers, ...state._batchPapers, ...(state.qaAllPapers || [])]
+    .map(p => [p.id, p]));
+  const items = [...ids].map(id => {
+    const p = byId.get(id);
+    return `<div class="bp-row">${esc(p ? (p.title || p.id) : id)}</div>`;
+  }).join('');
+  const fold = ids.size > 8;
+  det.innerHTML = `${fold ? `<button class="btn small" id="bp-toggle">展开 ${ids.size} 篇</button>` : ''}
+    <div class="bp-rows" id="bp-rows" ${fold ? 'hidden' : ''}>${items}</div>`;
+  det.hidden = false;
+  const tg = $('#bp-toggle');
+  if (tg) tg.onclick = () => {
+    const r = $('#bp-rows');
+    r.hidden = !r.hidden;
+    tg.textContent = r.hidden ? `展开 ${ids.size} 篇` : '收起';
+  };
+}
+
+async function runBatchAction(act, anchor) {
+  if (!state.batchSel.size) { toast('请先在上方圈定论文'); return; }
+  const ids = [...state.batchSel];
+  if (act === 'bibtex') {
+    try {
+      const r = await fetch('/api/papers/export/bibtex', {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paper_ids: ids})});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const blob = await r.blob();
+      const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(blob), download: 'references.bib'});
+      a.click(); URL.revokeObjectURL(a.href);
+      toast(`已导出 ${ids.length} 篇 BibTeX`);
+    } catch (e) { toast('导出失败: ' + e.message); }
+    return;
+  }
+  if (act === 'delete') {
+    if (!(await uiConfirm(`将圈定的 ${ids.length} 篇移入回收站？（${state.health.trash_days || 30} 天内可恢复）`,
+                          {title: '批量移入回收站', anchor}))) return;
+    try {
+      await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
+      toast(`已移入回收站 ${ids.length} 篇`);
+      setBatchSel(new Set(), '');
+      await refreshLib();
+    } catch (e) { toast('删除失败: ' + e.message); }
+    return;
+  }
+  const meta = BATCH_ACTS[act];
+  if (!meta) return;
+  if (act === 'parse' && !(await uiConfirm(
+      `重解析 ${ids.length} 篇会重新提取全文，已有译文/导读与旧版本的对应关系将作废。继续？`,
+      {title: '批量重解析', danger: true, anchor}))) return;
+  try {
+    const d = await api('/api/batch/' + act, {method: 'POST', body: JSON.stringify({paper_ids: ids})});
+    toast(`${meta.label.replace(/^\S+\s/, '')}：入队 ${d.queued.length} 篇` +
+          (d.skipped.length ? `，跳过 ${d.skipped.length} 篇（已完成/进行中/无权限）` : ''));
+    if (d.queued.length) {
+      state._batchOpen = new Set([d.batch_id]);
+      renderBatchPanel();
+      $('#batch-panel').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    } else renderBatchPanel();
+  } catch (e) { toast('批量操作失败: ' + e.message); }
+}
+
+const BATCH_TYPE_LABEL = {translate: '批量翻译', meta: '元数据补全', summary: '批量导读', parse: '批量重解析'};
+const BATCH_ST = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
+                  failed: '失败', canceled: '已取消'};
+
+async function renderBatchPanel() {
+  const el = $('#batch-panel');
+  if (!el) return;
+  try {
+    const d = await api('/api/batches');
+    if (!d.batches.length) {
+      el.innerHTML = '<p class="muted" style="padding:8px 0">还没有批次记录——圈定论文后点上方操作卡发起</p>';
+      return;
+    }
+    el.innerHTML = d.batches.map(b => {
+      const finished = b.active === 0;
+      return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
+        <div class="bpanel-row head">
+          <span class="badge ${b.failed ? 'err' : finished ? 'ok' : 'run'}">${finished ? (b.failed ? '有失败' : '完成') : '进行中'}</span>
+          <b>${BATCH_TYPE_LABEL[b.job_type] || esc(b.job_type)}</b>
+          <span class="muted">${b.done + b.failed}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}</span>
+          <span class="spacer"></span>
+          <span class="muted" style="font-size:11px">${esc((b.updated_at || '').slice(5, 16))}</span>
+          <span class="ic">${icon('chevD')}</span>
+        </div>
+        <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
+      </div>`;
+    }).join('');
+    for (const bid of state._batchOpen) {
+      const box = el.querySelector(`[data-jobs="${bid}"]`);
+      if (box && !box.hidden) renderBatchJobs(bid, box);
+    }
+  } catch (e) {
+    el.innerHTML = `<p class="muted" style="padding:8px 0">加载失败: ${esc(e.message)}</p>`;
+  }
+}
+
+async function renderBatchJobs(bid, box) {
+  try {
+    const d = await api('/api/jobs?batch_id=' + encodeURIComponent(bid) + '&limit=300');
+    box.innerHTML = d.jobs.map(j => `
+      <div class="bpanel-row sub">
+        <span class="badge ${j.status === 'failed' ? 'err' : j.status === 'done' ? 'ok' : 'run'}">${BATCH_ST[j.status] || esc(j.status)}</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.title || j.paper_id || '')}</span>
+        <span class="muted" style="font-size:11px">${j.progress_total > 1 ? `${j.progress_done}/${j.progress_total}` : ''}</span>
+        ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
+        ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
+      </div>${j.error ? `<div class="bpanel-err">${esc(j.error.slice(0, 140))}</div>` : ''}`).join('')
+      || '<p class="muted" style="padding:6px">无任务</p>';
+  } catch (e) { box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+}
+
+$('#page-batch').addEventListener('click', async e => {
+  const retry = e.target.closest('[data-retry]');
+  if (retry) { await api(`/api/jobs/${retry.dataset.retry}/retry`, {method: 'POST'}); renderBatchPanel(); return; }
+  const cancel = e.target.closest('[data-cancel]');
+  if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderBatchPanel(); return; }
+  const card = e.target.closest('.batch-card');
+  if (card && !card.classList.contains('soon')) { runBatchAction(card.dataset.act, card); return; }
+  const head = e.target.closest('.bpanel-row.head');
+  if (head) {
+    const batchEl = head.closest('[data-batch]');
+    const bid = batchEl.dataset.batch;
+    const box = batchEl.querySelector('[data-jobs]');
+    box.hidden = !box.hidden;
+    if (box.hidden) state._batchOpen.delete(bid);
+    else { state._batchOpen.add(bid); renderBatchJobs(bid, box); }
+  }
+});
+// 批量页可见时轮询进度（SSE 也会触发，双保险；面板不存在时静默跳过）
+setInterval(() => {
+  const pg = $('#page-batch');
+  if (pg && pg.style.display !== 'none') renderBatchPanel();
+}, 6000);
+
+let _batchSseAt = 0;
+
 /* SSE 实时进度 */
 let _sseCollectionsAt = 0;   // 批量任务事件风暴节流（3s 内只重建一次文库页）
 async function watchJobs() {
@@ -1490,6 +1725,11 @@ async function watchJobs() {
       });
     }
     refreshQueueBadge();
+    // 批量中心打开时，批次事件实时刷新进度面板（2s 节流，避免逐篇事件风暴全量重建）
+    if (ev.batch_id && $('#page-batch')?.style.display !== 'none' && Date.now() - _batchSseAt > 2000) {
+      _batchSseAt = Date.now();
+      renderBatchPanel();
+    }
     // 文库管理页打开时同步行内状态（批量导入时每块一事件，全量重建需节流）
     const cp = $('#page-collections');
     if (cp && cp.style.display !== 'none' && Date.now() - _sseCollectionsAt > 3000) {
