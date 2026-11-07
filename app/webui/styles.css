@@ -379,10 +379,22 @@ table.list th { color: var(--muted); font-weight: 500; }
 .rpane-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .rpane-top { flex: none; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .rpane-top .content-view { flex: 1; }
-.rpane-handle { height: 12px; background: transparent; cursor: row-resize; flex: none; position: relative; }
-.rpane-handle::before { content: ''; position: absolute; left: 30%; right: 30%; top: 4px; height: 4px;
-                        border-radius: 2px; background: var(--border); transition: background .15s, left .15s, right .15s; }
-.rpane-handle:hover::before, .rpane-handle.dragging::before { background: var(--primary); left: 20%; right: 20%; }
+.rpane-handle { height: 14px; background: transparent; cursor: row-resize; flex: none; position: relative; }
+.rpane-handle::before { content: ''; position: absolute; left: 0; right: 0; top: 6px; height: 2px;
+                        background: var(--line-soft); transition: background .15s; }
+/* 中间握点：常驻可见的浅色药丸，hover/拖拽时变主色并加宽 */
+.rpane-handle::after { content: ''; position: absolute; left: 50%; transform: translateX(-50%); top: 3px;
+                       width: 56px; height: 8px; border-radius: 4px; background: var(--border);
+                       opacity: .75; transition: background .15s, opacity .15s, width .15s; }
+.rpane-handle:hover::after, .rpane-handle.dragging::after { background: var(--primary); opacity: 1; width: 88px; }
+.rpane-handle:hover::before, .rpane-handle.dragging::before { background: var(--primary); }
+/* 问答框标题栏也是抓握点（更显眼） */
+.qa-dock-head { cursor: row-resize; user-select: none; }
+.qa-dock-head button { cursor: pointer; }
+.qa-drag-hint { color: var(--muted); font-size: var(--fs-sm); cursor: row-resize; padding: 0 2px; }
+.qa-drag-hint:hover { color: var(--primary); }
+.qa-dock.resizing .qa-drag-hint { color: var(--primary); }
+.qa-dock.resizing .qa-dock-head { background: var(--tint-primary); }
 .qa-dock { flex: 1; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--border); }
 .qa-dock-head { padding: 8px 14px; font-weight: 600; font-size: var(--fs-base); background: var(--panel-soft);
                 border-bottom: 1px solid var(--border); }

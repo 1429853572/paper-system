@@ -2818,13 +2818,27 @@ window.openQaDock = () => {
   applyQaLayout();
   $('#qa-dock-close').onclick = closeQa;
   $('#qa-export').onclick = exportChat;
+  // 标题栏提示：上下箭头（点击不触发拖拽，仅作可拖提示）
+  const qaHead = document.querySelector('.qa-dock-head');   // 只有 class，无 id
+  if (qaHead && !qaHead.querySelector('.qa-drag-hint')) {
+    const hint = document.createElement('span');
+    hint.className = 'qa-drag-hint';
+    hint.title = '拖动此栏可调整问答区高度';
+    hint.textContent = '⇕';
+    qaHead.insertBefore(hint, qaHead.querySelector('#qa-sess-toggle'));
+  }
   // 拖拽改 Pointer Events + 文档级委托：不依赖把手的直接监听（免疫任何层叠/重建问题），
   // 鼠标与触屏通吃；min 6% 防止问答框被拖没
   document.addEventListener('pointerdown', e => {
-    if (!e.target.closest?.('#rpane-handle')) return;
+    // 抓握点有两处：中间分隔条 + 问答框标题栏（后者更显眼，标题栏上的按钮除外）
+    const onHandle = e.target.closest?.('#rpane-handle');
+    const onHead = e.target.closest?.('.qa-dock-head');
+    const headBtn = e.target.closest?.('.qa-dock-head button');
+    if (!onHandle && !(onHead && !headBtn)) return;
     e.preventDefault();
     const handle = $('#rpane-handle');
     handle?.classList.add('dragging');
+    $('#qa-dock')?.classList.add('resizing');
     const move = ev => {
       const body = $('.rpane-body')?.getBoundingClientRect();
       if (!body || !body.height) return;
@@ -2834,6 +2848,7 @@ window.openQaDock = () => {
     };
     const up = () => {
       handle?.classList.remove('dragging');
+      $('#qa-dock')?.classList.remove('resizing');
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
       localStorage.setItem('ps-rpane-top', String(state.rpane.top));

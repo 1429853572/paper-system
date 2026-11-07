@@ -157,6 +157,23 @@ ok('↓ 回到较近', doc.querySelector('#qa-text').value === '历史问题甲'
 doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
 ok('↓ 到底回草稿', doc.querySelector('#qa-text').value === '');
 
+// 5.5) 问答区高度可拖拽：分隔条 + 标题栏两处抓握点，握点提示可见
+ok('问答拖拽握点提示存在', !!doc.querySelector('.qa-drag-hint'));
+ok('标题栏为抓握点（cursor 提示由 CSS 提供）', !!doc.querySelector('.qa-dock-head'));
+const handle = doc.querySelector('#rpane-handle');
+ok('分隔条存在且未隐藏', !!handle && !handle.hidden);
+{
+  // jsdom 无布局（rect.height=0）→ 断言「拖拽处理链路触发」而非高度变化；
+  // 真实高度变化由 CDP 无头 Chrome 在真实站点验证（24%→10%→31%）
+  const hr = doc.querySelector('.qa-dock-head');
+  const dock = doc.querySelector('#qa-dock');
+  const o = {bubbles: true, cancelable: true, clientX: 100, clientY: 50, pointerId: 1, isPrimary: true, button: 0, buttons: 1};
+  hr.dispatchEvent(new window.PointerEvent('pointerdown', o));
+  ok('标题栏按下即进入拖拽态', dock.classList.contains('resizing'));
+  doc.dispatchEvent(new window.PointerEvent('pointerup', {bubbles: true, clientX: 100, clientY: 50, pointerId: 1}));
+  ok('松开退出拖拽态', !dock.classList.contains('resizing'));
+}
+
 // 6) / 快选面板 + 三条关闭路径（Esc / ✕ / 点面板外）
 doc.querySelector('#qa-text').dispatchEvent(new window.KeyboardEvent('keydown', { key: '/', bubbles: true }));
 await new Promise((r) => setTimeout(r, 100));
