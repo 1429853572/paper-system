@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 MinerU/
 test_papers/
+data/inbox/

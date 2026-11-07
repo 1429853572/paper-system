@@ -1686,6 +1686,99 @@ async def export_papers_zip(request: Request):
                              f"filename*=UTF-8''{quote('论文导出.zip')}"})
 
 
+# ---------------- 目录批量入库（中文文献落地的关键路径） ----------------
+# 场景：知网/万方下载器把整目录文献放在服务器上 → 这里扫描目录批量入库；
+#       .caj 自动转 PDF 后走既有 upload→MinerU→索引→导读 管线。
+# 安全：只允许 DATA_DIR 之下的子目录（防任意主机文件读取）。
+def _safe_import_dir(rel: str) -> Path:
+    from core.config import DATA_DIR
+    base = (DATA_DIR / "inbox").resolve()
+    target = (base / (rel or "")).resolve() if rel else base
+    try:
+        target.relative_to(base)          # 越界即拒
+    except ValueError:
+        raise HTTPException(400, "只能导入 inbox/ 下的目录")
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(404, "目录不存在")
+    return target
+
+
+@app.get("/api/import-dirs")
+def list_import_dirs(request: Request):
+    """列出可导入的目录（inbox 下，含子目录与文件数）。"""
+    require(request)
+    from core.config import DATA_DIR
+    base = (DATA_DIR / "inbox").resolve()
+    if not base.exists():
+        return {"dirs": [], "base": str(base)}
+    dirs = []
+    for p in sorted(base.iterdir()):
+        if not p.is_dir():
+            continue
+        n = sum(1 for _ in p.rglob("*") if _.is_file() and _.suffix.lower() in (".pdf", ".caj", ".kdh"))
+        dirs.append({"name": p.name, "files": n, "path": str(p.relative_to(base))})
+    return {"dirs": dirs, "base": str(base)}
+
+
+@app.post("/api/import-directory")
+async def import_directory(request: Request):
+    """目录批量入库：PDF 直接入库；CAJ/KDH 先转 PDF 再入库；逐篇入队解析。"""
+    u = require(request)
+    body = await request.json()
+    target = _safe_import_dir((body.get("path") or "").strip())
+    is_admin = u["role"] == "admin"
+    overrides = _quota_overrides(u["id"])
+    from core import caj as caj_mod
+
+    files = [p for p in sorted(target.rglob("*"))
+             if p.is_file() and p.suffix.lower() in (".pdf", ".caj", ".kdh")]
+    if not files:
+        raise HTTPException(404, "该目录下没有 PDF/CAJ 文件")
+
+    batch_id = uuid.uuid4().hex[:12]
+    queued, skipped = [], []
+    for f in files:
+        try:
+            data = f.read_bytes()
+        except Exception as e:  # noqa: BLE001
+            skipped.append({"file": f.name, "reason": f"读取失败: {str(e)[:80]}"})
+            continue
+        # 按内容判定（扩展名为 .caj 的可能实为 PDF；PDF 优先直通）
+        kind = caj_mod.sniff(data)
+        if kind != "pdf":
+            try:
+                data = caj_mod.convert_bytes(data, f.name)
+            except caj_mod.ConvertError as e:
+                skipped.append({"file": f.name, "reason": str(e)})
+                continue
+        try:
+            pages, _k = ingest.preflight_doc(data, f.name, is_admin=is_admin, overrides=overrides)
+        except ingest.PreflightError as e:
+            skipped.append({"file": f.name, "reason": str(e)})
+            continue
+        file_hash = ingest.sha256_bytes(data)
+        paper_id, dup = ingest.create_paper(u["id"], file_hash, pages, len(data),
+                                            body.get("visibility", "shared"), f.name)
+        if dup:
+            skipped.append({"file": f.name, "reason": "已在库中（内容重复）"})
+            continue
+        cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+        with db.write() as c:
+            c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
+            # 溯源：来源目录与原始文件名（评审的「获取可追溯」）
+            c.execute("UPDATE papers SET meta_source=COALESCE(meta_source,'dir-import') WHERE id=?",
+                      (paper_id,))
+        ingest.store_pdf(paper_id, data, "original.pdf")
+        scheduler.enqueue(u["id"], "parse", paper_id,
+                          {"tier": "standard", "original_name": f.name,
+                           "source_dir": str(target), "batch_id": batch_id},
+                          priority="background")
+        queued.append({"file": f.name, "paper_id": paper_id})
+    audit(u["id"], "import-directory", f"{target.name}: {len(queued)} 入库 / {len(skipped)} 跳过")
+    return {"batch_id": batch_id, "queued": queued, "skipped": skipped,
+            "total": len(files)}
+
+
 @app.post("/api/papers/export/bibtex")
 async def export_bibtex(request: Request):
     """批量引用导出：多选论文 → 单 .bib 文件。"""

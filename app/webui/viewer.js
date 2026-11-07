@@ -563,6 +563,43 @@ $('#ident-btn').onclick = async () => {
   btn.disabled = false; btn.textContent = '导入';
 };
 $('#ident-input').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) $('#ident-btn').click(); };
+/* 目录批量入库：inbox/ 下子目录 → 扫描入库（CAJ 自动转 PDF），进度见任务中心 */
+async function loadImportDirs() {
+  try {
+    const d = await api('/api/import-dirs');
+    const sel = $('#dir-select');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">从服务器目录导入…</option>' +
+      (d.dirs.length ? d.dirs.map(x =>
+        `<option value="${esc(x.path)}">${esc(x.name)}（${x.files} 个文件）</option>`).join('')
+        : '<option value="" disabled>inbox/ 下暂无目录</option>');
+    if (cur) sel.value = cur;
+  } catch { /* ignore */ }
+}
+$('#dir-btn').onclick = async () => {
+  const path = $('#dir-select').value;
+  if (!path) { toast('先选择要导入的目录'); return; }
+  const btn = $('#dir-btn');
+  btn.disabled = true; btn.textContent = '扫描中…';
+  try {
+    const d = await api('/api/import-directory', {method: 'POST',
+      body: JSON.stringify({path, collection_id: state.currentCollection || null,
+                            visibility: state.uploadPrivate ? 'private' : 'shared'})});
+    const q = d.queued.length, sk = d.skipped.length;
+    toast(`已入库 ${q} 篇${sk ? `，跳过 ${sk} 个` : ''}——解析进度见「任务」页`, 4000);
+    if (sk) {
+      const reasons = d.skipped.slice(0, 3).map(x => `${x.file}: ${x.reason}`).join('；');
+      await uiConfirm(`以下文件未能入库：<br>${esc(reasons)}${sk > 3 ? `<br>…共 ${sk} 个` : ''}`,
+                      {title: '跳过明细', okText: '知道了', hideCancel: true});
+    }
+    upPop.hidden = true;
+    await loadImportDirs();
+    await refreshLib();
+  } catch (e) { toast('目录导入失败: ' + e.message); }
+  btn.disabled = false; btn.textContent = '📁 目录导入';
+};
+loadImportDirs();
 /* 解析过滤器（llm4z 式：页数上限 + 文件名排除；服务端上传时执行，设置跟随账号） */
 $('#pf-adv-toggle').onclick = () => { $('#pf-adv').hidden = !$('#pf-adv').hidden; };
 async function loadParseFilter() {

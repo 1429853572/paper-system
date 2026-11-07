@@ -76,6 +76,11 @@
           <textarea id="ident-input" rows="2" placeholder="粘贴 DOI / arXiv ID / BibTeX（可多条），自动抓元数据 + OA PDF"></textarea>
           <button class="btn small" id="ident-btn">导入</button>
         </div>
+        <div class="dir-import">
+          <select id="dir-select" style="width:auto;font-size:12px"><option value="">从服务器目录导入…</option></select>
+          <button class="btn small" id="dir-btn" title="扫描目录批量入库（PDF 直通，CAJ 自动转 PDF）">📁 目录导入</button>
+          <span class="muted" style="font-size:10px">把知网等下载器输出的目录放到 data/inbox/ 下</span>
+        </div>
         <div class="muted" style="font-size:11px;padding:2px 12px 4px" id="upload-target">上传到：全部文献</div>
         <div class="tp-sep"></div>
         <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
