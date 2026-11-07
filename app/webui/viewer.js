@@ -1628,19 +1628,21 @@ function renderBpDetail() {
   const colName2 = cid => (state.collections || []).find(c => c.id === cid)?.name || '未分库';
   const items = [...ids].map(id => {
     const p = byId.get(id);
-    return `<div class="bp-row">${esc(p ? (p.title || p.id) : id)}
-      <span class="muted" style="font-size:11px"> · ${esc(colName2(p?.collection_id))}</span></div>`;
+    return `<label class="bp-row" title="取消勾选即移出圈定">
+      <input type="checkbox" checked data-un="${esc(id)}">
+      <span class="bp-row-main">${esc(p ? (p.title || p.id) : id)}
+        <span class="muted" style="font-size:11px"> · ${esc(colName2(p?.collection_id))}</span></span>
+    </label>`;
   }).join('');
-  const fold = ids.size > 8;
-  det.innerHTML = `${fold ? `<button class="btn small" id="bp-toggle">展开 ${ids.size} 篇</button>` : ''}
-    <div class="bp-rows" id="bp-rows" ${fold ? 'hidden' : ''}>${items}</div>`;
+  det.innerHTML = `<div class="bp-rows" id="bp-rows">${items}</div>`;   // 超 5 行滚动，无折叠钮
   det.hidden = false;
-  const tg = $('#bp-toggle');
-  if (tg) tg.onclick = () => {
-    const r = $('#bp-rows');
-    r.hidden = !r.hidden;
-    tg.textContent = r.hidden ? `展开 ${ids.size} 篇` : '收起';
-  };
+  // 明细里直接取消勾选 → 移出圈定（勾选面板/计数同步）
+  $$('input[data-un]', det).forEach(cb => cb.onchange = e => {
+    if (e.target.checked) return;
+    state.batchSel.delete(e.target.dataset.un);
+    renderBpPicker();
+    syncBpCount();
+  });
 }
 
 /* ---- 自由勾选面板（服务端分页 20/页 + 标题搜索 + 本页全选/取消） ---- */
