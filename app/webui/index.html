@@ -52,12 +52,6 @@
         <div class="tp-item" data-f="parsing">解析中</div>
         <div class="tp-item" data-f="failed">失败</div>
         <div class="tp-item" data-f="private">仅私人</div>
-        <div class="tp-sep"></div>
-        <div class="tp-label">排序</div>
-        <div class="tp-item" data-s="recent">最近更新</div>
-        <div class="tp-item" data-s="title">标题</div>
-        <div class="tp-item" data-s="pages">页数</div>
-        <div class="tp-item" data-s="size">文件大小</div>
       </div>
       <button class="tool-arrow" id="sel-toggle" title="批量选择">
         <svg class="ic" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none">
@@ -72,6 +66,13 @@
           <path d="M2.5 4h11M4.5 8h7M6.5 12h3"/>
         </svg>
       </button>
+      <div class="tool-pop" id="sort-pop" hidden>
+        <div class="tp-label">排序</div>
+        <div class="tp-item" data-s="recent">最近更新</div>
+        <div class="tp-item" data-s="title">标题</div>
+        <div class="tp-item" data-s="pages">页数</div>
+        <div class="tp-item" data-s="size">文件大小</div>
+      </div>
       <div class="tool-pop upload-pop" id="upload-pop" hidden>
         <div class="tp-item" id="upload-file-btn"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 2.5h5.5L12.5 5.5V13.5h-8.5z"/><path d="M9.5 2.5v3h3"/></svg> 选择文件上传</div>
         <div class="url-import">

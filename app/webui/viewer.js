@@ -36,6 +36,27 @@ function toast(msg, ms = 2500) {
   _toastTimer = setTimeout(() => t.classList.remove('show'), ms);
 }
 
+/* 复制到剪贴板：clipboard API 仅安全上下文（HTTPS/localhost）可用——
+   局域网 http://192.168.x.x 访问时是 undefined，必须走 execCommand 兜底 */
+window.copyText = async text => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch { return false; }
+};
+
 /* ---- 统一弹窗（替代原生 confirm/prompt；MinerU 式轻量浮层） ----
    uiConfirm(msg, {title, okText, cancelText, danger, anchor}) → Promise<bool>
    uiPrompt(title, {value, placeholder, okText, anchor})       → Promise<string|null>
@@ -72,7 +93,9 @@ function _uiDialog({title, message = '', input = false, value = '', placeholder 
     pop.querySelector('[data-ok]').onclick = () => done(input ? inputVal() : true);
     const cancelBtn = pop.querySelector('[data-cancel]');
     if (cancelBtn) cancelBtn.onclick = () => done(input ? null : false);
-    if (copyText) pop.querySelector('[data-copy]').onclick = () => { navigator.clipboard?.writeText(copyText); toast('已复制'); };
+    if (copyText) pop.querySelector('[data-copy]').onclick = async () => {
+      toast(await window.copyText(copyText) ? '已复制' : '复制失败，请手动选中');
+    };
     if (backdrop) {
       backdrop.onclick = () => done(input ? null : false);
       document.body.appendChild(backdrop);
@@ -593,6 +616,10 @@ function markFilterMenu() {
       it.classList.toggle('on', on);
     });
   }
+  const spop = $('#sort-pop');
+  if (spop) {
+    $$('.tp-item', spop).forEach(it => it.classList.toggle('on', it.dataset.s === state.sortBy));
+  }
   const arrow = $('#filter-arrow');
   if (!arrow) return;
   const fn = FILTERS.find(f => f[0] === state.filter)?.[1] || '全部';
@@ -620,6 +647,32 @@ $('#filter-pop').onclick = e => {
   markFilterMenu();
   loadPapers();
 };
+/* 排序独立弹层（原 #filter-arrow2 死按钮：HTML 有、接线无——排序一直埋在筛选弹层里） */
+const sortPop = $('#sort-pop');
+$('#filter-arrow2')?.addEventListener('click', e => {
+  e.stopPropagation();
+  sortPop.hidden = !sortPop.hidden;
+  if (!sortPop.hidden) {
+    markFilterMenu();
+    const r = e.currentTarget.getBoundingClientRect();
+    sortPop.style.position = 'fixed';
+    sortPop.style.top = (r.bottom + 6) + 'px';
+    sortPop.style.right = Math.max(8, innerWidth - r.right) + 'px';
+    sortPop.style.left = 'auto';
+  }
+});
+sortPop.onclick = e => {
+  const item = e.target.closest('.tp-item');
+  if (!item) return;
+  state.sortBy = item.dataset.s;
+  localStorage.setItem('ps-sort', state.sortBy);
+  sortPop.hidden = true;
+  markFilterMenu();
+  loadPapers();
+};
+document.addEventListener('click', e => {
+  if (!sortPop.hidden && !sortPop.contains(e.target) && e.target.id !== 'filter-arrow2') sortPop.hidden = true;
+});
 document.addEventListener('click', e => {
   const pop = $('#filter-pop');
   if (pop && !pop.hidden && !e.target.closest('#filter-pop') && !e.target.closest('#filter-arrow')) pop.hidden = true;
@@ -1686,8 +1739,7 @@ window.copyCite = async (pid) => {
     txt = (d.textContent || '').replace(/\s+/g, ' ').trim();
   }
   if (!txt) { toast('引用为空'); return; }
-  try { await navigator.clipboard.writeText(txt); toast('已复制'); }
-  catch { toast('复制失败，请手动选中复制'); }
+  toast(await window.copyText(txt) ? '已复制' : '复制失败，请手动选中复制');
 };
 
 /* ---------------- 右栏页签：问答 / 导读（与文章并排） ---------------- */
@@ -3590,7 +3642,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   let closed = false;
   for (const sel of ['#acc-pop', '#filter-pop', '#upload-pop', '#download-pop',
-                     '#queue-pop', '#qa-picker-pop', '#col-new-form', '#health-pop']) {
+                     '#queue-pop', '#qa-picker-pop', '#col-new-form', '#health-pop', '#sort-pop']) {
     const el = document.querySelector(sel);
     if (el && !el.hidden) { el.hidden = true; closed = true; }
   }

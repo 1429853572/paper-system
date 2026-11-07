@@ -31,10 +31,21 @@ CSL_STYLES: list[tuple[str, str]] = [
     ("ieee", "IEEE"),
     ("nature", "Nature"),
     ("science", "Science"),
-    ("american-chemical-society", "ACS"),
-    ("american-medical-association", "AMA"),
+    ("cell", "Cell"),
+    ("plos", "PLOS"),
+    ("mdpi", "MDPI"),
+    ("frontiers", "Frontiers"),
+    ("american-chemical-society", "ACS（化学）"),
+    ("american-institute-of-physics", "AIP（物理）"),
+    ("american-medical-association", "AMA/Vancouver（医学）"),
+    ("the-new-england-journal-of-medicine", "NEJM（医学）"),
+    ("the-lancet", "The Lancet（医学）"),
     ("elsevier-harvard", "Elsevier（Harvard）"),
     ("springer-basic-author-date", "Springer"),
+    ("harvard-cite-them-right", "Harvard（Cite Them Right）"),
+    ("sage-harvard", "SAGE（Harvard）"),
+    ("taylor-and-francis-chicago-author-date", "Taylor & Francis"),
+    ("american-political-science-association", "APSA（政治学）"),
 ]
 
 

@@ -185,8 +185,11 @@ ensure_citeproc() {
   # 引用样式引擎（citeproc-js + CSL 官方样式）：仓库 vendor/ 已自带，这里只做缺失修复
   local V="app/webui/vendor/citeproc" C="app/webui/vendor/csl" VER="2.4.63"
   local STYLES=(china-national-standard-gb-t-7714-2015-numeric china-national-standard-gb-t-7714-2015-author-date
-                apa modern-language-association chicago-author-date ieee nature science
-                american-chemical-society american-medical-association elsevier-harvard springer-basic-author-date)
+                apa modern-language-association chicago-author-date ieee nature science cell plos mdpi frontiers
+                american-chemical-society american-institute-of-physics american-medical-association
+                the-new-england-journal-of-medicine the-lancet elsevier-harvard springer-basic-author-date
+                harvard-cite-them-right sage-harvard taylor-and-francis-chicago-author-date
+                american-political-science-association)
   if [[ ! -s "$V/citeproc.js" ]]; then
     mkdir -p "$V"
     curl -fsSL --retry 2 -o /tmp/citeproc.tgz "https://registry.npmmirror.com/citeproc/-/citeproc-${VER}.tgz" \
