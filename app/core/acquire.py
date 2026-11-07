@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
+from urllib.parse import urlparse
 
 import httpx
 
@@ -18,6 +20,67 @@ from .config import ACQUIRE_SERVICE_URL, ACQUIRE_TOKEN
 log = logging.getLogger("acquire")
 
 SITES = {"chinaxiv": "中国科学院科技论文预印本", "cnki": "中国知网"}
+
+# 与宿主服务同款白名单（纵深防御：即便服务侧漏了，这里也拦一道）
+ALLOWED_HOSTS = [
+    h.strip().lower() for h in
+    (os.environ.get("CNKI_ALLOWED_HOSTS") or
+     "chinaxiv.org,kns.cnki.net,www.cnki.net,cnki.net,navi.cnki.net,"
+     "arxiv.org,export.arxiv.org,doi.org,dx.doi.org,*.cnki.net").split(",")
+    if h.strip()
+]
+
+
+def host_allowed(host: str) -> bool:
+    host = (host or "").split(":")[0].lower()
+    for pat in ALLOWED_HOSTS:
+        p = pat.lower()
+        if p.startswith("*."):
+            if host == p[2:] or host.endswith(p[1:]):
+                return True
+        elif host == p:
+            return True
+    return False
+
+
+def _public_ip(ip: str) -> bool:
+    """非公网 IP 判定（环回/私网/链路本地/保留段）——浏览器能带宿主身份访问内网。"""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return not (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified)
+
+
+def check_url(url: str) -> str:
+    """校验下载 URL：协议 + 无 userinfo/反斜杠 + 域名白名单 + 解析到公网 IP。
+
+    Python 的 urlparse 与浏览器(WHATWG)对 `\` 与 userinfo 的解析不一致：
+    `http://169.254.169.254\@chinaxiv.org/x` 在 urlparse 看来是 chinaxiv.org，
+    浏览器实际连 169.254.169.254 → 这里统一按「拒绝含 \ @ 空白 的 URL」处理。
+    """
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("仅支持 http/https URL")
+    if any(ch in url for ch in ("\\", "@", " ", "\t", "\n")):
+        raise ValueError("URL 含非法字符（\ @ 空白）")
+    parts = urlparse(url)
+    host = parts.hostname or ""
+    if not host:
+        raise ValueError("URL 缺少主机名")
+    if not host_allowed(host):
+        raise ValueError(f"域名不在采集白名单内（拒绝访问 {host}）")
+    # 域名若直接是 IP，必须是公网
+    try:
+        import ipaddress
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        if not _public_ip(host):
+            raise ValueError(f"拒绝访问非公网 IP（{host}）")
+    return host
 
 
 def _headers() -> dict:
@@ -65,7 +128,11 @@ def search(site: str, query: str, page: int = 1, limit: int = 20) -> list[dict]:
 
 
 def fetch(url: str, timeout: int = 120) -> tuple[bytes, str, str]:
-    """经宿主浏览器下载。返回 (内容, content_type, 文件名)。"""
+    """经宿主浏览器下载。返回 (内容, content_type, 文件名)。
+
+    下载前校验域名白名单（浏览器带宿主身份访问任意 URL 是 SSRF 跳板）。
+    """
+    check_url(url)
     if not _base():
         raise ValueError("未配置采集服务（ACQUIRE_SERVICE_URL）")
     try:

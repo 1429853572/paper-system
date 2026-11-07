@@ -48,13 +48,17 @@ _WRITE_TOOLS = [
 ]
 
 # 中文文献采集（宿主浏览器服务；需该服务在运行）
-_ACQ_TOOLS = [
+# 读工具：只检索不落库
+_ACQ_READ_TOOLS = [
     ("search_cnki", "检索中文文献（chinaxiv 预印本 / 知网），返回候选与下载直链", {
         "type": "object", "properties": {
             "query": {"type": "string", "description": "关键词（中文主题/标题）"},
             "site": {"type": "string", "enum": ["chinaxiv", "cnki"], "default": "chinaxiv"},
             "limit": {"type": "integer", "default": 10}},
         "required": ["query"]}),
+]
+# 写工具：落库/下载（需 PAPERSYS_MCP_TOOLSETS=read,write）
+_ACQ_WRITE_TOOLS = [
     ("create_topic_task", "创建专题采集任务（关键词→检索→勾选下载→综述）并立即检索候选", {
         "type": "object", "properties": {
             "title": {"type": "string", "description": "专题名（同时作为综述的研究问题先验）"},
@@ -285,7 +289,7 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
         acqtask.update(tid, status="ready")
         return {"task_id": tid, "title": title or query, "count": len(cands),
                 "candidates": cands,
-                "next": "用 select_topic_candidates 勾选后 download_topic_task 下载入库"}
+                "next": "把候选的 pdf_url/title 等字段放入 acquire_cnki(items=[...]) 即可下载入库"}
     if name == "list_topic_tasks":
         from . import acqtask
         rows = db.all("SELECT id,title,query,site,status,paper_ids,synthesis_id "
@@ -305,6 +309,10 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
         picks = [x for x in (args.get("items") or []) if isinstance(x, dict)][:10]
         if not picks:
             raise ValueError("items 为空")
+        role = (db.one("SELECT role FROM users WHERE id=?", (user_id,)) or {}).get("role", "member")
+        # 落默认分库（与 HTTP 链路一致，避免落在「未分库」）
+        row = db.one("SELECT id FROM collections WHERE owner_id=? ORDER BY id LIMIT 1", (user_id,))
+        default_cid = row["id"] if row else None
         out, skipped = [], []
         for it in picks:
             url = (it.get("pdf_url") or "").strip()
@@ -321,8 +329,17 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
                 skipped.append({"title": title, "reason": "非 PDF 内容"})
                 continue
             from . import ingest
+            if data[:5] != b"%PDF-":
+                from . import caj as caj_mod
+                try:
+                    data = caj_mod.convert_bytes(data, fname or "paper.pdf")
+                except caj_mod.ConvertError as e:
+                    skipped.append({"title": title, "reason": f"非 PDF 且转换失败: {str(e)[:110]}"})
+                    continue
             try:
-                pages, _k = ingest.preflight_doc(data, fname or "paper.pdf", is_admin=True, overrides={})
+                # is_admin 用真实角色：否则 MCP 通道能绕过 member 的页数限额
+                pages, _k = ingest.preflight_doc(data, fname or "paper.pdf",
+                                                 is_admin=(role == "admin"), overrides={})
             except Exception as e:  # noqa: BLE001
                 skipped.append({"title": title, "reason": str(e)[:100]})
                 continue
@@ -334,6 +351,7 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
             with db.write() as c:
                 c.execute("UPDATE papers SET title=COALESCE(NULLIF(title,''),?) WHERE id=?", (title, pid))
                 c.execute("UPDATE papers SET meta_source=COALESCE(meta_source,'acquire') WHERE id=?", (pid,))
+                c.execute("UPDATE papers SET collection_id=? WHERE id=?", (default_cid, pid))
                 if it.get("authors"):
                     c.execute("UPDATE papers SET authors=? WHERE id=?", (it["authors"][:500], pid))
                 if it.get("year"):
@@ -372,18 +390,17 @@ def handle(user_id: int, payload: dict) -> dict:
             tools = [{"name": n, "description": d, "inputSchema": s}
                      for n, d, s in _READ_TOOLS]
             tools += [{"name": n, "description": d, "inputSchema": s}
-                      for n, d, s in _ACQ_TOOLS]          # 采集是写动作但走既有入库管线，不需确认卡
+                      for n, d, s in _ACQ_READ_TOOLS]
             if writes_enabled():
                 tools += [{"name": n, "description": d, "inputSchema": s}
-                          for n, d, s in _WRITE_TOOLS]
+                          for n, d, s in _WRITE_TOOLS + _ACQ_WRITE_TOOLS]
             return ok({"tools": tools})
         if method == "tools/call":
             name = params.get("name") or ""
             if name in {n for n, _, _ in _WRITE_TOOLS} and not writes_enabled():
                 return err(-32601, "写工具未启用（设置 PAPERSYS_MCP_TOOLSETS=read,write）")
-            if name in {n for n, _, _ in _ACQ_TOOLS} and name == "acquire_cnki" \
-                    and not writes_enabled():
-                return err(-32601, "采集入库属写操作，请开启 PAPERSYS_MCP_TOOLSETS=read,write")
+            if name in {n for n, _, _ in _ACQ_WRITE_TOOLS} and not writes_enabled():
+                return err(-32601, "采集入库/建专题属写操作，请开启 PAPERSYS_MCP_TOOLSETS=read,write")
             result = run_tool(user_id, name, params.get("arguments") or {})
             return ok({"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]})
         return err(-32601, f"未知方法: {method}")

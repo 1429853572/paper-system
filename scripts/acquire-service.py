@@ -43,6 +43,28 @@ _browser = None            # 常驻浏览器
 _context = None            # 常驻上下文（Cookie 复用）
 
 
+# 允许下载的域名白名单（防 SSRF：浏览器能带宿主身份访问内网/任意站，必须限源）
+ALLOWED_HOSTS = [
+    h.strip().lower() for h in
+    (os.environ.get("CNKI_ALLOWED_HOSTS") or
+     "chinaxiv.org,kns.cnki.net,www.cnki.net,cnki.net,navi.cnki.net,"
+     "arxiv.org,export.arxiv.org,doi.org,dx.doi.org,*.cnki.net").split(",")
+    if h.strip()
+]
+
+
+def _host_allowed(host: str) -> bool:
+    host = (host or "").split(":")[0].lower()
+    for pat in ALLOWED_HOSTS:
+        p = pat.lower()
+        if p.startswith("*."):
+            if host == p[2:] or host.endswith(p[1:]):
+                return True
+        elif host == p:
+            return True
+    return False
+
+
 def _playwright():
     """返回（必要时启动）playwright 实例。"""
     global _pw
@@ -190,7 +212,17 @@ def do_search(site: str, query: str, page: int, limit: int) -> list[dict]:
 
 
 def do_fetch(url: str, timeout: int = 90) -> tuple[bytes, str, str]:
-    """经浏览器会话下载 URL（带 Cookie / 反爬头），返回 (内容, content_type, 文件名)。"""
+    """经浏览器会话下载 URL（带 Cookie / 反爬头），返回 (内容, content_type, 文件名)。
+
+    只允许白名单域名——浏览器带着宿主身份访问任意 URL 是 SSRF/内网探测跳板。
+    """
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("仅支持 http/https URL")
+    if any(ch in url for ch in ("\\", "@", " ", "\t", "\n")):
+        raise ValueError("URL 含非法字符（\ @ 空白）")
+    host = urllib.parse.urlparse(url).hostname or ""
+    if not _host_allowed(host):
+        raise ValueError(f"域名不在白名单内（拒绝访问 {host}）")
     with _lock:
         pw = _playwright()
         _browser, ctx = _browser_ctx(pw)
@@ -299,8 +331,16 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8802)
     ap.add_argument("--token", default="")   # 缺省读 PAPERSYS_ACQUIRE_TOKEN
+    ap.add_argument("--allow-no-auth", action="store_true",
+                    help="显式允许无鉴权（仅限完全隔离的内网；默认拒绝启动）")
     args = ap.parse_args()
     ACQUIRE_TOKEN = args.token or os.environ.get("PAPERSYS_ACQUIRE_TOKEN", "")
+    if not ACQUIRE_TOKEN and not args.allow_no_auth:
+        print("[acquire] 拒绝启动：未设置 PAPERSYS_ACQUIRE_TOKEN。"
+              "本服务可驱动宿主浏览器访问外网，必须鉴权。"
+              "请在 .env 设置该 token（install.sh 会自动生成），"
+              "确需无鉴权请显式加 --allow-no-auth。", flush=True)
+        raise SystemExit(2)
     srv = HTTPServer(("0.0.0.0", args.port), Handler)   # 单线程：Playwright sync API 只能在创建它的线程用
     print(f"[acquire] 采集服务启动 http://0.0.0.0:{args.port} "
           f"（鉴权{'开' if ACQUIRE_TOKEN else '关'}）", flush=True)

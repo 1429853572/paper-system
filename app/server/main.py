@@ -1704,6 +1704,18 @@ def _safe_import_dir(rel: str) -> Path:
 
 
 # ---------------- 专题采集任务（可中断可恢复的科研采集流程） ----------------
+def _safe_collection(u: dict, cid: str | None) -> str:
+    """目标文献库归属校验（不能把论文塞进他人库）；未指定 → 默认库。"""
+    if not cid:
+        return get_or_create_default_collection(u["id"])
+    row = db.one("SELECT id, owner_id FROM collections WHERE id=?", (cid,))
+    if row is None:
+        raise HTTPException(400, "目标文献库不存在")
+    if row["owner_id"] != u["id"] and u["role"] != "admin":
+        raise HTTPException(403, "无权写入他人文献库")
+    return cid
+
+
 def _own_task(u: dict, tid: str):
     from core import acqtask
     t = acqtask.get(tid)
@@ -1854,9 +1866,11 @@ async def synthesize_acq_task(tid: str, request: Request):
         pending = [i for i in ids
                    if (db.one("SELECT parse_status s FROM papers WHERE id=?", (i,)) or {}).get("s") != "parsed"]
         raise HTTPException(400, f"还有 {len(pending)} 篇未解析完成，完成后即可生成综述")
-    # 已有综述 → 直接返回
+    # 已有综述：仅当成功完成才复用；失败/进行中的允许重建（否则永久无法重跑）
     if t.get("synthesis_id"):
-        return {"synthesis_id": t["synthesis_id"], "reused": True}
+        prev = db.one("SELECT status FROM syntheses WHERE id=?", (t["synthesis_id"],))
+        if prev and prev["status"] == "done":
+            return {"synthesis_id": t["synthesis_id"], "reused": True}
     est = synthesis.estimate(ids)
     sid = synthesis.create(u["id"], ids, est)
     with db.write() as c:
@@ -1865,17 +1879,20 @@ async def synthesize_acq_task(tid: str, request: Request):
     acqtask.update(tid, synthesis_id=sid, status="reviewing")
     batch_id = uuid.uuid4().hex[:12]
     scheduler.enqueue(u["id"], "synthesis", None,
-                      {"synthesis_id": sid, "batch_id": batch_id, "topic": t["title"]},
+                      {"synthesis_id": sid, "batch_id": batch_id, "topic": t["title"],
+                       "task_id": tid},
                       priority="background", progress_total=est["calls"])
     return {"synthesis_id": sid, "estimate": est}
 
 
 @app.delete("/api/acq-tasks/{tid}")
 def delete_acq_task(tid: str, request: Request):
+    """删除专题：论文保留在文库，但清掉溯源引用（避免悬挂 task id）。"""
     u = require(request)
     _own_task(u, tid)
     with db.write() as c:
         c.execute("DELETE FROM acq_tasks WHERE id=?", (tid,))
+        c.execute("UPDATE papers SET acq_task_id=NULL WHERE acq_task_id=?", (tid,))
     return {"ok": True}
 
 
@@ -1899,8 +1916,12 @@ async def acquire_search(request: Request):
         raise HTTPException(400, "query 必填")
     from core import acquire
     try:
-        items = acquire.search(site, query, int(body.get("page") or 1),
-                               min(int(body.get("limit") or 20), 50))
+        page = int(body.get("page") or 1)
+        limit = min(int(body.get("limit") or 20), 50)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "page/limit 必须是数字")
+    try:
+        items = acquire.search(site, query, page, limit)
     except ValueError as e:
         raise HTTPException(502, str(e))
     # 已在库的标记（按标题粗匹配，防重复下载）
@@ -1956,7 +1977,7 @@ async def acquire_import(request: Request):
         if dup:
             skipped.append({"title": title, "reason": "已在库中（内容重复）"})
             continue
-        cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+        cid = _safe_collection(u, body.get("collection_id"))
         with db.write() as c:
             c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
             c.execute("UPDATE papers SET title=COALESCE(NULLIF(title,''),?) WHERE id=?", (title, paper_id))
@@ -2006,12 +2027,15 @@ async def import_directory(request: Request):
     target = _safe_import_dir((body.get("path") or "").strip())
     is_admin = u["role"] == "admin"
     overrides = _quota_overrides(u["id"])
+    _check_daily_quota(u["id"], is_admin, overrides)     # 与上传链路同款：解析配额不能被绕过
     from core import caj as caj_mod
 
     files = [p for p in sorted(target.rglob("*"))
              if p.is_file() and p.suffix.lower() in (".pdf", ".caj", ".kdh")]
     if not files:
         raise HTTPException(404, "该目录下没有 PDF/CAJ 文件")
+    if len(files) > 100:
+        raise HTTPException(400, f"单次最多导入 100 个文件（当前 {len(files)} 个），请分批")
 
     batch_id = uuid.uuid4().hex[:12]
     queued, skipped = [], []
@@ -2040,7 +2064,7 @@ async def import_directory(request: Request):
         if dup:
             skipped.append({"file": f.name, "reason": "已在库中（内容重复）"})
             continue
-        cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+        cid = _safe_collection(u, body.get("collection_id"))
         with db.write() as c:
             c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
             # 溯源：来源目录与原始文件名（评审的「获取可追溯」）

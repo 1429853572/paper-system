@@ -63,21 +63,32 @@ def update(task_id: str, **fields) -> None:
     sets, args = [], []
     for k, v in fields.items():
         sets.append(f"{k}=?")
-        args.append(v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+        # None → SQL NULL（json.dumps(None) 会写成字符串 "null"，前端会显示红色 null 横幅）
+        if v is None:
+            args.append(None)
+        elif isinstance(v, str):
+            args.append(v)
+        else:
+            args.append(json.dumps(v, ensure_ascii=False))
     args.append(task_id)
     with db.write() as c:
         c.execute(f"UPDATE acq_tasks SET {', '.join(sets)}, updated_at=datetime('now') WHERE id=?",
                   tuple(args))
 
 
+def cand_key(c: dict) -> str:
+    """候选稳定键（pdf_url 优先，否则标题）——空 pdf_url 不得参与匹配，
+    否则 mark_candidate('') 会命中所有无链接候选。"""
+    return (c.get("pdf_url") or "").strip() or ("t:" + (c.get("title") or "").strip())
+
+
 def set_candidates(task_id: str, candidates: list[dict]) -> None:
     """覆盖候选（重新检索时保留已勾选与已下载状态）。"""
     cur = get(task_id)
-    old = {c.get("pdf_url") or c.get("title"): c for c in (cur or {}).get("candidates", [])}
+    old = {cand_key(c): c for c in (cur or {}).get("candidates", [])}
     merged = []
     for c in candidates:
-        key = c.get("pdf_url") or c.get("title")
-        prev = old.get(key) or {}
+        prev = old.get(cand_key(c)) or {}
         merged.append({**c,
                        "selected": bool(prev.get("selected")),
                        "dl_status": prev.get("dl_status") or DL_PENDING,
@@ -86,18 +97,14 @@ def set_candidates(task_id: str, candidates: list[dict]) -> None:
     update(task_id, candidates=merged)
 
 
-def candidate(task_id: str, pdf_url: str) -> dict | None:
-    for c in get(task_id).get("candidates", []):
-        if c.get("pdf_url") == pdf_url:
-            return c
-    return None
-
-
 def mark_candidate(task_id: str, pdf_url: str, **fields) -> None:
+    """按候选键更新单条（列级更新，避免整列读-改-写互相覆盖）。"""
+    key = pdf_url.strip() or None
     cands = get(task_id).get("candidates", [])
     changed = False
     for c in cands:
-        if c.get("pdf_url") == pdf_url:
+        ck = cand_key(c)
+        if (key and ck == key) or (not key and ck.startswith("t:")):
             c.update(fields)
             changed = True
     if changed:

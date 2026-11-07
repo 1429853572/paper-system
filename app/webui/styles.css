@@ -969,7 +969,7 @@ table.list input[type=checkbox] { width: auto; }
 .bp-picker { margin: 0 16px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
 .bpp-tools { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); background: var(--panel-soft); flex-wrap: wrap; }
 .bpp-tools input { min-width: 140px; }
-.bpp-list { max-height: 300px; overflow: auto; }
+.bpp-list { overflow-y: auto; }
 .bpp-row { display: flex; align-items: flex-start; gap: 9px; padding: 7px 10px; border-bottom: 1px dashed var(--line-soft);
            cursor: pointer; font-size: var(--fs-sm); }
 .bpp-row:hover { background: var(--hover); }
@@ -1031,6 +1031,7 @@ table.list input[type=checkbox] { width: auto; }
 .tt-meta      { background: var(--bg-soft);      color: var(--text-2); }
 .tt-embed     { background: var(--bg-soft);      color: var(--muted); }
 .tt-synthesis { background: var(--tint-primary-2); color: var(--primary-dark); }
+.tt-acquire { background: var(--tint-ok); color: var(--ok); }
 .task-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
             border-bottom: 1px dashed var(--line-soft); }
 .task-row:last-child { border-bottom: none; }

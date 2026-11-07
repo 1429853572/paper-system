@@ -505,10 +505,27 @@ class Scheduler:
                                   job_update=lambda **f: self._update(job["id"], **f),
                                   topic=payload.get("topic") or "")
                     self._update(job["id"], status="done", progress_done=1, progress_total=1)
+                    # 专题任务闭环：综述完成 → 专题状态置「已完成」
+                    tid = payload.get("task_id")
+                    if tid:
+                        try:
+                            from core import acqtask
+                            acqtask.update(tid, status="done", error=None)
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("专题 %s 状态更新失败: %s", tid, str(e)[:120])
                     log.info("综述完成 %s", payload.get("synthesis_id"))
                 except Exception as e:  # noqa: BLE001
                     log.exception("synthesis job %s 异常", job["id"])
                     self._update(job["id"], status="failed", error=str(e)[:300])
+                    # 综述失败 → 专题回滚为 failed 并清空 synthesis_id（否则永久卡「综述中」且无法重跑）
+                    try:
+                        payload2 = json.loads(job["payload"] or "{}")
+                        if payload2.get("task_id"):
+                            from core import acqtask
+                            acqtask.update(payload2["task_id"], status="failed",
+                                           error=str(e)[:300], synthesis_id=None)
+                    except Exception:  # noqa: BLE001
+                        pass
             except Exception:  # noqa: BLE001
                 log.exception("synthesis worker 循环异常（继续运行）")
                 time.sleep(5)
@@ -528,6 +545,14 @@ class Scheduler:
                 except Exception as e:  # noqa: BLE001
                     log.exception("acquire job %s 异常", job["id"])
                     self._update(job["id"], status="failed", error=str(e)[:300])
+                    try:   # 专题状态一并回滚（否则永远显示「下载中」并被前端轮询）
+                        from core import acqtask
+                        payload = json.loads(job["payload"] or "{}")
+                        if payload.get("task_id"):
+                            acqtask.update(payload["task_id"], status="failed",
+                                           error=str(e)[:300])
+                    except Exception:  # noqa: BLE001
+                        pass
             except Exception:  # noqa: BLE001
                 log.exception("acquire worker 循环异常（继续运行）")
                 time.sleep(5)
@@ -545,6 +570,7 @@ class Scheduler:
 
         payload = json.loads(job["payload"] or "{}")
         tid = payload.get("task_id") or ""
+        batch_id = payload.get("batch_id") or ""
         task = acqtask.get(tid)
         if task is None:
             self._update(job["id"], status="done")
@@ -600,9 +626,16 @@ class Scheduler:
             paper_id, dup = ingest.create_paper(job["user_id"], fh, pages, len(data),
                                                 "shared", fname or "paper.pdf")
             if dup:
-                # 已在库的同内容论文同样属于本专题（计入综述），只是不重复入库
-                acqtask.mark_candidate(tid, url, dl_status="done", paper_id=paper_id)
-                acqtask.attach_papers(tid, [paper_id])
+                # 已在库的同内容论文：仅当**本人可见**时才计入本专题，
+                # 否则会把别人的私有论文挂进我的专题并写进综述报告。
+                visible = db.one("SELECT id FROM papers WHERE id=? AND deleted_at IS NULL "
+                                 "AND (visibility='shared' OR owner_id=?)",
+                                 (paper_id, job["user_id"]))
+                acqtask.mark_candidate(tid, url, dl_status="done",
+                                       paper_id=paper_id if visible else None,
+                                       error=None if visible else "内容与库中他人私有文献重复，未计入")
+                if visible:
+                    acqtask.attach_papers(tid, [paper_id])
                 done += 1
                 self._update(job["id"], progress_done=done, progress_total=total)
                 continue
@@ -619,15 +652,19 @@ class Scheduler:
             ingest.store_pdf(paper_id, data, "original.pdf")
             self.enqueue(job["user_id"], "parse", paper_id,
                           {"tier": "standard", "original_name": fname or "paper.pdf",
-                           "source_url": url, "batch_id": payload.get("batch_id")},
+                           "source_url": url, "batch_id": batch_id},
                           priority="background")
             acqtask.mark_candidate(tid, url, dl_status="done", paper_id=paper_id, error=None)
             acqtask.attach_papers(tid, [paper_id])
             done += 1
             self._update(job["id"], progress_done=done, progress_total=total)
             _t.sleep(1.5 + random.random() * 1.5)   # 礼貌间隔
-        # 收尾：状态 → 已入库（解析完成后可生成综述）
-        acqtask.update(tid, status="ingested", error=None)
+        # 收尾：有成功入库才置「已入库」；全失败则置失败（否则显示「已入库 0 篇」）
+        papers = acqtask.get(tid).get("paper_ids") or []
+        if papers:
+            acqtask.update(tid, status="ingested", error=None)
+        else:
+            acqtask.update(tid, status="failed", error="没有成功下载的文献")
         self._update(job["id"], status="done", progress_done=total, progress_total=total)
 
     # ================= 管家：回收站清理 + 每日备份 =================

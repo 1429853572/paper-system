@@ -150,7 +150,12 @@ function _uiDialog({title, message = '', input = false, value = '', placeholder 
 window.uiConfirm = (message, opts = {}) => _uiDialog({message, danger: true, ...opts});
 window.uiPrompt = (title, opts = {}) => _uiDialog({title, input: true, ...opts});
 window.uiPassword = (title, password) => _uiDialog({title, message: password, copyText: password, okText: '关闭', hideCancel: true, danger: false});
-function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+function esc(s) {
+  // textContent→innerHTML 只转义 & < >，**不转义引号**——属性上下文（value="..."）会破防。
+  // 补齐 " ' 的转义（正文与属性通用）。
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 /* ---- SVG 图标库（v1.2 起 UI 图标全 SVG 化；toast 消息文本中的 emoji 保留）----
    线条风格：16 viewBox / stroke 1.5 / 圆角端点 / currentColor 跟随文字色。 */
@@ -1474,7 +1479,8 @@ async function _refreshQueueBadge() {
     btn.hidden = !active.length && !pend.length;
     badge.textContent = active.length + pend.length;
     // 批量中心打开时：任务区随事件实时刷新
-    if ($('#page-batch')?.style.display !== 'none' && Date.now() - _batchSseAt > 2000) {
+    if (($('#page-tasks')?.style.display !== 'none' || $('#page-batch')?.style.display !== 'none')
+        && Date.now() - _batchSseAt > 2000) {
       _batchSseAt = Date.now();
       renderTaskPanel();
       renderSynList();
@@ -1549,6 +1555,10 @@ async function renderBatchPage() {
         <div class="batch-right">
           <div class="bp-head2">② 选择操作 <span class="muted" style="font-weight:400;font-size:11px">未圈定时操作卡置灰</span></div>
           <div class="batch-ops">
+            <div class="batch-card" data-act="topics" title="专题采集任务：关键词 → 检索 → 勾选下载入库 → 一键综述（可中断可恢复）">
+              <b>📚 专题采集</b><span class="muted">关键词建专题 → 检索 → 勾选下载入库 → 自动生成综述</span></div>
+            <div class="batch-card" data-act="acquire" id="acq-btn" title="按关键词检索中文文献（知网/中国科学院预印本），勾选后批量下载入库">
+              <b>📥 采集文献</b><span class="muted">按关键词检索 → 勾选 → 浏览器下载入库（知网/预印本）</span></div>
             <div class="batch-card primary ${state.selected.size ? '' : 'off'}" data-act="review" title="自动分组→组内比对→跨组综合，生成可导出的综述报告">
               <b>📑 综述报告</b><span class="muted">多文献自动分组 · 逐组比对 · 跨组综合 · 导出 MD/CSV（2~90 篇）——批量处理的核心产出</span></div>
             ${Object.entries(BATCH_ACTS).map(([k, v]) => `
@@ -1794,6 +1804,7 @@ const TASK_TYPES = {
   meta:           {label: '元数据',  icon: '🏷', cls: 'tt-meta'},
   embed_backfill: {label: '索引回填', icon: '🧲', cls: 'tt-embed'},
   synthesis:      {label: '综述',    icon: '📑', cls: 'tt-synthesis'},
+  acquire:        {label: '采集下载', icon: '📥', cls: 'tt-acquire'},
 };
 const taskType = t => TASK_TYPES[t] || {label: t, icon: '•', cls: ''};
 state._taskFilter = {type: '', status: ''};
@@ -1816,7 +1827,7 @@ async function renderTasksPage() {
         <div class="task-filters">
           <span class="muted" style="font-size:11px">类型</span>
           ${chips('tt', f.type, [['', '全部'], ['parse', '解析'], ['translate', '翻译'],
-            ['summary', '导读'], ['meta', '元数据'], ['synthesis', '综述']])}
+            ['summary', '导读'], ['meta', '元数据'], ['synthesis', '综述'], ['acquire', '采集下载']])}
           <span class="task-fsep"></span>
           <span class="muted" style="font-size:11px">状态</span>
           ${chips('ts', f.status, [['', '全部'], ['active', '进行中'], ['done', '完成'], ['failed', '失败']])}
@@ -1972,11 +1983,14 @@ function updateBatchOpsState() {
 }
 
 async function runBatchAction(act, anchor) {
+  // 采集/专题是独立入口（自带检索），不需要先圈定论文
+  if (act === 'acquire' || act === 'topics') {
+    if (act === 'acquire') openAcquirePop(anchor); else showTopicsView();
+    return;
+  }
   if (!state.selected.size) { toast('请先在上方圈定论文'); return; }
   const ids = [...state.selected];
   if (act === 'review') { await runSynthesis(anchor, ids); return; }
-  if (act === 'acquire') { openAcquirePop(); return; }
-  if (act === 'topics') { showTopicsView(); return; }
   if (act === 'bibtex') { downloadBibtex(ids); return; }
   if (act === 'delete') {
     if (!(await uiConfirm(`将圈定的 ${ids.length} 篇移入回收站？（${state.health.trash_days || 30} 天内可恢复）`,
@@ -1984,7 +1998,7 @@ async function runBatchAction(act, anchor) {
     try {
       await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
       toast(`已移入回收站 ${ids.length} 篇`);
-      setBatchSel(new Set(), '');
+      state.selected.clear();
       await refreshLib();
     } catch (e) { toast('删除失败: ' + e.message); }
     return;
@@ -2001,7 +2015,8 @@ async function runBatchAction(act, anchor) {
     if (d.queued.length) {
       state._batchOpen = new Set([d.batch_id]);
       renderTaskPanel();
-      $('#batch-panel').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      switchPage('tasks');                                   // 进度在任务中心页
+      setTimeout(() => $('#task-body')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
     } else renderTaskPanel();
   } catch (e) { toast('批量操作失败: ' + e.message); }
 }
@@ -2130,14 +2145,17 @@ async function showTopicDetail(tid) {
               : c.in_library ? '<span class="badge priv">已在库</span>' : ''}
           </label>`).join('')}
       </div>` : ''}
-      ${papers.length ? `<div class="card" style="padding:14px 16px">
+      <div class="card" style="padding:14px 16px">
         <b>已入库论文（${parsed}/${papers.length} 解析完成）</b>
-        <div class="muted" style="font-size:11px;margin:6px 0">${papers.map(p =>
-          esc((p.title || '').slice(0, 40))).join('、')}</div>
+        <div class="muted" style="font-size:11px;margin:6px 0">${papers.length
+          ? papers.map(p => esc((p.title || '').slice(0, 40))).join('、')
+          : '尚未下载入库任何文献'}</div>
         ${t.synthesis_id ? `<button class="btn small primary" id="td-syn">查看综述报告</button>`
-          : `<button class="btn small primary" id="td-mksyn" ${parsed < papers.length ? 'disabled' : ''}>
-              ${parsed < papers.length ? `还有 ${papers.length - parsed} 篇未解析完成` : '生成综述报告'}</button>`}
-      </div>` : ''}
+          : `<button class="btn small primary" id="td-mksyn" ${(parsed < papers.length || papers.length < 2) ? 'disabled' : ''}>
+              ${papers.length < 2 ? '至少需要 2 篇入库论文'
+                : parsed < papers.length ? `还有 ${papers.length - parsed} 篇未解析完成`
+                : '生成综述报告'}</button>`}
+      </div>
     </div>`;
   $('#td-back').onclick = () => showTopicsView();
   $('#td-search').onclick = async () => {
@@ -2171,6 +2189,13 @@ async function showTopicDetail(tid) {
     } catch (e) { toast('下载入队失败: ' + e.message); }
   });
   $('#td-syn')?.addEventListener('click', () => showSynthesisReport(t.synthesis_id));
+  // 进行中（下载/综述/解析未完）→ 自动刷新详情，进度可见
+  if (t.status === 'downloading' || t.status === 'reviewing' ||
+      (papers.length && parsed < papers.length)) {
+    setTimeout(() => {
+      if ($('#page-batch')?.innerHTML.includes('td-search')) showTopicDetail(tid);
+    }, 4000);
+  }
   $('#td-mksyn')?.addEventListener('click', async () => {
     try {
       const d = await api(`/api/acq-tasks/${tid}/synthesize`, {method: 'POST'});
@@ -2181,17 +2206,20 @@ async function showTopicDetail(tid) {
 }
 
 /* ---- 采集弹层：检索中文文献 → 勾选 → 批量下载入库 ---- */
-function openAcquirePop() {
+function openAcquirePop(anchorEl) {
   const pop = $('#acq-pop');
   if (!pop) return;
   pop.hidden = false;
-  const r = $('#acq-btn').getBoundingClientRect();
+  const el = anchorEl || $('#acq-btn');
+  if (!el) { toast('采集入口不可用'); return; }
+  const r = el.getBoundingClientRect();
   pop.style.position = 'fixed';
   pop.style.top = (r.bottom + 6) + 'px';
   pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
   pop.style.left = 'auto';
   state._acq = state._acq || {site: 'chinaxiv', q: '', items: [], sel: new Set()};
   renderAcquirePop();
+  $('#acq-q')?.focus();
 }
 function renderAcquirePop() {
   const pop = $('#acq-pop');
@@ -2300,7 +2328,8 @@ async function runSynthesis(anchor, ids = null) {
     toast(`综述已启动（预计 ${d.estimate.calls} 次调用），进度见下方批次面板`);
     state._batchOpen = new Set([d.batch_id]);
     await renderTaskPanel();
-    $('#batch-panel')?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    switchPage('tasks');
+    setTimeout(() => $('#task-body')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
   } catch (e) { toast('综述启动失败: ' + e.message); }
 }
 const BATCH_ST = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
@@ -2419,7 +2448,7 @@ $('#page-batch').addEventListener('click', async e => {
 });
 // 批量页可见时轮询进度（SSE 也会触发，双保险；面板不存在时静默跳过）
 setInterval(() => {
-  const pg = $('#page-batch');
+  const pg = $('#page-tasks');
   if (pg && pg.style.display !== 'none') { renderTaskPanel(); renderSynList(); }
 }, 6000);
 
@@ -2565,7 +2594,8 @@ async function watchJobs() {
     }
     refreshQueueBadge();
     // 批量中心打开时，批次事件实时刷新进度面板（2s 节流，避免逐篇事件风暴全量重建）
-    if (ev.batch_id && $('#page-batch')?.style.display !== 'none' && Date.now() - _batchSseAt > 2000) {
+    if (ev.batch_id && ($('#page-tasks')?.style.display !== 'none'
+        || $('#page-batch')?.style.display !== 'none') && Date.now() - _batchSseAt > 2000) {
       _batchSseAt = Date.now();
       renderTaskPanel();
       renderSynList();
@@ -4408,7 +4438,7 @@ window.libBatchBibtex = async cid => {
 };
 window.libToBatchCenter = () => {
   switchPage('batch');
-  setTimeout(() => $('#batch-panel')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
+  setTimeout(() => $('#batch-pick')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
 };
 window.libClearSel = cid => {
   $$(`.lib-ck[data-cid="${cid}"]`).forEach(x => {

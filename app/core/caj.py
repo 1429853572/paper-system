@@ -82,11 +82,19 @@ def convert_bytes(data: bytes, name: str = "paper.caj") -> bytes:
             parser.convert(str(out))
         except BaseException as e:  # noqa: BLE001 —— 解析器用 SystemExit 报「Unknown file type」
             msg = str(e)[:200] or type(e).__name__
-            if "mutool" in msg.lower():
-                raise ConvertError("KDH 格式需 mutool 修复（容器内未装），请改用 PDF 版或人工转换") from None
-            if "Unknown file type" in msg:
+            low = msg.lower()
+            if "unknown file type" in low:
                 raise ConvertError("CAJ 格式无法识别（可能损坏或为知网未公开格式）") from None
+            if "mutool" in low or "no such file or directory" in low:
+                # CAJ 与 KDH 两条路径都要 mutool 修复 xref；镜像未装 mupdf-tools 时报这一条
+                raise ConvertError("转换需要 mutool（镜像缺 mupdf-tools）："
+                                   "请重建镜像，或改用 PDF 版文献") from None
             raise ConvertError(f"CAJ 转换失败: {msg}") from None
+        finally:
+            try:
+                os.chdir(cwd)
+            except Exception:  # noqa: BLE001
+                pass
         if not out.exists() or out.stat().st_size < 500:
             raise ConvertError("CAJ 转换未产出有效 PDF")
         return out.read_bytes()

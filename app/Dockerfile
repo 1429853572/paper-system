@@ -11,8 +11,8 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors
         libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
         libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
     && rm -rf /var/lib/apt/lists/*
-RUN apt-get update -qq && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* || echo "WARN: nodejs 缺失，公式将回退源码显示"
+RUN apt-get update -qq && apt-get install -y --no-install-recommends nodejs mupdf-tools \
+    && rm -rf /var/lib/apt/lists/* || echo "WARN: nodejs/mutool 缺失，公式与 CAJ 转换将降级"
 
 # PDF 渲染：调用宿主机渲染服务（host-chrome，见 scripts/render-service.py）
 

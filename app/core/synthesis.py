@@ -82,8 +82,13 @@ def _digest_block(d: dict, cap: int = 700) -> str:
 
 # ---------------- 聚类（纯本地计算，零 LLM 成本） ----------------
 
-def cluster_papers(digests: list[dict], k: int) -> list[list[str]]:
-    """导读文本 embedding + 余弦 k-means → 组的 paper_id 列表。"""
+def cluster_papers(digests: list[dict], k: int, topic: str = "") -> list[list[str]]:
+    """导读文本 embedding + 余弦 k-means → 组的 paper_id 列表。
+
+    topic 非空时：额外计算「论文摘要 ↔ 专题问题」的相似度，把明显偏离专题的论文
+    单独分到一组（弱相关组），并在组内让模型做取舍——解决纯 embedding 聚类
+    「同领域不同问题混在一组」的问题（专题本身是用户已知的研究问题，是强先验）。
+    """
     import numpy as np
 
     from .retrieval import embed_texts
@@ -118,7 +123,29 @@ def cluster_papers(digests: list[dict], k: int) -> list[list[str]]:
     groups: dict[int, list[str]] = {}
     for d, a in zip(digests, assign):
         groups.setdefault(int(a), []).append(d["id"])
-    return [g for g in groups.values() if g]
+    out = [g for g in groups.values() if g]
+
+    # 专题先验：与专题问题明显无关的论文单独成组（避免污染主线综述）
+    if topic and len(out) > 1:
+        try:
+            import numpy as np
+            from .retrieval import embed_texts
+            qv = np.array(embed_texts([topic])[0], dtype=np.float32)
+            qn = qv / (np.linalg.norm(qv) + 1e-9)
+            rel = {}
+            for d, m in zip(digests, mat):
+                sim = float(np.dot(m, qn))
+                rel[d["id"]] = sim
+            vals = list(rel.values())
+            thr = float(np.median(vals)) - 0.06      # 明显低于中位数 → 视为弱相关
+            weak = [i for i, v in rel.items() if v < thr]
+            if weak and len(weak) < len(digests):
+                out = [[i for i in g if i not in weak] for g in out]
+                out = [g for g in out if g]
+                out.append(weak)
+        except Exception:  # noqa: BLE001 —— embedding 不可用时退回纯聚类
+            pass
+    return out
 
 
 # ---------------- 流水线主体（worker 调用） ----------------
@@ -126,7 +153,8 @@ def cluster_papers(digests: list[dict], k: int) -> list[list[str]]:
 def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None:
     """执行综述流水线。job_update(**fields) 用于同步 jobs 行进度（SSE 面板）。
 
-    topic: 专题名/研究问题先验——注入到聚类与组内比对提示词。
+    topic: 专题名/研究问题先验——参与聚类分组（弱相关论文另置一组）并注入组内比对
+           与跨组综合提示词。
     纯 embedding 聚会把「同领域不同问题」的论文混在一组（评审提出的「聚类≠科研分类」），
     而专题本身是用户已知的研究问题，用它做过滤约束能显著提升分组与归纳的针对性。
     """
@@ -178,7 +206,7 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
         # ---- 阶段二：聚类 ----
         ids = [d["id"] for d in digests]
         k = n_groups_for(len(ids))
-        clusters_ids = cluster_papers(digests, k)
+        clusters_ids = cluster_papers(digests, k, topic=topic)
         by_id = {d["id"]: d for d in digests}
         cluster_jsons: list[dict] = []
 

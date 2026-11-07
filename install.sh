@@ -63,10 +63,16 @@ else
     sed -i "s|^ADMIN_INITIAL_PASSWORD=.*|ADMIN_INITIAL_PASSWORD=${ADMIN_PW}|" .env
     sed -i "s|^PAPERSYS_API_TOKEN=.*|PAPERSYS_API_TOKEN=${CLI_TOKEN}|" .env
     grep -q "^PAPERSYS_RENDER_TOKEN=" .env || echo "PAPERSYS_RENDER_TOKEN=${RENDER_TOKEN}" >> .env
+    # 采集服务 token（驱动宿主浏览器访问外网，必须鉴权；缺 token 则服务拒绝启动）
+    grep -q "^PAPERSYS_ACQUIRE_TOKEN=" .env || echo "PAPERSYS_ACQUIRE_TOKEN=${ACQUIRE_TOKEN}" >> .env
     chmod 600 .env
     info ".env 已生成（SECRET/FERNET/初始admin密码/CLI token/渲染服务token 已随机化）"
 fi
 # 旧 .env 补渲染服务 token（render-service 与 app 共享，防局域网匿名调用宿主 Chrome）
+if ! grep -q "^PAPERSYS_ACQUIRE_TOKEN=" .env; then
+  echo "PAPERSYS_ACQUIRE_TOKEN=$(openssl rand -hex 16)" >> .env
+  echo "已补写采集服务 token（PAPERSYS_ACQUIRE_TOKEN）"
+fi
 if ! grep -q "^PAPERSYS_RENDER_TOKEN=" .env; then
     echo "PAPERSYS_RENDER_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(16))")" >> .env
     info ".env 补写 PAPERSYS_RENDER_TOKEN"

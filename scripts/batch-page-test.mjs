@@ -180,7 +180,7 @@ window.__T.state.selected.clear();
 window.__T.switchPage('tasks');
 await new Promise((r) => setTimeout(r, 300));
 ok('任务中心页标题', doc.querySelector('#page-title').textContent === '任务中心');
-ok('类型筛选 chips', doc.querySelectorAll('#page-tasks [data-tt]').length === 6);
+ok('类型筛选 chips（含采集下载）', doc.querySelectorAll('#page-tasks [data-tt]').length === 7);
 ok('状态筛选 chips', doc.querySelectorAll('#page-tasks [data-ts]').length === 4);
 await new Promise((r) => setTimeout(r, 200));
 ok('进度分组标题（进行中/已结束）', doc.body.textContent.includes('进行中') &&
@@ -235,8 +235,11 @@ window.__T.state.selected.clear();   // 清掉步骤6 勾选
 await new Promise((r) => setTimeout(r, 500));   // renderBatchPage 进页即 loadBpPicker（全量拉取）
 ok('未圈定时操作卡置灰', [...doc.querySelectorAll('#page-batch .batch-card')]
    .every(c => c.classList.contains('off')));
-ok('综述卡排第一且主色高亮', doc.querySelector('.batch-card').dataset.act === 'review' &&
-   doc.querySelector('.batch-card').classList.contains('primary'));
+const acts = [...doc.querySelectorAll('.batch-card')].map(c => c.dataset.act);
+ok('批量卡含 采集/专题/综述入口', acts.includes('acquire') && acts.includes('topics') && acts.includes('review'),
+   acts.join(','));
+ok('综述卡主色高亮', [...doc.querySelectorAll('.batch-card')].find(c => c.dataset.act === 'review')
+   ?.classList.contains('primary'));
 const groups = [...doc.querySelectorAll('.bpp-group-head')];
 ok('库树形分组渲染（默认文献库/test/未分库）',
    groups.length === 3 &&

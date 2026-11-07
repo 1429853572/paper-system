@@ -84,6 +84,8 @@ services:
       # 宿主浏览器采集服务（中文文献获取；Playwright + 宿主 Chrome）
       ACQUIRE_SERVICE_URL: http://host.docker.internal:8802
       PAPERSYS_ACQUIRE_TOKEN: ${PAPERSYS_ACQUIRE_TOKEN:-}
+      # 采集白名单（防 SSRF；两侧同源，改这里即可）
+      CNKI_ALLOWED_HOSTS: ${CNKI_ALLOWED_HOSTS:-}
       # MCP 工具分组：read=只读；read,write 开放写工具（仍需网页确认+可撤销）
       PAPERSYS_MCP_TOOLSETS: ${PAPERSYS_MCP_TOOLSETS:-read}
     volumes:
