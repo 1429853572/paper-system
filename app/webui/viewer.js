@@ -12,6 +12,8 @@ const state = {
   selected: new Set(),    // 多选 paper_ids
   qaPapers: new Set(),    // 问答 scope
   qaSession: '', health: {},
+  uploads: new Map(),     // 上传中占位：name → {pct, phase: uploading|saving|error, msg, file, cid}
+  parseProg: {},          // 解析实时进度：paper_id → {done, total}（SSE 推送 + statuses 水合）
 };
 
 /* ---------------- 基础 ---------------- */
@@ -255,6 +257,16 @@ async function refreshLib() {
   await loadPapers();                      // 侧栏论文列表
   const pg = $('#page-collections');
   if (pg && pg.style.display !== 'none') await renderCollectionsPage(d);   // 文库管理页
+  // 解析进度水合（SSE 只覆盖在线期间的变更，刷新后从 statuses 补齐“提取中 x/y”）
+  api('/api/statuses').then(s => {
+    const map = {};
+    for (const [pid, st] of Object.entries(s.statuses || {})) {
+      const pj = st.parse_job;
+      if (pj && pj.status === 'running') map[pid] = {done: pj.done || 0, total: pj.total || 0};
+    }
+    state.parseProg = map;
+    renderPapers();
+  }).catch(() => {});
 }
 
 /* ---------------- 文库 ---------------- */
@@ -301,17 +313,42 @@ async function loadPapers(append = false) {
   renderPapers();
 }
 function statusBadge(p) {  if (p.deleted_at) return '<span class="badge err">回收站</span>';
+  if (p.parse_status === 'pending') return '<span class="badge run">排队中</span>';
+  if (p.parse_status === 'parsing') {
+    const pr = (state.parseProg || {})[p.id];
+    return `<span class="badge run">${pr && pr.total ? `提取中 ${pr.done}/${pr.total}` : '解析中'}</span>`;
+  }
   const m = {parsed: '<span class="badge ok">已解析</span>',
-             parsing: '<span class="badge run">解析中</span>',
-             pending: '<span class="badge run">排队中</span>',
              failed: '<span class="badge err">失败</span>'};
   return m[p.parse_status] || '';
 }
 function renderPapers() {
   const el = $('#paper-list');
   if (state.q && state.q.trim().length >= 2) { renderContentSearch(); return; }
-  if (!state.papers.length) { el.innerHTML = '<p class="muted" style="padding:20px">暂无论文，上传 PDF 开始</p>'; return; }
-  const listHtml = sortPapers(state.papers).map(p => `
+  // 上传占位行（MinerU 式：上传中/失败可见，带真实百分比与重试）
+  const ups = [...state.uploads.entries()].map(([name, u], idx) => u.phase === 'error' ? `
+    <div class="paper-item uploading err">
+      <div class="info">
+        <div class="name">${esc(name)}</div>
+        <div class="meta"><span class="badge err">失败</span>
+          <span class="muted up-msg" title="${esc(u.msg || '')}">${esc((u.msg || '').slice(0, 36))}</span>
+          <button class="up-act" data-idx="${idx}" data-act="retry">重试</button>
+          <button class="up-act" data-idx="${idx}" data-act="drop">移除</button></div>
+      </div>
+    </div>` : `
+    <div class="paper-item uploading">
+      <div class="info">
+        <div class="name">${esc(name)}</div>
+        <div class="meta"><span class="up-pct">${u.phase === 'saving' ? '保存中…' : '上传中 ' + (u.pct || 0) + '%'}</span>
+          <div class="up-bar"><i style="width:${u.pct || 0}%"></i></div></div>
+      </div>
+    </div>`).join('');
+  if (!state.papers.length && !ups) { el.innerHTML = '<p class="muted" style="padding:20px">暂无论文，上传 PDF 开始</p>'; return; }
+  const listHtml = sortPapers(state.papers).map(p => {
+    const pr = (state.parseProg || {})[p.id];
+    const bar = p.parse_status === 'parsing' && pr?.total
+      ? `<div class="up-bar parse"><i style="width:${Math.min(100, Math.round(100 * pr.done / pr.total))}%"></i></div>` : '';
+    return `
     <div class="paper-item ${state.current?.id === p.id ? 'sel' : ''}" data-id="${p.id}">
       ${state.selectMode ? `<input type="checkbox" ${state.selected.has(p.id) ? 'checked' : ''}>` : ''}
       <div class="info">
@@ -319,22 +356,33 @@ function renderPapers() {
         <div class="meta">${statusBadge(p)}
           ${p.visibility === 'private' ? '<span class="badge priv">私人</span>' : ''}
           <span>${(p.page_count || '?')}页</span><span>${p.file_size ? (p.file_size/1048576).toFixed(1) + 'M' : ''}</span>
-        </div>
+        </div>${bar}
       </div>
       <button class="pi-del" title="移入回收站">${icon('trash')}</button>
-    </div>`).join('');
-  el.innerHTML = listHtml + (state.papersHasMore
+    </div>`;}).join('');
+  el.innerHTML = ups + listHtml + (state.papersHasMore
     ? '<button class="qa-load-more" id="load-more">加载更多…</button>' : '');
   const lm = $('#load-more');
   if (lm) lm.onclick = () => loadPapers(true);
   $$('.paper-item', el).forEach(item => {
     const id = item.dataset.id;
+    if (!id) return;   // 上传占位行无 paper id（由下方 up-act 接管）
     item.onclick = e => {
       if (e.target.type === 'checkbox') { toggleSelect(id, e.target.checked); return; }
       if (e.target.classList.contains('pi-del')) { quickDelete(id); return; }
       if (state.selectMode) { toggleSelect(id, !state.selected.has(id)); return; }
       openPaper(id);   // 普通模式：单击任意位置直接打开
     };
+  });
+  // 上传占位行：重试 / 移除
+  $$('.up-act', el).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const entry = [...state.uploads.entries()][+b.dataset.idx];
+    if (!entry) return;
+    const [name, u] = entry;
+    if (b.dataset.act === 'drop') { state.uploads.delete(name); renderPapers(); return; }
+    state.uploads.delete(name);
+    uploadFiles([u.file], u.cid);   // 重试保留原目标库
   });
 }
 function toggleSelect(id, on) {
@@ -399,22 +447,51 @@ async function uploadFiles(files, targetCid) {
   if (!pdfs.length) { toast('支持 PDF / 图片 / Office 文档'); return; }
   const vis = state.uploadPrivate ? 'private' : 'shared';
   const col = (targetCid || state.currentCollection) ? `&collection_id=${targetCid || state.currentCollection}` : '';
-  const fd = new FormData();
-  pdfs.forEach(f => fd.append('files', f));
-  const r = await fetch(`/api/papers/upload?visibility=${vis}${col}`, {method: 'POST', body: fd});
-  if (!r.ok) {
-    // 服务端可能返回纯文本 5xx（不是 JSON）——别让 .json() 抛异常把提示吞掉
-    let msg = '上传失败';
-    try { const j = await r.json(); msg = j.detail || msg; } catch {}
-    toast(msg);
-    return;
+  const cid = targetCid || state.currentCollection || '';
+  // MinerU 式体验：逐文件上传，上传即在列表顶部显示占位行（真实百分比），
+  // 服务端入库后被真实条目替换（状态随之变为 排队中 → 提取中 x/y）
+  let okN = 0, dupN = 0, rejN = 0;
+  for (const f of pdfs) {
+    const up = {pct: 0, phase: 'uploading', msg: '', file: f, cid};
+    state.uploads.set(f.name, up);
+    renderPapers();
+    try {
+      const d = await new Promise((resolve, reject) => {
+        const fd = new FormData();
+        fd.append('files', f);
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `/api/papers/upload?visibility=${vis}${col}`);
+        xhr.responseType = 'json';
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable) { up.pct = Math.round(e.loaded / e.total * 100); renderPapers(); }
+        };
+        xhr.upload.onload = () => { up.phase = 'saving'; up.pct = 100; renderPapers(); };
+        xhr.onerror = () => reject(new Error('网络错误'));
+        xhr.onload = () => {
+          const body = xhr.response || {};
+          if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+          else reject(new Error(body.detail || `HTTP ${xhr.status}`));
+        };
+        xhr.send(fd);
+      });
+      const res = (d.results || [])[0] || {};
+      if (res.status === 'rejected') { up.phase = 'error'; up.msg = res.reason || '被拒收'; rejN++; }
+      else if (res.status === 'duplicate') { state.uploads.delete(f.name); dupN++; }
+      else { state.uploads.delete(f.name); okN++; }
+      await refreshLib();
+      if (up.phase === 'error') renderPapers();
+    } catch (e) {
+      up.phase = 'error'; up.msg = e.message; rejN++; renderPapers();
+    }
   }
-  const d = await r.json();
-  const ok = d.results.filter(x => x.status === 'queued').length;
-  const dup = d.results.filter(x => x.status === 'duplicate').length;
-  const rej = d.results.filter(x => x.status === 'rejected');
-  toast(`已排队 ${ok} 篇${dup ? `，去重跳过 ${dup} 篇` : ''}${rej.length ? `，拒收 ${rej.length} 篇：${rej[0].reason}` : ''}`);
-  await refreshLib();
+  if (!rejN && !dupN) toast(`已排队 ${okN} 篇`);
+  else {
+    const bits = [];
+    if (okN) bits.push(`已排队 ${okN} 篇`);
+    if (dupN) bits.push(`去重跳过 ${dupN} 篇`);
+    if (rejN) bits.push(`${rejN} 篇失败（列表中可重试）`);
+    toast(bits.join('，'));
+  }
 }
 
 /* 多选模式与批量操作 */
@@ -1208,6 +1285,13 @@ async function watchJobs() {
   const es = new EventSource('/api/jobs/stream');
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
+    // 解析实时进度 → 侧栏列表“提取中 x/y”（SSE 事件自带 done/total）
+    if (ev.job_type === 'parse') {
+      const prev = JSON.stringify(state.parseProg[ev.paper_id] || null);
+      if (ev.status === 'running') state.parseProg[ev.paper_id] = {done: ev.done || 0, total: ev.total || 0};
+      else if (['done', 'failed', 'canceled'].includes(ev.status)) delete state.parseProg[ev.paper_id];
+      if (JSON.stringify(state.parseProg[ev.paper_id] || null) !== prev) renderPapers();
+    }
     if (state.current && ev.paper_id === state.current.id && ev.job_type === 'parse' && ev.status === 'done') {
       openPaper(state.current.id);  // 解析完成刷新视图
       loadPapers();
