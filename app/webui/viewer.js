@@ -1934,21 +1934,36 @@ function renderCites(text, evidence) {
   });
 }
 function wireCites(container, evidence) {
-  $$('.cite', container).forEach(el => el.onclick = () => {
-    const n = +(el.dataset.n || (el.textContent.match(/\d+/) || [0])[0]);
+  $$('.cite', container).forEach(el => {
+    const n = String(el.dataset.n || (el.textContent.match(/\d+/) || [0])[0]);
     const ev = evidence && evidence.find(x => String(x.evidence_id) === n);
-    if (ev) jumpToEvidence(ev);
+    el._ev = ev || null;              // 悬浮预览卡直接取（见 ② 引用悬浮预览）
+    el.onclick = () => { if (ev) jumpToEvidence(ev); };
   });
 }
 /* 点引文 → 定位到具体块：PDF 里闪烁高亮 + 右侧阅读面板滚到该段并置为激活。
-   只跳页的话整页几十个块还是不好找，所以必须定位到块。 */
+   只跳页的话整页几十个块还是不好找，所以必须定位到块。
+   证据块常在分页未加载区间（首屏仅 40 块）→ 增量加载直到命中。 */
 window.jumpToEvidence = async e => {
   if (!e) return;
-  if (state.current && state.current.id !== e.paper_id) await openPaper(e.paper_id);
-  // 找到对应的块（证据里带 block_id）
-  const blk = (e.block_id && state.blocks || []).find(x => x.block_id === e.block_id)
-            || state.blocks.find(x => x.page_index === e.page_index && x.text
-                 && e.text && (x.text.includes(e.text.slice(0, 60)) || e.text.includes(x.text.slice(0, 60))));
+  if (!state.current || state.current.id !== e.paper_id) await openPaper(e.paper_id);
+  const match = () =>
+    (state.blocks || []).find(x => x.block_id === e.block_id)
+    || state.blocks.find(x => x.page_index === e.page_index && x.text
+         && e.text && (x.text.includes(e.text.slice(0, 60)) || e.text.includes(x.text.slice(0, 60))));
+  let blk = match();
+  if (!blk && state.current) {
+    // 分页穿透：切到原文视图逐批加载，直到目标块出现或已越过证据所在页
+    switchPage('reader');
+    if (state.view !== 'orig') switchView('read', 'orig');
+    for (let i = 0; i < 80 && state._blkOffset < (state._blkTotal || 0); i++) {
+      await loadMoreBlocks();
+      blk = match();
+      if (blk) break;
+      const lastPg = state.blocks.length ? state.blocks[state.blocks.length - 1].page_index : -1;
+      if (lastPg > e.page_index + 1) break;   // 已翻过证据页仍未命中（块失配）→ 放弃
+    }
+  }
   if (blk) {
     switchPage('reader');
     // 右侧阅读面板：置为激活块 + 滚到可见（当前子页签没显示正文就切到"原文"）
@@ -2256,7 +2271,7 @@ function drawSummary(s, pid, target = '#content-view', asBubble = false) {
   if (asBubble) t.insertAdjacentHTML('beforeend', followupButtons(s.sections));
   $$('.cite[data-gid]', t).forEach(el => {
     const ev = evById.get(String(el.dataset.gid));
-    if (ev) el.onclick = () => jumpToEvidence(ev);
+    if (ev) { el._ev = ev; el.onclick = () => jumpToEvidence(ev); }
   });
 }
 
@@ -2679,9 +2694,24 @@ function followupButtons(sections) {
     return refsLoading;
   };
   document.addEventListener('mouseover', async e => {
-    const el = e.target.closest && e.target.closest('.ref-cite');
+    const el = e.target.closest && e.target.closest('.ref-cite, .cite[data-n], .cite[data-gid]');
     const p = ensurePop();
     if (!el) { p.hidden = true; return; }
+    // 证据引文（问答回答 [n] / 导读 [n]）：悬停预览来源原文片段
+    if (!el.classList.contains('ref-cite')) {
+      const ev = el._ev;
+      if (!ev) { p.hidden = true; return; }
+      const snippet = (ev.text || '').replace(/\s+/g, ' ').trim();
+      p.innerHTML = `<b>${esc((ev.title || ev.paper_id || '').slice(0, 60))}</b>
+        <span class="muted" style="font-size:11px">· 第${ev.page_index + 1}页</span>
+        <div style="margin-top:4px">${esc(snippet.slice(0, 220))}${snippet.length > 220 ? '…' : ''}</div>
+        <div class="muted" style="font-size:11px;margin-top:4px">${icon('doc')} 点击定位原文</div>`;
+      p.hidden = false;
+      const r = el.getBoundingClientRect();
+      p.style.left = Math.min(r.left, innerWidth - 340) + 'px';
+      p.style.top = (r.bottom + 6 > innerHeight - 160 ? r.top - p.offsetHeight - 6 : r.bottom + 6) + 'px';
+      return;
+    }
     if (!state.current) return;
     await loadRefs(state.current.id);
     const n = +el.dataset.n;
