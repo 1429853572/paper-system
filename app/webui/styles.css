@@ -775,6 +775,7 @@ table.list input[type=checkbox] { width: auto; }
 .lib-crumb a:hover { text-decoration: underline; }
 .lib-crumb a.cur { font-weight: 600; color: var(--text); }
 .lib-split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+.lib-list { overflow-x: auto; }   /* 125%/150% 缩放下表格不撑破 */
 .lib-side-detail { position: sticky; top: 8px; background: var(--panel); border: 1px solid var(--border);
                    border-radius: 10px; padding: 12px; max-height: 70vh; overflow-y: auto; }
 @media (max-width: 1100px) { .lib-split { grid-template-columns: 1fr; } }
@@ -845,14 +846,16 @@ table.list input[type=checkbox] { width: auto; }
 /* ===== 批量中心（左圈定 / 右操作 / 底进度） ===== */
 .batch-wrap { max-width: 1240px; margin: 0 auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
 .batch-intro { color: var(--muted); font-size: var(--fs-sm); padding: 0 2px; display: flex; align-items: center; gap: 5px; }
-.batch-grid { display: grid; grid-template-columns: 380px 1fr; gap: 14px; align-items: start; }
-@media (max-width: 1000px) { .batch-grid { grid-template-columns: 1fr; } }
+.batch-grid { display: grid; grid-template-columns: minmax(340px, 380px) 1fr; gap: 14px; align-items: start; }
+@media (max-width: 1024px) {
+  .batch-grid { grid-template-columns: 1fr; }
+  .batch-pick { position: static; }   /* 堆叠后取消 sticky */}
 .batch-pick, .batch-prog { margin-bottom: 0; padding: 0; }
 .batch-pick { position: sticky; top: 12px; }
-.batch-right { min-width: 0; }
+.batch-right { min-width: 0; container-type: inline-size; }   /* 操作卡列数随自身宽度（缩放/侧栏折叠均自适应） */
 .bp-head2 { font-weight: 700; margin: 2px 2px 10px; font-size: var(--fs-md); }
 .batch-ops { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-@media (max-width: 1300px) and (min-width: 1001px) { .batch-ops { grid-template-columns: 1fr; } }
+@container (max-width: 780px) { .batch-ops { grid-template-columns: 1fr; } }
 .batch-card.primary { border-color: var(--primary); background: var(--tint-primary); }
 .batch-card.primary b { color: var(--primary); }
 .batch-card.off { opacity: .45; }
@@ -955,7 +958,8 @@ table.list input[type=checkbox] { width: auto; }
 
 /* ---- 批量中心·自由勾选面板 ---- */
 .bp-picker { margin: 0 16px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
-.bpp-tools { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); background: var(--panel-soft); }
+.bpp-tools { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); background: var(--panel-soft); flex-wrap: wrap; }
+.bpp-tools input { min-width: 140px; }
 .bpp-list { max-height: 300px; overflow: auto; }
 .bpp-row { display: flex; align-items: flex-start; gap: 9px; padding: 7px 10px; border-bottom: 1px dashed var(--line-soft);
            cursor: pointer; font-size: var(--fs-sm); }
