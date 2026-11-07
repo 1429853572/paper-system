@@ -113,6 +113,7 @@ window.alert = window.confirm = () => true;
 window.prompt = () => 'x';
 window.isSecureContext = false;
 window.scrollTo = () => {};
+window.HTMLElement.prototype.scrollIntoView = () => {};   // jsdom 未实现
 window.matchMedia = window.matchMedia || (q => ({ matches: false, media: q, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }));
 window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
 window.IntersectionObserver = class { constructor(cb) { this.cb = cb; } observe() {} unobserve() {} disconnect() {} };
@@ -128,7 +129,7 @@ process.on('unhandledRejection', (r) => {
 });
 
 try {
-  window.eval(js + '\n;window.__T = { state, switchPage, renderBatchPage, setBatchSel };');
+  window.eval(js + '\n;window.__T = { state, switchPage, renderBatchPage, syncBpCount };');
 } catch (e) {
   errors.push('eval: ' + e.stack.split('\n').slice(0, 3).join(' | '));
 }
@@ -165,31 +166,15 @@ ok('综述卡已激活', !!doc.querySelector('#page-batch .batch-card[data-act="
    !doc.querySelector('#page-batch .batch-card[data-act="review"]').classList.contains('soon'));
 ok('进度面板渲染', !!doc.querySelector('#page-batch #batch-panel'));
 
-// 3) 圈定：当前列表
-// jsdom 中 boot 在 initPdfJs 的动态 import 处中断（既有回归同样如此），loadPapers 不会执行——
-// 这里直接 seed state.papers 模拟“已加载的文库列表”，被测对象是批量页逻辑而非 boot。
-window.__T.state.papers = [
-  { id: 'p1', title: 'Paper One', parse_status: 'parsed', visibility: 'shared', owner_id: 1 },
-  { id: 'p2', title: 'Paper Two', parse_status: 'failed', visibility: 'shared', owner_id: 1 },
-];
-const bpList = doc.querySelector('#bp-list');
-ok('「当前列表」按钮存在', !!bpList);
-if (bpList) {
-  bpList.click();
-  await new Promise((r) => setTimeout(r, 100));
-  ok('圈定计数 2 篇', doc.querySelector('#bp-count').textContent.includes('2 篇'),
-     doc.querySelector('#bp-count').textContent);
-  ok('清空按钮出现', !doc.querySelector('#bp-clear').hidden);
-  doc.querySelector('#bp-clear').click();
-  await new Promise((r) => setTimeout(r, 50));
-  ok('清空后计数归零', doc.querySelector('#bp-count').textContent.includes('0 篇'));
-}
-
-// 4) 圈定：我的勾选
+// 3) 圈定：勾选即全站共享（文库页/批量页同一集合），已选定视图实时计数
 window.__T.state.selected.add('p1');
-doc.querySelector('#bp-sel').click();
+doc.querySelector('#bpp-v-sel').click();
 await new Promise((r) => setTimeout(r, 100));
-ok('勾选圈定 1 篇', doc.querySelector('#bp-count').textContent.includes('1 篇'));
+ok('已选定视图实时计数', doc.querySelector('#bpp-v-n').textContent === '1' &&
+   doc.querySelectorAll('.bpp-row').length === 1);
+doc.querySelector('#bpp-v-all').click();
+await new Promise((r) => setTimeout(r, 80));
+window.__T.state.selected.clear();
 
 // 5) 批次进度面板：批次行渲染 + 展开逐篇
 await new Promise((r) => setTimeout(r, 200));
@@ -230,17 +215,16 @@ if (libCk) {
   window.libCk(libCk.dataset.cid);
   await new Promise((r) => setTimeout(r, 80));
   ok('勾选同步 state.selected', window.__T.state.selected.has(libCk.dataset.pid));
-  window.libToBatchCenter(libCk.dataset.cid);
+  window.libToBatchCenter();
   await new Promise((r) => setTimeout(r, 400));
   ok('批量中心按钮切页', doc.querySelector('#page-batch').style.display !== 'none');
   const cnt = doc.querySelector('#bp-count')?.textContent || '';
-  ok('preset 圈定生效', /1 篇/.test(cnt), cnt);
-  window.__T.state.selected.clear();
+  ok('勾选全站共享（文库页勾选批量页可见）', /1 篇/.test(cnt), cnt);
 }
 
 // 6.5) 勾选面板（常驻）：库树形分组 / 搜索 / 年份 / 整组全选 / 已选定视图
 window.__T.switchPage('batch');
-window.__T.state.batchSel = new Set();   // 清掉步骤6 preset 残留
+window.__T.state.selected.clear();   // 清掉步骤6 勾选
 await new Promise((r) => setTimeout(r, 500));   // renderBatchPage 进页即 loadBpPicker（全量拉取）
 ok('未圈定时操作卡置灰', [...doc.querySelectorAll('#page-batch .batch-card')]
    .every(c => c.classList.contains('off')));
@@ -302,7 +286,7 @@ doc.querySelector('#bpp-v-sel').click();
 await new Promise((r) => setTimeout(r, 80));
 const firstSel = doc.querySelector('.bpp-row input[type=checkbox]');
 if (!firstSel) console.log('DEBUG sel view html:', doc.querySelector('#bpp-list').innerHTML.slice(0, 200),
-  '| view:', window.__T.state._bpp.view, '| batchSel:', window.__T.state.batchSel.size);
+  '| view:', window.__T.state._bpp.view, '| selected:', window.__T.state.selected.size);
 firstSel.click();
 await new Promise((r) => setTimeout(r, 80));
 ok('已选定视图取消勾选 → 1 篇', doc.querySelector('#bp-count').textContent.includes('1 篇'));
@@ -317,7 +301,7 @@ ok('综述卡已激活（无 soon）', !!reviewCard && !reviewCard.classList.con
 // 切回批量页重新渲染（前面 tocenter 已切页）
 window.__T.switchPage('batch');
 await new Promise((r) => setTimeout(r, 300));
-window.__T.state.batchSel = new Set(['p1', 'p2']);
+window.__T.state.selected.add('p1'); window.__T.state.selected.add('p2');
 doc.querySelector('.batch-card[data-act="review"]').click();
 await new Promise((r) => setTimeout(r, 200));
 const synPop = [...doc.querySelectorAll('.ui-pop')].find(p => p.textContent.includes('发起综述'));

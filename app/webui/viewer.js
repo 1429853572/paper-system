@@ -1466,7 +1466,6 @@ setInterval(refreshQueueBadge, 8000);
 /* ---------------- 批量中心 ----------------
    圈定（勾选/当前列表/按库）→ 操作卡发起一批同型任务（后端 /api/batch/{action}）
    → 批次进度面板按 batch_id 聚合跟踪（轮询 + SSE），失败项单独重试。 */
-state.batchSel = new Set();     // 批量页圈定的论文
 state._batchOpen = new Set();   // 进度面板里展开的批次
 state._batchPreset = null;      // 从文库批量条带过来的圈定
 state._batchPapers = [];        // 圈定来源论文缓存（供明细显示标题）
@@ -1487,13 +1486,9 @@ async function renderBatchPage() {
       <div class="batch-grid">
         <div class="card batch-pick">
           <div class="bp-head"><b>① 圈定论文</b>
-            <span class="badge ok" id="bp-count">${state.batchSel.size} 篇</span>
+            <span class="badge ok" id="bp-count">${state.selected.size} 篇</span>
             <span class="spacer"></span>
-            <button class="btn small" id="bp-clear" ${state.batchSel.size ? '' : 'hidden'}>清空</button></div>
-          <div class="bp-sources">
-            <button class="btn small" id="bp-sel" title="载入文库管理页勾选的论文">我的勾选（<span id="bp-sel-n">${state.selected.size}</span>）</button>
-            <button class="btn small" id="bp-list" title="载入侧栏当前筛选下的列表">当前列表（<span id="bp-list-n">${state.papers.length}</span>）</button>
-          </div>
+            <button class="btn small" id="bp-clear" ${state.selected.size ? '' : 'hidden'}>清空</button></div>
           <div class="bp-picker" id="bp-picker">
             <div class="bpp-tools">
               <input id="bpp-search" placeholder="搜索标题 / 作者…" style="flex:1;min-width:130px">
@@ -1504,7 +1499,7 @@ async function renderBatchPage() {
             </div>
             <div class="bpp-viewseg">
               <button id="bpp-v-all" class="on">📂 按库浏览</button>
-              <button id="bpp-v-sel">✅ 已选定（<span id="bpp-v-n">${state.batchSel.size}</span>）</button>
+              <button id="bpp-v-sel">✅ 已选定（<span id="bpp-v-n">${state.selected.size}</span>）</button>
             </div>
             <div class="bpp-list" id="bpp-list"><p class="muted" style="padding:10px">加载中…</p></div>
             <div class="bpp-foot">
@@ -1517,15 +1512,15 @@ async function renderBatchPage() {
         <div class="batch-right">
           <div class="bp-head2">② 选择操作 <span class="muted" style="font-weight:400;font-size:11px">未圈定时操作卡置灰</span></div>
           <div class="batch-ops">
-            <div class="batch-card primary ${state.batchSel.size ? '' : 'off'}" data-act="review" title="自动分组→组内比对→跨组综合，生成可导出的综述报告">
+            <div class="batch-card primary ${state.selected.size ? '' : 'off'}" data-act="review" title="自动分组→组内比对→跨组综合，生成可导出的综述报告">
               <b>📑 综述报告</b><span class="muted">多文献自动分组 · 逐组比对 · 跨组综合 · 导出 MD/CSV（2~90 篇）——批量处理的核心产出</span></div>
             ${Object.entries(BATCH_ACTS).map(([k, v]) => `
-              <div class="batch-card ${state.batchSel.size ? '' : 'off'}" data-act="${k}" title="${esc(v.desc)}">
+              <div class="batch-card ${state.selected.size ? '' : 'off'}" data-act="${k}" title="${esc(v.desc)}">
                 <b>${v.label}</b><span class="muted">${esc(v.desc)}</span>
               </div>`).join('')}
-            <div class="batch-card ${state.batchSel.size ? '' : 'off'}" data-act="bibtex">
+            <div class="batch-card ${state.selected.size ? '' : 'off'}" data-act="bibtex">
               <b>📚 导出 BibTeX</b><span class="muted">圈定论文合并为一个 .bib 文件直接下载</span></div>
-            <div class="batch-card ${state.batchSel.size ? '' : 'off'}" data-act="delete">
+            <div class="batch-card ${state.selected.size ? '' : 'off'}" data-act="delete">
               <b>🗑 移入回收站</b><span class="muted">圈定论文整体入回收站（${state.health.trash_days || 30} 天内可恢复）</span></div>
           </div>
         </div>
@@ -1546,9 +1541,7 @@ async function renderBatchPage() {
         <div id="batch-panel"><p class="muted" style="padding:8px">加载中…</p></div>
       </div>
     </div>`;
-  $('#bp-sel').onclick = () => setBatchSel(new Set(state.selected), '我的勾选');
-  $('#bp-list').onclick = () => setBatchSel(new Set(state.papers.map(p => p.id)), '当前列表');
-  $('#bp-clear').onclick = () => { setBatchSel(new Set(), ''); renderBpPicker(); };
+  $('#bp-clear').onclick = () => { state.selected.clear(); renderBpPicker(); syncBpCount(); };
   /* 勾选面板：库树形分组浏览（搜索/年份筛选/已选定视图/整组全选） */
   state._bpp = {q: '', year: '', view: 'all', papers: [], fold: new Set()};
   $('#bpp-search').oninput = e => {
@@ -1559,11 +1552,6 @@ async function renderBatchPage() {
   $('#bpp-reload').onclick = () => loadBpPicker();
   $('#bpp-v-all').onclick = () => { state._bpp.view = 'all'; renderBpPicker(); };
   $('#bpp-v-sel').onclick = () => { state._bpp.view = 'sel'; renderBpPicker(); };
-  if (state._batchPreset) {
-    const preset = state._batchPreset;
-    state._batchPreset = null;
-    setBatchSel(preset, preset.size ? '我的勾选' : '');
-  }
   $('#qp-pause').onclick = () => pauseQueue();
   $('#qp-resume').onclick = () => resumeQueue();
   loadBpPicker();          // 勾选面板常驻，进页即加载
@@ -1620,16 +1608,6 @@ $('#page-batch').addEventListener('click', async e => {
   }
 });
 
-function setBatchSel(ids, srcName) {
-  state.batchSel = ids;
-  const cnt = $('#bp-count');
-  if (!cnt) return;
-  cnt.textContent = `${ids.size} 篇` + (srcName ? `（来自${srcName}）` : '');
-  $('#bp-clear').hidden = !ids.size;
-  updateBatchOpsState();
-  renderBpPicker();
-}
-
 async function loadBpPicker() {
   const el = $('#bpp-list');
   if (!el) return;
@@ -1673,13 +1651,13 @@ function renderBpPicker() {
   }
   const vAll = $('#bpp-v-all'), vSel = $('#bpp-v-sel'), vN = $('#bpp-v-n');
   if (vAll) { vAll.classList.toggle('on', bp.view === 'all'); vSel.classList.toggle('on', bp.view === 'sel'); }
-  if (vN) vN.textContent = state.batchSel.size;
+  if (vN) vN.textContent = state.selected.size;
 
   if (bp.view === 'sel') {
     // 已选定视图：只看勾选的（含库名），取消勾选即移出
     const byId = new Map(bp.papers.map(p => [p.id, p]));
     const colName = cid => (state.collections || []).find(c => c.id === cid)?.name || '未分库';
-    const rows = [...state.batchSel].map(id => {
+    const rows = [...state.selected].map(id => {
       const p = byId.get(id);
       return `<label class="bpp-row on" data-id="${esc(id)}">
         <input type="checkbox" checked>
@@ -1721,7 +1699,7 @@ function renderBpPicker() {
 
     list.innerHTML = (groups.map(g => {
       const folded = bp.fold.has(g.id);
-      const allOn = g.papers.length && g.papers.every(p => state.batchSel.has(p.id));
+      const allOn = g.papers.length && g.papers.every(p => state.selected.has(p.id));
       return `<div class="bpp-group">
         <div class="bpp-group-head" data-gid="${esc(g.id)}" style="padding-left:${8 + g.depth * 16}px">
           <span class="bpp-caret">${folded ? icon('chevR', 11) : icon('chevD', 11)}</span>
@@ -1731,8 +1709,8 @@ function renderBpPicker() {
           ${g.papers.length ? `<button class="btn small bpp-gsel" data-gid="${esc(g.id)}" data-on="${allOn ? '' : '1'}">${allOn ? '取消本库' : '全选本库'}</button>` : ''}
         </div>
         ${folded ? '' : g.papers.map(p => `
-          <label class="bpp-row ${state.batchSel.has(p.id) ? 'on' : ''}" data-id="${esc(p.id)}" style="margin-left:${16 + g.depth * 16}px">
-            <input type="checkbox" ${state.batchSel.has(p.id) ? 'checked' : ''}>
+          <label class="bpp-row ${state.selected.has(p.id) ? 'on' : ''}" data-id="${esc(p.id)}" style="margin-left:${16 + g.depth * 16}px">
+            <input type="checkbox" ${state.selected.has(p.id) ? 'checked' : ''}>
             <span class="bpp-main">
               <span class="bpp-title">${esc(p.title || p.id)}</span>
               <span class="bpp-meta">${p.year ? `<span>${esc(p.year)}</span>` : ''}${p.page_count ? `<span>${p.page_count} 页</span>` : ''}</span>
@@ -1753,7 +1731,7 @@ function renderBpPicker() {
       e.stopPropagation();
       const g = groups.find(x => x.id === b.dataset.gid);
       const on = b.dataset.on === '1';
-      for (const p of g.papers) on ? state.batchSel.add(p.id) : state.batchSel.delete(p.id);
+      for (const p of g.papers) on ? state.selected.add(p.id) : state.selected.delete(p.id);
       renderBpPicker();
       syncBpCount();
     });
@@ -1762,15 +1740,15 @@ function renderBpPicker() {
   const stat = $('#bpp-stat');
   if (stat) stat.textContent = `库 ${new Set((state.collections || []).map(c => c.id)).size} 个 · 论文 ${bp.papers.length} 篇`;
   const sc = $('#bpp-selcount');
-  if (sc) sc.textContent = state.batchSel.size ? `已圈定 ${state.batchSel.size} 篇` : '';
+  if (sc) sc.textContent = state.selected.size ? `已圈定 ${state.selected.size} 篇` : '';
   // 勾选事件：两个视图统一绑定（sel 视图取消勾选后行即移出）
   $$('input[type=checkbox]', list).forEach(cb => cb.onchange = e => {
     const row = e.target.closest('.bpp-row');
     if (!row) return;
     const id = row.dataset.id;
-    if (e.target.checked) state.batchSel.add(id);
+    if (e.target.checked) state.selected.add(id);
     else {
-      state.batchSel.delete(id);
+      state.selected.delete(id);
       syncBpCount();
       if (state._bpp.view === 'sel') renderBpPicker();   // 已选定视图：行即移出
       return;
@@ -1780,23 +1758,25 @@ function renderBpPicker() {
   });
 }
 
-/* 勾选变化后同步顶部计数与操作卡置灰 */
+/* 勾选变化后同步全部计数（卡头/已选定视图/操作卡置灰）——单一数据源，无滞后 */
 function syncBpCount() {
   const cnt = $('#bp-count');
-  if (cnt) cnt.textContent = `${state.batchSel.size} 篇`;
-  $('#bp-clear').hidden = !state.batchSel.size;
+  if (cnt) cnt.textContent = `${state.selected.size} 篇`;
+  const vn = $('#bpp-v-n');
+  if (vn) vn.textContent = state.selected.size;
+  $('#bp-clear').hidden = !state.selected.size;
   updateBatchOpsState();
 }
 
 /* 未圈定 → 操作卡置灰（点击仍给引导 toast，不真禁用） */
 function updateBatchOpsState() {
   $$('#page-batch .batch-card').forEach(c =>
-    c.classList.toggle('off', !state.batchSel.size));
+    c.classList.toggle('off', !state.selected.size));
 }
 
 async function runBatchAction(act, anchor) {
-  if (!state.batchSel.size) { toast('请先在上方圈定论文'); return; }
-  const ids = [...state.batchSel];
+  if (!state.selected.size) { toast('请先在上方圈定论文'); return; }
+  const ids = [...state.selected];
   if (act === 'review') { await runSynthesis(anchor, ids); return; }
   if (act === 'bibtex') { downloadBibtex(ids); return; }
   if (act === 'delete') {
@@ -1846,7 +1826,7 @@ function downloadBibtex(ids) {
 }
 
 async function runSynthesis(anchor, ids = null) {
-  ids = ids || [...state.batchSel];
+  ids = ids || [...state.selected];
   if (ids.length < 2) { toast('综述至少需要选择 2 篇'); return; }
   let est;
   try {
@@ -4011,10 +3991,9 @@ window.libBatchBibtex = async cid => {
   if (!ids.length) { toast('先勾选论文'); return; }
   downloadBibtex(ids);
 };
-window.libToBatchCenter = cid => {
-  const ids = libSelected(cid);
-  state._batchPreset = new Set(ids);
+window.libToBatchCenter = () => {
   switchPage('batch');
+  setTimeout(() => $('#batch-panel')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
 };
 window.libClearSel = cid => {
   $$(`.lib-ck[data-cid="${cid}"]`).forEach(x => {
