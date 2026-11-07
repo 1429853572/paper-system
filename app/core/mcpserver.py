@@ -55,6 +55,14 @@ _ACQ_TOOLS = [
             "site": {"type": "string", "enum": ["chinaxiv", "cnki"], "default": "chinaxiv"},
             "limit": {"type": "integer", "default": 10}},
         "required": ["query"]}),
+    ("create_topic_task", "创建专题采集任务（关键词→检索→勾选下载→综述）并立即检索候选", {
+        "type": "object", "properties": {
+            "title": {"type": "string", "description": "专题名（同时作为综述的研究问题先验）"},
+            "query": {"type": "string", "description": "检索关键词"},
+            "site": {"type": "string", "enum": ["chinaxiv", "cnki"], "default": "chinaxiv"},
+            "limit": {"type": "integer", "default": 20}},
+        "required": ["title", "query"]}),
+    ("list_topic_tasks", "列出我的专题采集任务与候选", {"type": "object", "properties": {}}),
     ("acquire_cnki", "把中文文献候选下载并入库（复用既有解析管线）", {
         "type": "object", "properties": {
             "items": {"type": "array", "description": "search_cnki 结果中的候选（含 pdf_url/title）",
@@ -252,6 +260,46 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
         for it in items:
             it["in_library"] = (it.get("title") or "").strip().lower() in titles
         return {"site": site, "count": len(items), "items": items}
+    if name == "create_topic_task":
+        from . import acqtask, acquire
+        title = (args.get("title") or "").strip()[:120]
+        query = (args.get("query") or "").strip()[:300]
+        if not query:
+            raise ValueError("query 必填")
+        site = (args.get("site") or "chinaxiv").strip()
+        tid = acqtask.create(user_id, title or query, query, site)
+        try:
+            items = acquire.search(site, query, 1, min(int(args.get("limit") or 20), 40))
+        except ValueError as e:
+            acqtask.update(tid, status="failed", error=str(e)[:300])
+            raise ValueError(str(e)) from None
+        titles = {r[0].lower() for r in db.all("SELECT title FROM papers WHERE deleted_at IS NULL")}
+        cands = [{"title": it.get("title") or "", "authors": it.get("authors") or "",
+                   "year": it.get("year") or "", "venue": it.get("venue") or "",
+                   "summary": it.get("summary") or "", "pdf_url": it.get("pdf_url") or "",
+                   "abs_url": it.get("abs_url") or "", "doi": it.get("doi") or "",
+                   "source": it.get("source") or site,
+                   "in_library": (it.get("title") or "").strip().lower() in titles}
+                  for it in items]
+        acqtask.set_candidates(tid, cands)
+        acqtask.update(tid, status="ready")
+        return {"task_id": tid, "title": title or query, "count": len(cands),
+                "candidates": cands,
+                "next": "用 select_topic_candidates 勾选后 download_topic_task 下载入库"}
+    if name == "list_topic_tasks":
+        from . import acqtask
+        rows = db.all("SELECT id,title,query,site,status,paper_ids,synthesis_id "
+                      "FROM acq_tasks WHERE user_id=? ORDER BY updated_at DESC LIMIT 20",
+                      (user_id,))
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["papers"] = len(json.loads(d.get("paper_ids") or "[]"))
+            except Exception:  # noqa: BLE001
+                d["papers"] = 0
+            out.append(d)
+        return {"tasks": out}
     if name == "acquire_cnki":
         from . import acquire
         picks = [x for x in (args.get("items") or []) if isinstance(x, dict)][:10]

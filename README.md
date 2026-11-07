@@ -38,6 +38,15 @@
 - 中文期刊在 CrossRef/Unpaywall 几乎无覆盖 → 现有英文链路对中文期刊无效，这是采集链路的意义
 - 采集入库的论文会记录 `meta_source`（来源站点）与作者/摘要/年份，来源可追溯
 
+## 专题采集任务（批量中心 → 📚 专题采集）
+
+一条可中断可恢复的科研采集流水线：**关键词 → 检索候选 → 勾选 → 浏览器下载入库 → 解析 → 一键综述**。
+
+- 任务持久化在库里：关掉页面继续跑、重启后自动续传（每篇候选单独记下载状态）
+- 下载走任务队列（不占 web worker），串行 + 每篇 1.5~3s 随机间隔 + 失败退避（知网有风控，不能猛刷）
+- **专题名作为综述的「研究问题先验」**：模型据此区分主线工作与外围工作，而不是靠 embedding 硬聚类
+- 论文全部解析完成后可一键生成综述（缺导读会现场补齐）
+
 ## MCP（让 ZCode / Claude 直连你的文献库）
 
 `.env` 的 `PAPERSYS_API_TOKEN` 即访问令牌，任意 MCP 客户端以 JSON-RPC POST `/api/mcp` 接入：
@@ -48,7 +57,8 @@
 ```
 
 - 读工具直接执行：`search_papers` / `read_paper` / `search_text` / `get_summary` / `cite` / `search_cnki`（中文文献检索）
-- `acquire_cnki`（下载入库）属写操作，需开 `PAPERSYS_MCP_TOOLSETS=read,write`
+- 采集类：`search_cnki`（中文检索）、`create_topic_task`（建专题并检索）、`list_topic_tasks`
+- 写操作（`acquire_cnki` / `undo_last_action` 等）需开 `PAPERSYS_MCP_TOOLSETS=read,write`
 - 写工具默认关闭：`.env` 设 `PAPERSYS_MCP_TOOLSETS=read,write` 开放 `update_meta` / `import_by_doi` / `undo_last_action`——写动作生成待确认卡片，在网页「队列」浮层人工执行/丢弃，执行后可撤销（最近 10 条）
 
 ## 调度规则（GPU 共享）
