@@ -1508,55 +1508,60 @@ async function renderBatchPage() {
   const cols = state.collections || [];
   el.innerHTML = `
     <div class="batch-wrap">
-      <div class="card batch-pick">
-        <div class="bp-head"><b>① 圈定论文</b>
-          <span class="badge ok" id="bp-count">${state.batchSel.size} 篇</span>
-          <span class="spacer"></span>
-          <button class="btn small" id="bp-clear" ${state.batchSel.size ? '' : 'hidden'}>清空</button></div>
-        <div class="bp-sources">
-          <button class="btn small primary" id="bp-pick-toggle">自由勾选 ▾</button>
-          <button class="btn small" id="bp-sel">我的勾选（<span id="bp-sel-n">${state.selected.size}</span>）</button>
-          <button class="btn small" id="bp-list">当前列表（<span id="bp-list-n">${state.papers.length}</span>）</button>
-          <select id="bp-col" style="width:auto;font-size:12px">
-            <option value="">按库圈定…</option>
-            ${cols.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="bp-picker" id="bp-picker" hidden>
-          <div class="bpp-tools">
-            <input id="bpp-search" placeholder="搜索标题…" style="flex:1">
-            <select id="bpp-lib" title="按库缩小勾选范围" style="width:auto;font-size:12px">
-              <option value="">全部库</option>
+      <div class="batch-intro">${icon('bulb', 12)} 先在左侧圈定论文（勾选实时计入），再点右侧操作卡；批次进度在下方实时可见。</div>
+      <div class="batch-grid">
+        <div class="card batch-pick">
+          <div class="bp-head"><b>① 圈定论文</b>
+            <span class="badge ok" id="bp-count">${state.batchSel.size} 篇</span>
+            <span class="spacer"></span>
+            <button class="btn small" id="bp-clear" ${state.batchSel.size ? '' : 'hidden'}>清空</button></div>
+          <div class="bp-sources">
+            <button class="btn small" id="bp-sel" title="载入文库管理页勾选的论文">我的勾选（<span id="bp-sel-n">${state.selected.size}</span>）</button>
+            <button class="btn small" id="bp-list" title="载入侧栏当前筛选下的列表">当前列表（<span id="bp-list-n">${state.papers.length}</span>）</button>
+            <select id="bp-col" style="width:auto;font-size:12px" title="整库圈定（含子库）">
+              <option value="">按库圈定…</option>
               ${cols.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
             </select>
-            <button class="btn small" id="bpp-all" title="勾上本页全部">全选本页</button>
-            <button class="btn small" id="bpp-none" title="取消本页全部">本页取消</button>
           </div>
-          <div class="bpp-list" id="bpp-list"><p class="muted" style="padding:10px">加载中…</p></div>
-          <div class="bpp-foot">
-            <button class="btn small" id="bpp-prev" disabled>‹ 上一页</button>
-            <span class="muted" id="bpp-page" style="font-size:11px">第 1 页</span>
-            <button class="btn small" id="bpp-next" disabled>下一页 ›</button>
-            <span class="spacer"></span>
-            <span class="muted" id="bpp-selcount" style="font-size:11px"></span>
+          <div class="bp-picker" id="bp-picker">
+            <div class="bpp-tools">
+              <input id="bpp-search" placeholder="搜索标题…" style="flex:1">
+              <select id="bpp-lib" title="按库缩小勾选范围" style="width:auto;font-size:12px">
+                <option value="">全部库</option>
+                ${cols.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+              </select>
+              <button class="btn small" id="bpp-all" title="勾上本页全部">全选本页</button>
+              <button class="btn small" id="bpp-none" title="取消本页全部">本页取消</button>
+            </div>
+            <div class="bpp-list" id="bpp-list"><p class="muted" style="padding:10px">加载中…</p></div>
+            <div class="bpp-foot">
+              <button class="btn small" id="bpp-prev" disabled>‹ 上一页</button>
+              <span class="muted" id="bpp-page" style="font-size:11px">第 1 页</span>
+              <button class="btn small" id="bpp-next" disabled>下一页 ›</button>
+              <span class="spacer"></span>
+              <span class="muted" id="bpp-selcount" style="font-size:11px"></span>
+            </div>
+          </div>
+          <div class="bp-detail" id="bp-detail" hidden></div>
+        </div>
+        <div class="batch-right">
+          <div class="bp-head2">② 选择操作 <span class="muted" style="font-weight:400;font-size:11px">未圈定时操作卡置灰</span></div>
+          <div class="batch-ops">
+            <div class="batch-card primary ${state.batchSel.size ? '' : 'off'}" data-act="review" title="自动分组→组内比对→跨组综合，生成可导出的综述报告">
+              <b>📑 综述报告</b><span class="muted">多文献自动分组 · 逐组比对 · 跨组综合 · 导出 MD/CSV（2~90 篇）——批量处理的核心产出</span></div>
+            ${Object.entries(BATCH_ACTS).map(([k, v]) => `
+              <div class="batch-card ${state.batchSel.size ? '' : 'off'}" data-act="${k}" title="${esc(v.desc)}">
+                <b>${v.label}</b><span class="muted">${esc(v.desc)}</span>
+              </div>`).join('')}
+            <div class="batch-card ${state.batchSel.size ? '' : 'off'}" data-act="bibtex">
+              <b>📚 导出 BibTeX</b><span class="muted">圈定论文合并为一个 .bib 文件直接下载</span></div>
+            <div class="batch-card ${state.batchSel.size ? '' : 'off'}" data-act="delete">
+              <b>🗑 移入回收站</b><span class="muted">圈定论文整体入回收站（${state.health.trash_days || 30} 天内可恢复）</span></div>
           </div>
         </div>
-        <div class="bp-detail" id="bp-detail" hidden></div>
-      </div>
-      <div class="batch-ops">
-        ${Object.entries(BATCH_ACTS).map(([k, v]) => `
-          <div class="batch-card" data-act="${k}" title="${esc(v.desc)}">
-            <b>${v.label}</b><span class="muted">${esc(v.desc)}</span>
-          </div>`).join('')}
-        <div class="batch-card" data-act="bibtex">
-          <b>📚 导出 BibTeX</b><span class="muted">圈定论文合并为一个 .bib 文件直接下载</span></div>
-        <div class="batch-card" data-act="delete">
-          <b>🗑 移入回收站</b><span class="muted">圈定论文整体入回收站（${state.health.trash_days || 30} 天内可恢复）</span></div>
-        <div class="batch-card review" data-act="review" title="自动分组→组内比对→跨组综合，生成可导出的综述报告">
-          <b>📑 综述报告</b><span class="muted">自动分组 · 逐组比对 · 跨组综合 · 导出 MD/CSV（2~90 篇）</span></div>
       </div>
       <div class="card batch-prog">
-        <div class="bp-head"><b>② 批次进度</b>
+        <div class="bp-head"><b>③ 批次进度</b>
           <span class="muted" style="font-size:11px">点击批次展开逐篇状态；失败项可单独重试</span></div>
         <div id="batch-panel"><p class="muted" style="padding:8px">加载中…</p></div>
       </div>
@@ -1576,13 +1581,8 @@ async function renderBatchPage() {
     } catch (err) { toast('圈定失败: ' + err.message); }
     e.target.value = '';
   };
-  /* 自由勾选面板：服务端分页 + 搜索，逐条复选实时计入圈定 */
+  /* 自由勾选面板常驻：服务端分页 + 搜索 + 库筛选，逐条复选实时计入圈定 */
   state._bpp = {page: 1, q: '', lib: '', hasMore: false, items: []};
-  $('#bp-pick-toggle').onclick = () => {
-    const p = $('#bp-picker');
-    p.hidden = !p.hidden;
-    if (!p.hidden) { loadBpPicker(); $('#bpp-search').focus(); }
-  };
   $('#bpp-lib').onchange = e => {
     state._bpp.lib = e.target.value;
     state._bpp.page = 1;
@@ -1602,7 +1602,9 @@ async function renderBatchPage() {
     state._batchPreset = null;
     setBatchSel(preset, preset.size ? '我的勾选' : '');
   }
+  loadBpPicker();          // 勾选面板常驻，进页即加载
   await renderBatchPanel();
+  updateBatchOpsState();
 }
 
 function setBatchSel(ids, srcName) {
@@ -1716,6 +1718,13 @@ function syncBpCount() {
   if (cnt) cnt.textContent = `${state.batchSel.size} 篇`;
   $('#bp-clear').hidden = !state.batchSel.size;
   renderBpDetail();
+  updateBatchOpsState();
+}
+
+/* 未圈定 → 操作卡置灰（点击仍给引导 toast，不真禁用） */
+function updateBatchOpsState() {
+  $$('#page-batch .batch-card').forEach(c =>
+    c.classList.toggle('off', !state.batchSel.size));
 }
 
 async function runBatchAction(act, anchor) {

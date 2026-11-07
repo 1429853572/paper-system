@@ -222,14 +222,16 @@ if (libCk) {
   window.__T.state.selected.clear();
 }
 
-// 6.5) 自由勾选面板：分页 / 复选 / 全选本页 / 搜索
+// 6.5) 自由勾选面板（常驻）：分页 / 复选 / 全选本页 / 搜索
 window.__T.switchPage('batch');
 window.__T.state.batchSel = new Set();   // 清掉步骤6 preset 残留，计数从零起算
-await new Promise((r) => setTimeout(r, 300));
-doc.querySelector('#bp-pick-toggle').click();
-await new Promise((r) => setTimeout(r, 250));
-ok('勾选面板展开且 20 行', !doc.querySelector('#bp-picker').hidden &&
+await new Promise((r) => setTimeout(r, 400));   // renderBatchPage 进页即 loadBpPicker
+ok('勾选面板常驻展开', !doc.querySelector('#bp-picker').hidden &&
    doc.querySelectorAll('.bpp-row').length === 20, `实际 ${doc.querySelectorAll('.bpp-row').length}`);
+ok('未圈定时操作卡置灰', [...doc.querySelectorAll('#page-batch .batch-card')]
+   .every(c => c.classList.contains('off')));
+ok('综述卡排第一且主色高亮', doc.querySelector('.batch-card').dataset.act === 'review' &&
+   doc.querySelector('.batch-card').classList.contains('primary'));
 ok('下一页可用（45 篇 → 3 页）', !doc.querySelector('#bpp-next').disabled);
 ok('行显示所属库', doc.body.textContent.includes('test') &&
    doc.body.textContent.includes('默认文献库'));

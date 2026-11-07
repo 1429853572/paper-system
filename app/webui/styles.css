@@ -842,16 +842,28 @@ table.list input[type=checkbox] { width: auto; }
 #download-btn { flex: none; white-space: nowrap; }
 .r-subtabs #download-pop { right: 0; }
 
-/* ===== 批量中心 ===== */
-.batch-wrap { max-width: 1080px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+/* ===== 批量中心（左圈定 / 右操作 / 底进度） ===== */
+.batch-wrap { max-width: 1240px; margin: 0 auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.batch-intro { color: var(--muted); font-size: var(--fs-sm); padding: 0 2px; display: flex; align-items: center; gap: 5px; }
+.batch-grid { display: grid; grid-template-columns: 380px 1fr; gap: 14px; align-items: start; }
+@media (max-width: 1000px) { .batch-grid { grid-template-columns: 1fr; } }
 .batch-pick, .batch-prog { margin-bottom: 0; padding: 0; }
+.batch-pick { position: sticky; top: 12px; }
+.batch-right { min-width: 0; }
+.bp-head2 { font-weight: 700; margin: 2px 2px 10px; font-size: var(--fs-md); }
+.batch-ops { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+@media (max-width: 1300px) and (min-width: 1001px) { .batch-ops { grid-template-columns: 1fr; } }
+.batch-card.primary { border-color: var(--primary); background: var(--tint-primary); }
+.batch-card.primary b { color: var(--primary); }
+.batch-card.off { opacity: .45; }
+.batch-card.off:hover { border-color: var(--border); box-shadow: none; }
 .bp-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .bp-sources { display: flex; gap: 8px; align-items: center; padding: 12px 16px; flex-wrap: wrap; }
 .bp-detail { padding: 0 16px 12px; }
+.batch-ops-legacy { display: none; }
 .bp-rows { max-height: 240px; overflow: auto; margin-top: 6px; border: 1px solid var(--border); border-radius: var(--r-sm); }
 .bp-row { font-size: var(--fs-sm); padding: 5px 10px; border-bottom: 1px dashed var(--line-soft); color: var(--text-2); }
 .bp-row:last-child { border-bottom: none; }
-.batch-ops { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
 .batch-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
               padding: 12px 14px; display: flex; flex-direction: column; gap: 5px; cursor: pointer;
               transition: border-color .15s, box-shadow .15s; }
