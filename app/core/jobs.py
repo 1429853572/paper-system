@@ -548,9 +548,20 @@ class Scheduler:
             # papers/ 文件目录与 DB 必须配套备份——只有 DB 快照无法复原
             shutil.make_archive(str(papers_tar)[:-7], "gztar", root_dir=DATA_DIR,
                                 base_dir="papers")
+        # 清单 + 哈希：恢复时先验完整性，而不是只看"备份成功"
+        import hashlib
+        import json
+        manifest = {"created": today, "files": {}}
+        for f in [bdir / f"db-{today}.db", bdir / f"papers-{today}.tar.gz"]:
+            if f.exists():
+                manifest["files"][f.name] = {
+                    "sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
+                    "size": f.stat().st_size}
+        (bdir / f"manifest-{today}.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
         keep = int(config.get("retention", "backup_keep"))
         # 轮转覆盖全部备份形态（db/papers/审计快照），按日期名排序
-        for pattern in ("db-*.db", "papers-*.tar.gz", "pre-audit-*.db"):
+        for pattern in ("db-*.db", "papers-*.tar.gz", "pre-audit-*.db", "manifest-*.json"):
             backups = sorted(bdir.glob(pattern))
             for old in backups[:-keep]:
                 try:

@@ -13,9 +13,28 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+import re as _re
+
 from .config import DB_PATH
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
+
+
+def cjk_space(s: str) -> str:
+    """CJK 字符两两加空格（latin 边界也断开）——FTS5 unicode61 不分词中文，
+    连续汉字会整段成 token；空格化后逐字成 token，短语查询即可命中任意子串。"""
+    if not s:
+        return s
+    s = _re.sub(r"([\u4e00-\u9fff]+)", lambda m: " " + " ".join(m.group(1)) + " ", s)
+    return _re.sub(r"\s+", " ", s).strip()
+
+
+def fts_query(q: str, max_tokens: int = 12) -> str:
+    """查询侧同变换；含 CJK 的 token 加引号成短语（保序邻接），latin 原样。"""
+    toks = (q or "").replace('"', "").split()[:max_tokens]
+    return " ".join(
+        ('"' + cjk_space(t) + '"' if _re.search(r"[\u4e00-\u9fff]", t) else t)
+        for t in toks)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -374,6 +393,19 @@ class Database:
         # 已下线功能的残留表（block_notes 段落批注 / block_merges 段落合并）一律清除。
         c.execute("DROP TABLE IF EXISTS block_notes")
         c.execute("DROP TABLE IF EXISTS block_merges")
+        if from_v < 17:
+            # v17：FTS 中文检索修复——索引文本 CJK 空格化，按 chunks 全量重建
+            rows = c.execute(
+                "SELECT c.parse_run_id, c.chunk_index, c.text, c.paper_id, "
+                "p.owner_id, p.visibility FROM chunks c JOIN papers p ON p.id=c.paper_id"
+            ).fetchall()
+            c.execute("DELETE FROM chunks_fts")
+            for r in rows:
+                c.execute(
+                    "INSERT INTO chunks_fts(text,paper_id,owner_id,visibility,chunk_row) "
+                    "VALUES(?,?,?,?,?)",
+                    (cjk_space(r["text"]), r["paper_id"], r["owner_id"], r["visibility"],
+                     f"{r['parse_run_id']}:{r['chunk_index']}"))
         if from_v < 8:
             # 译文幂等：同 paper+cache_key+block 唯一（部分翻译重跑不再产生重复行）
             c.execute("DELETE FROM translations WHERE rowid NOT IN ("

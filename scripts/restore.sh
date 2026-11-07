@@ -48,6 +48,21 @@ echo "  现有数据已留存到 $KEEP"
 if [ -f "$TAR_FILE" ]; then
   echo "恢复论文目录…"
   mkdir -p data/papers
+  # 恢复前完整性校验（清单存在才校验）
+  if [[ -f "$BACKUP_DIR/manifest-$STAMP.json" ]]; then
+    python3 - "$BACKUP_DIR" "$STAMP" <<'PY'
+import hashlib, json, sys, pathlib
+d, stamp = pathlib.Path(sys.argv[1]), sys.argv[2]
+man = json.loads((d / f"manifest-{stamp}.json").read_text())
+for name, meta in man["files"].items():
+    p = d / name
+    assert p.exists(), f"缺失备份文件: {name}"
+    assert hashlib.sha256(p.read_bytes()).hexdigest() == meta["sha256"], f"哈希不符: {name}"
+print("备份完整性校验通过")
+PY
+  else
+    echo "（该备份无清单，跳过哈希校验）"
+  fi
   tar xzf "$TAR_FILE"   # 归档内是 data/papers/…，在仓库根解包
 fi
 if [ -f "$DB_FILE" ]; then

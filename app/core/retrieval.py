@@ -21,7 +21,7 @@ import httpx
 import numpy as np
 
 from .config import EMBED_DIMS, EMBED_MODEL, OLLAMA_BASE_URL, config
-from .db import db
+from .db import cjk_space, fts_query, db
 
 # ---- 分块（入库时调用） ----
 
@@ -94,7 +94,7 @@ def build_chunks(paper_id: str, run_id: str, blocks: list) -> int:
         c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (paper_id,))
         c.executemany(
             "INSERT INTO chunks_fts(text,paper_id,owner_id,visibility,chunk_row) VALUES(?,?,?,?,?)",
-            [(t, paper_id, paper["owner_id"], paper["visibility"],
+            [(cjk_space(t), paper_id, paper["owner_id"], paper["visibility"],
               f"{run_id}:{i}") for i, (t, bids, pg) in enumerate(chunks)],
         )
     return len(chunks)
@@ -202,6 +202,11 @@ def sync_block_edit(paper_id: str, run_id: str, block_id: str, new_text: str) ->
     with db.write() as c:
         c.execute("UPDATE blocks SET text=? WHERE paper_id=? AND parse_run_id=? AND block_id=?",
                   (new_text, paper_id, run_id, block_id))
+        # 派生失效（T2）：该块的旧译文立即作废（按新文本按需重译），
+        # 章节摘要含旧数字 → 删除（smart 模式自动回退检索取证，meta 可再生）
+        c.execute("DELETE FROM translations WHERE paper_id=? AND block_id=?", (paper_id, block_id))
+        c.execute("DELETE FROM section_summaries WHERE paper_id=? AND parse_run_id=?",
+                  (paper_id, run_id))
     chunks = db.all(
         "SELECT id, chunk_index, block_ids FROM chunks WHERE paper_id=? AND parse_run_id=? "
         "AND block_ids LIKE ?", (paper_id, run_id, f'%"{block_id}"%'))
@@ -225,7 +230,7 @@ def sync_block_edit(paper_id: str, run_id: str, block_id: str, new_text: str) ->
                       (paper_id, f"{run_id}:{ch['chunk_index']}"))
             c.execute("INSERT INTO chunks_fts(text,paper_id,owner_id,visibility,chunk_row) "
                       "VALUES(?,?,?,?,?)",
-                      (new_chunk_text, paper_id, paper["owner_id"], paper["visibility"],
+                      (cjk_space(new_chunk_text), paper_id, paper["owner_id"], paper["visibility"],
                        f"{run_id}:{ch['chunk_index']}"))
             c.execute("UPDATE chunks SET embedding=? WHERE id=?", (emb, ch["id"]))
     invalidate_vec_cache()
@@ -262,7 +267,7 @@ def search(query: str, *, user_id: int, is_admin: bool,
     # 1) FTS5 关键词
     fts_ids: list[int] = []
     try:
-        q = " ".join(query.replace('"', "").split()[:12])  # 简单 token 化
+        q = fts_query(query)   # CJK 空格化短语（与索引同变换）
         rows = db.all(
             "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? "
             f"AND 1=1{vis_clause}{paper_clause} LIMIT ?",

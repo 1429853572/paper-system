@@ -94,7 +94,8 @@ def _execute(act: dict) -> dict:
         if row is None:
             raise ValueError("论文不存在")
         inverse = {"tool": "update_meta", "paper_id": pid,
-                   "fields": {k: row[k] or "" for k in fields}}
+                   "fields": {k: row[k] or "" for k in fields},
+                   "applied": dict(fields)}   # CAS 基准：撤销时字段仍等于本次写入值才回退
         sets = ", ".join(f"{k}=?" for k in fields)
         with db.write() as c:
             c.execute(f"UPDATE papers SET {sets} WHERE id=?", (*fields.values(), pid))
@@ -130,10 +131,19 @@ def undo_last(user_id: int) -> dict:
     inv = act["inverse"]
     try:
         if inv["tool"] == "update_meta":
-            fields = inv["fields"]
-            sets = ", ".join(f"{k}=?" for k in fields)
+            fields, applied = inv["fields"], inv.get("applied") or {}
+            conflicts = []
             with db.write() as c:
-                c.execute(f"UPDATE papers SET {sets} WHERE id=?", (*fields.values(), inv["paper_id"]))
+                for k, old in fields.items():
+                    # CAS：字段仍是本次写入值才回退；已被他人改过 → 保留并上报
+                    cur = c.execute(
+                        f"UPDATE papers SET {k}=? WHERE id=? AND {k}=?",
+                        (old, inv["paper_id"], applied.get(k, "")))
+                    if cur.rowcount == 0:
+                        conflicts.append(k)
+            if conflicts:
+                return {"ok": True, "message":
+                        f"部分字段已被后续修改，未回退: {', '.join(conflicts)}；其余已撤销"}
         elif inv["tool"] == "import_by_doi":
             from .jobs import scheduler
             scheduler.hard_delete_paper(inv["paper_id"])
@@ -164,13 +174,13 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
             raise ValueError("论文不存在")
         return {"paper": dict(r)}
     if name == "search_text":
-        from .retrieval import _clean_text
-        q = (args.get("query") or "").strip()
+        from .retrieval import fts_query
+        q = fts_query((args.get("query") or "").strip())
         limit = min(int(args.get("limit") or 8), 20)
         rows = db.all(
             "SELECT f.text, f.paper_id, p.title FROM chunks_fts f "
             "JOIN papers p ON p.id=f.paper_id WHERE chunks_fts MATCH ? "
-            "AND p.deleted_at IS NULL LIMIT ?", (_clean_text(q), limit))
+            "AND p.deleted_at IS NULL LIMIT ?", (q, limit))
         return {"hits": [{"paper_id": r["paper_id"], "title": r["title"],
                           "text": r["text"][:500]} for r in rows]}
     if name == "get_summary":

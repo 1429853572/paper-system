@@ -125,18 +125,32 @@ def _startup() -> None:
         def cb(done: int, total: int) -> None:
             scheduler._update(job["id"], progress_done=done, progress_total=total)
 
+        gen_row = db.one("SELECT value FROM settings WHERE key=?", (f"tgen:{job['paper_id']}",))
+        my_gen = int(gen_row["value"]) if gen_row else 0
+
+        def _cur_gen() -> int:
+            row = db.one("SELECT value FROM settings WHERE key=?", (f"tgen:{job['paper_id']}",))
+            return int(row["value"]) if row else 0
+
         def cancel_check() -> bool:
             row = db.one("SELECT status FROM jobs WHERE id=?", (job["id"],))
-            return bool(row and row["status"] == "canceled")
+            if row and row["status"] == "canceled":
+                return True
+            return _cur_gen() != my_gen   # 新代次已发起：旧任务让位（T3）
 
         n = translator.translate_paper(
             job["user_id"], job["paper_id"], run["id"],
             force_new=bool(payload.get("force_new_version")), progress_cb=cb,
             cancel_check=cancel_check,
         )
-        # 外部取消时保留 canceled 状态，不覆盖为 done
+        # 外部取消时保留 canceled 状态，不覆盖为 done；代次被取代同理
         cur = db.one("SELECT status FROM jobs WHERE id=?", (job["id"],))
-        if cur and cur["status"] != "canceled":
+        if cur and cur["status"] == "canceled":
+            pass
+        elif _cur_gen() != my_gen:
+            scheduler._update(job["id"], status="canceled",
+                              error="已被更新的翻译任务取代（术语表/强制重译）")
+        else:
             scheduler._update(job["id"], status="done", progress_done=n, progress_total=n)
 
     scheduler.translate_handler = _translate_handler
@@ -1276,6 +1290,10 @@ async def patch_paper(paper_id: str, request: Request):
     if sets:
         with db.write() as c:
             c.execute(f"UPDATE papers SET {', '.join(sets)} WHERE id=?", (*args, paper_id))
+    # 可见性相关字段变更 → 向量矩阵缓存按用户 scope 缓存，须立即失效（T5）
+    if "visibility" in body or "collection_id" in body:
+        from core.retrieval import invalidate_vec_cache
+        invalidate_vec_cache()
     return {"ok": True}
 
 
@@ -2216,6 +2234,12 @@ async def translate_papers(request: Request):
                 skipped.append(pid)
                 continue
             # 有部分译文但未完整 → 续翻（翻译器会按块补齐）
+        if body.get("force_new_version"):
+            # 代际递增：旧代次的在途任务写库前会被 cancel_check 拦下（T3 乱序防护）
+            with db.write() as c:
+                c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                          "ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT)",
+                          (f"tgen:{pid}", "1"))
         scheduler.enqueue(u["id"], "translate", pid,
                           {"force_new_version": bool(body.get("force_new_version"))},
                           priority="background" if batch else "interactive")
