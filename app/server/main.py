@@ -992,10 +992,10 @@ def paper_assets(paper_id: str, request: Request):
     run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
                  "ORDER BY created_at DESC LIMIT 1", (paper_id,))
     if run is None:
-        return {"figures": [], "tables": []}
+        return {"figures": [], "tables": [], "formulas": []}
     mf = ingest.PAPERS_DIR / paper_id / "parse" / run["id"] / "middle_json.json"
     if not mf.exists():
-        return {"figures": [], "tables": []}
+        return {"figures": [], "tables": [], "formulas": []}
     import json as _json
     middle = _json.loads(mf.read_text(encoding="utf-8"))
 
@@ -1022,6 +1022,17 @@ def paper_assets(paper_id: str, request: Request):
                     figures_raw.append({
                         "page_index": pg, "image_path": body["image_path"],
                         "caption": _flat_text(cap.get("content")) if cap else "",
+                        "bbox": b.get("bbox"),
+                    })
+            elif b.get("type") == "chart":
+                # MinerU 4 的图表块（chart_body 一样有提取图）——漏掉会导致
+                # 「上 image 下 chart」的并图只裁出上半部分
+                body = next((x for x in b.get("content", []) if x.get("type") == "chart_body"), None)
+                caps = [x for x in b.get("content", []) if x.get("type") == "chart_caption"]
+                if body and body.get("image_path") and Path(body["image_path"]).name:
+                    figures_raw.append({
+                        "page_index": pg, "image_path": body["image_path"],
+                        "caption": " ".join(_flat_text(c.get("content")) for c in caps if c.get("content")).strip(),
                         "bbox": b.get("bbox"),
                     })
             elif b.get("type") == "table":
@@ -1096,7 +1107,16 @@ def paper_assets(paper_id: str, request: Request):
             n["sub_captions"] = [s["caption"] for s in subs if s["caption"]]
             n["union_bbox"] = _union([n] + subs)
             figures.append(n)
-    return {"figures": figures, "tables": tables}
+
+    # 公式清单（IvySCI 式独立页签）：blocks 里 type=equation 即 LaTeX
+    run_id = run["id"]
+    formulas = [
+        {"page_index": r["page_index"], "latex": r["text"], "block_id": r["block_id"]}
+        for r in db.all(
+            "SELECT block_id, page_index, text FROM blocks WHERE parse_run_id=? AND type='equation' "
+            "AND TRIM(text)<>'' ORDER BY page_index, block_index", (run_id,))
+    ]
+    return {"figures": figures, "tables": tables, "formulas": formulas}
 
 
 # ---------------- 文献信息（管理器式） ----------------

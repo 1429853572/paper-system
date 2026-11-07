@@ -2485,42 +2485,99 @@ async function renderAssets() {
   const pid = state.current?.id;
   if (!pid) { $('#content-view').innerHTML = '<p class="muted">选择论文后查看图表</p>'; return; }
   if (!state.assets) state.assets = await api(`/api/papers/${pid}/assets`);
-  const {figures: rawFigures, tables: rawTables} = state.assets;
-  if (!rawFigures.length && !rawTables.length) {
+  const {figures: rawFigures, tables: rawTables, formulas: rawFormulas} = state.assets;
+  const figures = (rawFigures || []).filter(f => f.image_path);
+  const tables = (rawTables || []).filter(t => (t.html && t.html.trim()) || t.bbox);
+  const formulas = rawFormulas || [];
+  if (!figures.length && !tables.length && !formulas.length) {
     $('#content-view').innerHTML = '<p class="muted">未提取到图表</p>'; return;
   }
-  // 空条目过滤：图必须可显示，表必须有内容或坐标（过滤结果用新变量——
-  // 原先对 const 解构变量重新赋值直接 TypeError，图表页签必崩）
-  const figures = rawFigures.filter(f => f.image_path);
-  const tables = rawTables.filter(t => (t.html && t.html.trim()) || t.bbox);
   if (state.view !== 'assets' || state.current?.id !== pid) return;   // 用户已切走：丢弃迟到渲染
-  setTimeout(() => {   // 兜底：裁剪失败且无兜底内容的卡片隐藏
-    $$('.asset', $('#content-view')).forEach(a => {
-      const hasImg = [...a.querySelectorAll('img')].some(i => i.naturalWidth > 0);
-      const hasTbl = a.querySelector('.tbl') && a.querySelector('.tbl').innerHTML.trim().length > 20;
-      if (!hasImg && !hasTbl) a.style.display = 'none';
-    });
-  }, 1200);
-  $('#content-view').innerHTML =
-    (figures.length ? `<div class="card"><h2>${icon('image')} 图 (${figures.length})</h2>` +
-      figures.map(f => `<div class="asset">
+
+  /* IvySCI 式布局：图表(混排)/公式 二级页签；条目按页分组，页头点击跳 PDF。
+     混排排序 = (页码, bbox y0)——保持论文内的视觉顺序。 */
+  const merged = [
+    ...figures.map(f => ({kind: 'fig', page: f.page_index, y: (f.bbox || [0, 9])[1], f})),
+    ...tables.map(t => ({kind: 'tbl', page: t.page_index, y: (t.bbox || [0, 9])[1], t})),
+  ].sort((a, b) => a.page - b.page || a.y - b.y);
+  const groups = [];
+  for (const it of merged) {
+    let g = groups[groups.length - 1];
+    if (!g || g.page !== it.page) { g = {page: it.page, items: []}; groups.push(g); }
+    g.items.push(it);
+  }
+  const eqGroups = [];
+  for (const eq of formulas) {
+    let g = eqGroups[eqGroups.length - 1];
+    if (!g || g.page !== eq.page_index) { g = {page: eq.page_index, items: []}; eqGroups.push(g); }
+    g.items.push(eq);
+  }
+
+  const capHtml = (cap, id) => cap ? `
+    <p class="asset-cap" id="${id}">${esc(cap)}</p>
+    ${cap.length > 120 ? `<a href="#" class="asset-cap-toggle" data-cap="${id}">展开</a>` : ''}` : '';
+
+  const itemHtml = it => {
+    if (it.kind === 'fig') {
+      const f = it.f;
+      return `<div class="asset">
         ${f.label ? `<span class="asset-badge" onclick="jumpEvidence(${f.page_index})" title="跳到 PDF 该页">${esc(f.label)}</span>` : ''}
         <div class="fig-grid">
-        <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}"
-             ondblclick="lightbox(this.src, '')">
-        ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" ondblclick="lightbox(this.src, '')">`).join('')}
+          <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}" ondblclick="lightbox(this.src, '')">
+          ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" ondblclick="lightbox(this.src, '')">`).join('')}
         </div>
-        ${f.sub_captions?.length ? `<p class="muted" style="font-size:11px">${esc(f.sub_captions.join(' | ').slice(0, 160))}</p>` : ''}
-        <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${f.page_index});return false">${icon('doc')} 第${f.page_index + 1}页</a> · ${esc(f.caption || '（无题注）')}</p>
-      </div>`).join('') + '</div>' : '') +
-    (tables.length ? `<div class="card"><h2>${icon('copy')} 表 (${tables.length})</h2>` +
-      tables.map(t => `<div class="asset">
-        ${t.label ? `<span class="asset-badge" onclick="jumpEvidence(${t.page_index})">${esc(t.label)}</span>` : ''}
-        ${t.bbox ? `<figure class="fig-crop" data-page="${t.page_index}" data-ub='${JSON.stringify(t.bbox)}'>
-          <div class="fig-holder">${t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : ''}</div>
-        </figure>` : (t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : '')}
-        <p class="muted" style="font-size:12px"><a href="#" onclick="jumpEvidence(${t.page_index});return false">${icon('doc')} 第${t.page_index + 1}页</a> · ${esc(t.caption || '（无题注）')}</p>
-      </div>`).join('') + '</div>' : '');
+        ${(f.sub_captions || []).length ? `<p class="muted" style="font-size:11px">${esc(f.sub_captions.join(' | ').slice(0, 200))}</p>` : ''}
+        ${capHtml(f.caption || '', `cap-${f.page_index}-${(f.image_path || '').replace(/\W/g, '')}`)}
+      </div>`;
+    }
+    const t = it.t;
+    return `<div class="asset">
+      ${t.label ? `<span class="asset-badge" onclick="jumpEvidence(${t.page_index})">${esc(t.label)}</span>` : ''}
+      ${t.bbox ? `<figure class="fig-crop" data-page="${t.page_index}" data-ub='${JSON.stringify(t.bbox)}'>
+        <div class="fig-holder">${t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : ''}</div>
+      </figure>` : (t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : '')}
+      ${capHtml(t.caption || '', `cap-t-${t.page_index}-${Math.round((t.bbox || [0, 0])[1] * 1000)}`)}
+    </div>`;
+  };
+
+  const eqHtml = g => g.items.map(eq => {
+    const tex = (eq.latex || '').trim();
+    let r = null;
+    if (state.katex && tex) { try { r = state.katex.renderToString(tex, {throwOnError: false, displayMode: true, strict: false, trust: true}); } catch {} }
+    return `<div class="asset eq-asset" onclick="jumpEvidence(${eq.page_index})" title="跳到 PDF 该页">
+      ${r ? r : `<code>${esc(tex.slice(0, 400))}</code>`}
+    </div>`;
+  }).join('');
+
+  const tab = state.assetsTab || 'figs';
+  const figsN = merged.length, eqsN = formulas.length;
+  $('#content-view').innerHTML = `
+    <div class="asset-tabs">
+      <button class="asset-tab ${tab === 'figs' ? 'on' : ''}" data-at="figs">图表 (${figsN})</button>
+      <button class="asset-tab ${tab === 'eqs' ? 'on' : ''}" data-at="eqs">公式 (${eqsN})</button>
+    </div>
+    ${tab === 'figs'
+      ? (merged.length ? groups.map(g => `
+          <div class="asset-page">
+            <div class="asset-page-head" onclick="jumpEvidence(${g.page})" title="跳到 PDF 该页">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 项 ${icon('arrowR', 11)}</span></div>
+            ${g.items.map(itemHtml).join('')}
+          </div>`).join('')
+        : '<p class="muted" style="padding:12px">未提取到图表</p>')
+      : (formulas.length ? eqGroups.map(g => `
+          <div class="asset-page">
+            <div class="asset-page-head" onclick="jumpEvidence(${g.page})" title="跳到 PDF 该页">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 式 ${icon('arrowR', 11)}</span></div>
+            ${eqHtml(g)}
+          </div>`).join('')
+        : '<p class="muted" style="padding:12px">未提取到公式</p>')}
+  `;
+  // 页签切换 + 题注展开/收起
+  $$('.asset-tab', $('#content-view')).forEach(b => b.onclick = () => { state.assetsTab = b.dataset.at; renderAssets(); });
+  $$('.asset-cap-toggle', $('#content-view')).forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const cap = $(`#${a.dataset.cap}`);
+    const open = cap.classList.toggle('open');
+    a.textContent = open ? '收起' : '展开';
+  });
   figCropPass();
 }
 
