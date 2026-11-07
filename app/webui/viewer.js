@@ -1525,6 +1525,10 @@ async function renderBatchPage() {
         <div class="bp-picker" id="bp-picker" hidden>
           <div class="bpp-tools">
             <input id="bpp-search" placeholder="搜索标题…" style="flex:1">
+            <select id="bpp-lib" title="按库缩小勾选范围" style="width:auto;font-size:12px">
+              <option value="">全部库</option>
+              ${cols.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+            </select>
             <button class="btn small" id="bpp-all" title="勾上本页全部">全选本页</button>
             <button class="btn small" id="bpp-none" title="取消本页全部">本页取消</button>
           </div>
@@ -1573,11 +1577,16 @@ async function renderBatchPage() {
     e.target.value = '';
   };
   /* 自由勾选面板：服务端分页 + 搜索，逐条复选实时计入圈定 */
-  state._bpp = {page: 1, q: '', hasMore: false, items: []};
+  state._bpp = {page: 1, q: '', lib: '', hasMore: false, items: []};
   $('#bp-pick-toggle').onclick = () => {
     const p = $('#bp-picker');
     p.hidden = !p.hidden;
     if (!p.hidden) { loadBpPicker(); $('#bpp-search').focus(); }
+  };
+  $('#bpp-lib').onchange = e => {
+    state._bpp.lib = e.target.value;
+    state._bpp.page = 1;
+    loadBpPicker();
   };
   let _bppTimer = 0;
   $('#bpp-search').oninput = e => {
@@ -1614,9 +1623,11 @@ function renderBpDetail() {
   if (!ids.size) { det.hidden = true; det.innerHTML = ''; return; }
   const byId = new Map([...state.papers, ...state._batchPapers, ...(state.qaAllPapers || [])]
     .map(p => [p.id, p]));
+  const colName2 = cid => (state.collections || []).find(c => c.id === cid)?.name || '未分库';
   const items = [...ids].map(id => {
     const p = byId.get(id);
-    return `<div class="bp-row">${esc(p ? (p.title || p.id) : id)}</div>`;
+    return `<div class="bp-row">${esc(p ? (p.title || p.id) : id)}
+      <span class="muted" style="font-size:11px"> · ${esc(colName2(p?.collection_id))}</span></div>`;
   }).join('');
   const fold = ids.size > 8;
   det.innerHTML = `${fold ? `<button class="btn small" id="bp-toggle">展开 ${ids.size} 篇</button>` : ''}
@@ -1639,6 +1650,7 @@ async function loadBpPicker() {
   if (!list) return;
   try {
     const params = new URLSearchParams({q: bp.q, page: bp.page, page_size: BPP_PAGE_SIZE});
+    if (bp.lib) params.set('collection_id', [bp.lib, ...colDescendants(bp.lib)].join(','));
     const d = await api('/api/papers?' + params);
     bp.items = d.papers;
     bp.hasMore = !!d.has_more;
@@ -1657,11 +1669,18 @@ function renderBpPicker() {
   if (!bp.items.length) {
     list.innerHTML = `<p class="muted" style="padding:10px">${bp.q ? '没有匹配的论文' : '库中还没有论文'}</p>`;
   } else {
+    const colName = cid => (state.collections || []).find(c => c.id === cid)?.name || '';
     list.innerHTML = bp.items.map(p => `
       <label class="bpp-row ${state.batchSel.has(p.id) ? 'on' : ''}" data-id="${esc(p.id)}">
         <input type="checkbox" ${state.batchSel.has(p.id) ? 'checked' : ''}>
-        <span class="bpp-title">${esc(p.title || p.id)}</span>
-        ${p.year ? `<span class="badge priv">${esc(p.year)}</span>` : ''}
+        <span class="bpp-main">
+          <span class="bpp-title">${esc(p.title || p.id)}</span>
+          <span class="bpp-meta">
+            <span class="bp-lib" title="所属文献库">${icon('folder', 11)} ${esc(colName(p.collection_id) || '未分库')}</span>
+            ${p.year ? `<span>${esc(p.year)}</span>` : ''}
+            ${p.page_count ? `<span>${p.page_count} 页</span>` : ''}
+          </span>
+        </span>
         ${statusBadge(p)}
       </label>`).join('');
     $$('input[type=checkbox]', list).forEach(cb => cb.onchange = e => {
@@ -1673,7 +1692,8 @@ function renderBpPicker() {
     });
   }
   const pg = $('#bpp-page');
-  if (pg) pg.textContent = `第 ${bp.page} 页${bp.q ? `（搜“${bp.q}”）` : ''}`;
+  const libName = bp.lib ? ((state.collections || []).find(c => c.id === bp.lib)?.name || '') : '';
+  if (pg) pg.textContent = `第 ${bp.page} 页${libName ? ` · ${libName}` : ''}${bp.q ? ` · 搜“${bp.q}”` : ''}`;
   $('#bpp-prev').disabled = bp.page <= 1;
   $('#bpp-next').disabled = !bp.hasMore;
   const sc = $('#bpp-selcount');

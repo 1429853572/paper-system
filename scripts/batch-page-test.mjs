@@ -17,7 +17,9 @@ const DATA = {
   '/api/me': { id: 1, username: 'tester', role: 'admin', llm_configured: { chat: true, translate: true } },
   '/api/presets': { questions: [] },
   '/api/chat/sessions': { sessions: [] },
-  '/api/collections': { total: 1, collections: [{ id: 'c1', name: '默认文献库', parent_id: null, papers: 1, papers_total: 1 }] },
+  '/api/collections': { total: 2, collections: [
+    { id: 'c1', name: '默认文献库', parent_id: null, papers: 2, papers_total: 2 },
+    { id: 'c2', name: 'test', parent_id: null, papers: 43, papers_total: 43 }] },
   '/api/papers': { total: 2, papers: [
     { id: 'p1', title: 'Paper One', parse_status: 'parsed', visibility: 'shared', owner_id: 1, page_count: 10, file_size: 1024 },
     { id: 'p2', title: 'Paper Two', parse_status: 'failed', visibility: 'shared', owner_id: 1, page_count: 12, file_size: 2048 },
@@ -67,6 +69,8 @@ const PICK_POOL = Array.from({length: 45}, (_, i) => ({
   id: `pb${String(i + 1).padStart(2, '0')}`,
   title: i === 44 ? 'UniqueNeedle Paper 独特针' : `Batch Pool Paper ${i + 1}`,
   year: String(2020 + (i % 6)), parse_status: 'parsed', visibility: 'shared', owner_id: 1,
+  collection_id: i < 2 ? 'c1' : 'c2',
+  page_count: 10 + i,
 }));
 
 window.fetch = async (url, opts = {}) => {
@@ -84,7 +88,10 @@ window.fetch = async (url, opts = {}) => {
   // /api/papers：按 query 分页（自由勾选面板用）
   if (path === '/api/papers' && q.has('page') && q.get('page_size') === '20') {
     const kw = (q.get('q') || '').toLowerCase();
-    const filtered = PICK_POOL.filter(p => !kw || p.title.toLowerCase().includes(kw));
+    const cids = (q.get('collection_id') || '').split(',').filter(Boolean);
+    const filtered = PICK_POOL.filter(p =>
+      (!kw || p.title.toLowerCase().includes(kw)) &&
+      (!cids.length || cids.includes(p.collection_id)));
     const page = Math.max(1, +q.get('page') || 1);
     const slice = filtered.slice((page - 1) * 20, page * 20);
     return { ok: true, status: 200,
@@ -224,6 +231,17 @@ await new Promise((r) => setTimeout(r, 250));
 ok('勾选面板展开且 20 行', !doc.querySelector('#bp-picker').hidden &&
    doc.querySelectorAll('.bpp-row').length === 20, `实际 ${doc.querySelectorAll('.bpp-row').length}`);
 ok('下一页可用（45 篇 → 3 页）', !doc.querySelector('#bpp-next').disabled);
+ok('行显示所属库', doc.body.textContent.includes('test') &&
+   doc.body.textContent.includes('默认文献库'));
+ok('库筛选下拉存在（全部库+2）', doc.querySelectorAll('#bpp-lib option').length === 3);
+doc.querySelector('#bpp-lib').value = 'c2';
+doc.querySelector('#bpp-lib').dispatchEvent(new window.Event('change'));
+await new Promise((r) => setTimeout(r, 250));
+ok('按库筛选后 20 行（c2 有 43 篇）', doc.querySelectorAll('.bpp-row').length === 20 &&
+   doc.querySelector('#bpp-page').textContent.includes('test'));
+doc.querySelector('#bpp-lib').value = '';
+doc.querySelector('#bpp-lib').dispatchEvent(new window.Event('change'));
+await new Promise((r) => setTimeout(r, 250));
 doc.querySelector('.bpp-row input[type=checkbox]').click();
 await new Promise((r) => setTimeout(r, 80));
 ok('逐条勾选计数 1', doc.querySelector('#bp-count').textContent.includes('1 篇'));
