@@ -57,7 +57,7 @@
 ```
 
 - 读工具直接执行：`search_papers` / `read_paper` / `search_text` / `get_summary` / `cite` / `search_cnki`（中文文献检索）
-- 采集类：`search_cnki`（中文检索）、`create_topic_task`（建专题并检索）、`list_topic_tasks`
+- 采集类：`search_cnki`（中文检索，read 模式可用）；`create_topic_task` / `list_topic_tasks` / `acquire_cnki`（入库类，需 write 模式）
 - 写操作（`acquire_cnki` / `undo_last_action` 等）需开 `PAPERSYS_MCP_TOOLSETS=read,write`
 - 写工具默认关闭：`.env` 设 `PAPERSYS_MCP_TOOLSETS=read,write` 开放 `update_meta` / `import_by_doi` / `undo_last_action`——写动作生成待确认卡片，在网页「队列」浮层人工执行/丢弃，执行后可撤销（最近 10 条）
 
@@ -69,7 +69,7 @@
 
 ## 前端回归
 
-`node scripts/ui-regression.mjs`（总）｜ `batch-page-test.mjs`（批量+综述）｜ `discover-test.mjs`（找相关）｜ `qa-ux-test.mjs`（命令标签/选中浮条/历史/标识符导入）｜ `cite-jump-test.mjs`｜ `trash-btn-test.mjs`｜ `cite-csl-test.mjs`
+`node scripts/ui-regression.mjs`（总）｜ `batch-page-test.mjs`（批量+综述+任务中心+勾选面板）｜ `topic-acquire-test.mjs`（采集弹层+专题流）｜ `discover-test.mjs`（找相关）｜ `qa-ux-test.mjs`（命令标签/选中浮条/历史/标识符导入）｜ `cite-jump-test.mjs`｜ `trash-btn-test.mjs`｜ `cite-csl-test.mjs`｜ `backend-test.py`（后端：容器内 `docker exec paper-system-app python3 /app/scripts/backend-test.py`）
 
 ## 技术栈
 

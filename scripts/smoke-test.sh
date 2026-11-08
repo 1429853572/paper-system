@@ -87,7 +87,28 @@ LJS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE/static/login.js")
 CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/papers")
 [[ "$CODE" == 401 ]] && ok "未登录 401 保护" || bad "未登录访问返回 $CODE（应 401）"
 
-rm -f "$CJ"
+# 7. 新功能端点（第 6 段改密测试会吊销旧会话——先重登拿新 cookie）
+CJ2=$(mktemp)
+curl -sf -c "$CJ2" -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+    -d "{\"username\":\"admin\",\"password\":\"$PW\"}" >/dev/null
+for ep in "/api/acquire/status" "/api/acq-tasks" "/api/syntheses" "/api/jobs/count"; do
+    CODE=$(curl -sf -b "$CJ2" -o /dev/null -w '%{http_code}' "$BASE$ep")
+    [[ "$CODE" == 200 ]] && ok "GET $ep" || bad "GET $ep HTTP $CODE"
+done
+FIRST_SYN=$(curl -s -b "$CJ2" "$BASE/api/syntheses" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print(d.get("syntheses",[{}])[0].get("id","") if d.get("syntheses") else "")')
+if [[ -n "${FIRST_SYN:-}" ]]; then
+    CODE=$(curl -sf -b "$CJ2" -o /dev/null -w '%{http_code}' "$BASE/api/syntheses/$FIRST_SYN/progress")
+    [[ "$CODE" == 200 ]] && ok "GET /api/syntheses/{id}/progress" || bad "progress HTTP $CODE"
+fi
+# MCP tools/list（bearer token）
+TOOLS=$(curl -sf "$BASE/api/mcp" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || echo '')
+echo "$TOOLS" | grep -q 'search_papers' && ok "MCP tools/list" || bad "MCP tools/list 异常"
+
+rm -f "$CJ" "$CJ2"
 echo
 echo "结果: $pass 通过, $fail 失败"
 [[ $fail -eq 0 ]] || exit 1

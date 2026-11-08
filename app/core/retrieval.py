@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 import numpy as np
 
-from .config import EMBED_DIMS, EMBED_MODEL, OLLAMA_BASE_URL, config
+from .config import EMBED_DIMS, EMBED_MODEL, config
 from .db import cjk_space, fts_query, db
 
 # ---- 分块（入库时调用） ----

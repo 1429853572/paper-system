@@ -38,7 +38,10 @@ const DATA = {
   '/api/syntheses': { syntheses: [
     { id: 's1', title: '文献综述 · 2 篇', status: 'done', papers: 2, model: 'test-model',
       progress_done: 3, progress_total: 3, error: null,
-      created_at: '2026-11-07 11:00:00', updated_at: '2026-11-07 11:09:00' } ] },
+      created_at: '2026-11-07 11:00:00', updated_at: '2026-11-07 11:09:00' },
+    { id: 's2', title: '需修复综述', status: 'needs_fix', papers: 3, model: 'test-model',
+      progress_done: 5, progress_total: 5, error: '引用校验未通过：缺漏 2 / 幻影 0',
+      created_at: '2026-11-07 12:00:00', updated_at: '2026-11-07 12:10:00' } ] },
   '/api/synthesize/estimate': { valid: 2, missing_summaries: 1, groups: 1, calls: 3, no_parse: [] },
   '/api/synthesize': { synthesis_id: 's1', batch_id: 'synb', estimate: { valid: 2, missing_summaries: 1, groups: 1, calls: 3 } },
   '/api/jobs': { jobs: [
@@ -338,6 +341,9 @@ if (synPop) {
   // 新批次自动展开（_batchOpen=synb）→ renderSynJob
   const synRow = doc.querySelector('[data-syn-view="s1"]');
   ok('综述行出现查看报告键', !!synRow);
+  const nfRow = doc.querySelector('[data-syn-view="s2"]');
+  ok('needs_fix 综述也有查看报告入口（不再失联）', !!nfRow &&
+     nfRow.closest('.syn-item').textContent.includes('引用需修复'));
   ok('综述行有导出键', !!doc.querySelector('[data-syn-dl="s1"][data-fmt="csv"]'));
   if (synRow) {
     synRow.click();

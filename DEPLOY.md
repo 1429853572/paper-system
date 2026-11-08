@@ -120,6 +120,7 @@ bash scripts/setup-xinference.sh # 重载 embedding/rerank 模型
 （这些站点对纯 HTTP 软封，必须真实浏览器）。
 
 ```bash
+# 0) 前置：宿主已装 google-chrome（install.sh 的 acquire 单元安装也以此为前提）
 # 1) 宿主装 playwright（复用系统 Chrome，不必再下 300MB Chromium）
 pip install playwright
 
