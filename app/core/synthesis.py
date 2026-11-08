@@ -52,14 +52,21 @@ def estimate(paper_ids: list[str]) -> dict:
 
 
 def _digest_of(paper_row, summary_row) -> dict:
-    """单篇 → 结构化摘要卡（供组内比对与 CSV 矩阵）。"""
+    """单篇 → 结构化摘要卡（供组内比对与 CSV 矩阵）。
+
+    evidence：该篇导读引用过的原文证据（block_id/page/text）——随综述全程传递，
+    最终写进报告的 evidence 字段，前端渲染可点击跳原文（评审 P0 证据链）。
+    """
     fields = {k: "" for k in _DIGEST_KEYS}
+    evidence = []
     if summary_row is not None:
         try:
-            sec = (json.loads(summary_row["content"] or "{}") or {}).get("sections", {})
+            content = json.loads(summary_row["content"] or "{}")
+            sec = content.get("sections", {})
             if isinstance(sec, dict):
                 for k in _DIGEST_KEYS:
                     fields[k] = re.sub(r"\[\d+\]", "", sec.get(k) or "").strip()
+            evidence = content.get("evidence") or []
         except Exception:  # noqa: BLE001
             pass
     for k in _DIGEST_KEYS:
@@ -68,7 +75,9 @@ def _digest_of(paper_row, summary_row) -> dict:
             fields[k] = (paper_row["abstract"] or "").strip()[:300]
     return {"id": paper_row["id"], "title": paper_row["title"] or paper_row["id"],
             "year": paper_row["year"] or "", "journal": paper_row["journal"] or "",
-            "has_summary": summary_row is not None, **fields}
+            "has_summary": summary_row is not None,
+            "evidence": evidence[:20],   # 上限防爆上下文；导读证据通常 ≤30 条
+            **fields}
 
 
 def _digest_block(d: dict, cap: int = 700) -> str:
@@ -245,6 +254,12 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
                            for d in g_digests],
                           "similarities": [], "differences": [], "_raw": raw[:1500]}
             parsed["_ids"] = [d["id"] for d in g_digests]
+            # 证据链：把本组论文的原文证据挂到组结果上（跨组综合与最终报告取用）
+            ev_map = {}
+            for d in g_digests:
+                for e in d.get("evidence", []):
+                    ev_map[e.get("evidence_id")] = e
+            parsed["_evidence"] = list(ev_map.values())
             cluster_jsons.append(parsed)
             progress(1)
 
@@ -266,6 +281,27 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
             gsections.append(f"### 组 {i + 1}: {cj.get('group_name', '')}\n{papers_txt}\n共识:\n{sims}\n差异:\n{diffs}")
         topic_note = (f"本次综述聚焦的研究问题：{topic}。报告应围绕该问题组织，"
                       f"与该问题弱相关的材料单独归入「外围工作」一小节，不混入主线结论。\n") if topic else ""
+        # 证据编号表：E1/E2/… → 原文证据（跨组统一编号，报告里引用；前端可点击跳原文）
+        ev_flat = []
+        for cj in cluster_jsons:
+            for e in cj.get("_evidence", []):
+                ev_flat.append(e)
+        seen = set()
+        ev_uniq = []
+        for e in ev_flat:
+            k = (e.get("paper_id"), e.get("block_id"))
+            if k in seen:
+                continue
+            seen.add(k)
+            ev_uniq.append(e)
+        ev_index = {e["evidence_id"]: i + 1 for i, e in enumerate(ev_uniq)}
+        ev_lines = []
+        for eid, n in sorted(ev_index.items(), key=lambda x: x[1]):
+            e = ev_uniq[n - 1]
+            title = e.get("title") or e.get("paper_id")
+            ev_lines.append(f"E{n} = 《{str(title)[:40]}》第{(e.get('page_index') or 0) + 1}页")
+        ev_prompt = ("\n可用证据编号（重要论断句末用 [E<n>] 标注，只允许使用列出的编号）：\n"
+                     + "\n".join(ev_lines[:60])) if ev_lines else ""
         report = client.complete([
             {"role": "system", "content":
                 "你是学术综述撰写人。依据提供的分组比对材料写一篇中文文献综述报告（Markdown）。"
@@ -276,16 +312,23 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
                 "## 三、跨组共识（列表，每条注明来自哪些论文）\n"
                 "## 四、主要分歧（列表，说明双方立场与各自证据）\n"
                 "## 五、研究机会与局限（材料中反复出现的 gap）\n"
-                "规则：论文名用「标题（年份）」；只依据材料不编造；数值必须来自材料原文。"},
+                "规则：论文名用「标题（年份）」；只依据材料不编造；数值必须来自材料原文；"
+                "**重要论断句末标注证据编号如 [E3]**（编号表见材料末尾），"
+                "没有对应证据的论断不标注、且措辞须弱化（如「可能」「有待验证」）。"
+                + ev_prompt},
             {"role": "user", "content": "\n\n".join(gsections)[:60000]},
         ], max_tokens=6000)
 
         csv_text = build_matrix_csv(digests, cluster_jsons)
+        evidence_out = json.dumps(
+            [{**e, "n": ev_index.get(e["evidence_id"], 0)} for e in ev_uniq],
+            ensure_ascii=False)
         with db.write() as c:
             c.execute(
                 "UPDATE syntheses SET status='done', stage='final', report_md=?, matrix_csv=?, "
-                "model=?, error=NULL, progress_done=progress_total, updated_at=datetime('now') "
-                "WHERE id=?", (report, csv_text, cfg.model, synthesis_id))
+                "evidence=?, model=?, error=NULL, progress_done=progress_total, "
+                "updated_at=datetime('now') WHERE id=?",
+                (report, csv_text, evidence_out, cfg.model, synthesis_id))
         if job_update:
             job_update(progress_done=total)
     except Exception as e:  # noqa: BLE001

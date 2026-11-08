@@ -2384,6 +2384,9 @@ async function showSynthesisReport(sid) {
   catch (e) { toast(e.message); return; }
   let clusters = [];
   try { clusters = JSON.parse(s.clusters || '[]'); } catch { /* ignore */ }
+  let evidence = [];
+  try { evidence = JSON.parse(s.evidence || '[]'); } catch { /* ignore */ }
+  const evByN = new Map((evidence || []).map(e => [e.n, e]));
   const byId = new Map([...state.papers, ...state._batchPapers].map(p => [p.id, p]));
   const nav = clusters.map((c, i) => `
     <div class="syn-nav-group">
@@ -2404,9 +2407,47 @@ async function showSynthesisReport(sid) {
       </div>
       <div class="syn-body">
         <aside class="syn-nav card"><b>主题分组</b>${clusters.length ? nav : '<p class="muted">无分组信息</p>'}</aside>
-        <div class="syn-report card" id="syn-report">${mdLite((s.report_md || '报告尚未生成').replace(/^# /gm, '## '))}</div>
+        <div class="syn-report card" id="syn-report"></div>
       </div>
+      ${evidence.length ? `<div class="card syn-ev">
+        <b>证据索引（点击编号跳原文）</b>
+        <div class="syn-ev-list">${evidence.map(e => `
+          <div class="syn-ev-row" data-ev="${e.n}">
+            <span class="badge run">E${e.n}</span>
+            <span class="syn-ev-main">
+              <b>${esc((e.title || e.paper_id || '').slice(0, 50))}</b>
+              <span class="muted" style="font-size:11px">第 ${(e.page_index || 0) + 1} 页 · ${esc((e.text || '').slice(0, 80))}…</span>
+            </span>
+          </div>`).join('')}</div>
+      </div>` : ''}
     </div>`;
+  // [E3] → 可点击脚注
+  const rep = $('#syn-report');
+  if (rep) {
+    rep.innerHTML = mdLite((s.report_md || '报告尚未生成').replace(/^# /gm, '## '))
+      .replace(/\[E(\d{1,3})\]/g, (m, n) => {
+        const e = evByN.get(+n);
+        if (!e) return m;   // 未知编号保留原样（诚实：不伪造可点击）
+        return `<span class="ev-cite" data-ev="${n}" title="${esc((e.title || '') + ' · 第' + ((e.page_index || 0) + 1) + '页')}">[E${n}]</span>`;
+      });
+    $$('#syn-report .ev-cite').forEach(sp => sp.onclick = () => {
+      const e = evByN.get(+sp.dataset.ev);
+      if (!e || !e.paper_id) return;
+      switchPage('reader');
+      openPaper(e.paper_id).then(() => jumpEvidence({
+        paper_id: e.paper_id, page_index: e.page_index || 0,
+        block_id: e.block_id, text: e.text }));
+    });
+  }
+  // 证据索引行点击同样跳原文
+  $$('#page-batch .syn-ev-row').forEach(row => row.onclick = () => {
+    const e = evByN.get(+row.dataset.ev);
+    if (!e || !e.paper_id) return;
+    switchPage('reader');
+    openPaper(e.paper_id).then(() => jumpEvidence({
+      paper_id: e.paper_id, page_index: e.page_index || 0,
+      block_id: e.block_id, text: e.text }));
+  });
   $('#syn-back').onclick = () => renderBatchPage();
   $('#syn-dl-md').onclick = () => { location.href = `/api/syntheses/${encodeURIComponent(sid)}/export?fmt=md`; };
   $('#syn-dl-csv').onclick = () => { location.href = `/api/syntheses/${encodeURIComponent(sid)}/export?fmt=csv`; };

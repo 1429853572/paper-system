@@ -1078,3 +1078,13 @@ table.list input[type=checkbox] { width: auto; }
 .tp-cand-main b { font-size: var(--fs-sm); line-height: 1.4; }
 .tp-cand-abs { font-size: var(--fs-xs); color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2;
                -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ---- 综述证据链 ---- */
+.ev-cite { color: var(--primary); cursor: pointer; font-weight: 600; padding: 0 1px; }
+.ev-cite:hover { text-decoration: underline; background: var(--tint-primary); }
+.syn-ev { padding: 10px 16px; }
+.syn-ev-list { max-height: 260px; overflow-y: auto; margin-top: 6px; }
+.syn-ev-row { display: flex; align-items: center; gap: 10px; padding: 6px 4px;
+              border-bottom: 1px dashed var(--line-soft); cursor: pointer; }
+.syn-ev-row:hover { background: var(--hover); }
+.syn-ev-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
