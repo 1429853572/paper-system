@@ -1088,3 +1088,23 @@ table.list input[type=checkbox] { width: auto; }
               border-bottom: 1px dashed var(--line-soft); cursor: pointer; }
 .syn-ev-row:hover { background: var(--hover); }
 .syn-ev-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+
+/* ---- 综述发起参数弹窗 ---- */
+.syn-launch { width: 520px; max-width: 94vw; }
+.syn-f-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+.syn-f-row > label:first-child { flex: none; width: 52px; font-size: var(--fs-sm); color: var(--muted); }
+.syn-f-row input[type="text"], .syn-f-row input:not([type]) { flex: 1; min-width: 200px; }
+.syn-seg { font-size: var(--fs-xs); display: inline-flex; align-items: center; gap: 4px; }
+.syn-seg input { width: auto; }
+/* ---- 框架卡 / 参考文献卡 / 校验清单 ---- */
+.syn-fw { padding: 10px 16px; }
+.syn-fw-cur { font-size: var(--fs-sm); margin: 6px 0; }
+.syn-fw-alts { display: flex; gap: 8px; flex-wrap: wrap; }
+.syn-refs { padding: 10px 16px; }
+.syn-refs-list { max-height: 300px; overflow-y: auto; margin-top: 6px; }
+.syn-ref-row { display: flex; align-items: center; gap: 10px; padding: 5px 2px;
+               border-bottom: 1px dashed var(--line-soft); font-size: var(--fs-sm); }
+.syn-ref-row.weak { opacity: .6; }
+.syn-ref-row code { flex: none; color: var(--primary); font-size: var(--fs-xs); }
+.syn-ref-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.syn-fix { padding: 10px 16px; border-color: var(--err); }

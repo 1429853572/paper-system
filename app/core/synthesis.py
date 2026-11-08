@@ -159,11 +159,14 @@ def cluster_papers(digests: list[dict], k: int, topic: str = "") -> list[list[st
 
 # ---------------- 流水线主体（worker 调用） ----------------
 
-def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None:
+def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
+        params: dict | None = None) -> None:
     """执行综述流水线。job_update(**fields) 用于同步 jobs 行进度（SSE 面板）。
 
     topic: 专题名/研究问题先验——参与聚类分组（弱相关论文另置一组）并注入组内比对
            与跨组综合提示词。
+    params: {axis, tier(quick|standard|deep), style(author_year|numeric), purpose}
+            —— survey-writer 升级参数；axis 与 topic 同源（专题名）或用户填写。
     纯 embedding 聚会把「同领域不同问题」的论文混在一组（评审提出的「聚类≠科研分类」），
     而专题本身是用户已知的研究问题，用它做过滤约束能显著提升分组与归纳的针对性。
     """
@@ -183,6 +186,13 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
     if row is None:
         raise ValueError("综述任务不存在")
     paper_ids = json.loads(row["paper_ids"])
+    # rewrite（换框架重写）：复用已存的组比对结果，跳过组内 LLM 调用（零重复消化成本）
+    cached_clusters = None
+    if (params or {}).get("rewrite"):
+        try:
+            cached_clusters = json.loads(row["cluster_data"] or "[]") or None
+        except Exception:  # noqa: BLE001
+            cached_clusters = None
 
     from .llm import LLMClient, resolve_llm
     from .summarizer import generate  # 缺导读补齐（有缓存复用）
@@ -194,10 +204,12 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
     try:
         # ---- 阶段一：补齐导读 + 摘要卡 ----
         digests: list[dict] = []
+        paper_rows: list[dict] = []
         for pid in paper_ids:
             p = db.one("SELECT * FROM papers WHERE id=?", (pid,))
             if p is None:
                 continue
+            paper_rows.append(dict(p))
             s = db.one("SELECT * FROM summaries WHERE paper_id=? ORDER BY created_at DESC LIMIT 1", (pid,))
             if s is None:
                 try:
@@ -219,8 +231,8 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
         by_id = {d["id"]: d for d in digests}
         cluster_jsons: list[dict] = []
 
-        # ---- 阶段三：组内精读比对（每组 1 次调用，顺带产出组名） ----
-        for gi, gids in enumerate(clusters_ids):
+        # ---- 阶段三：组内精读比对（每组 1 次调用，顺带产出组名；rewrite 复用缓存） ----
+        for gi, gids in (enumerate(clusters_ids) if not cached_clusters else []):
             g_digests = [by_id[i] for i in gids if i in by_id]
             if not g_digests:
                 continue
@@ -263,6 +275,8 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
             cluster_jsons.append(parsed)
             progress(1)
 
+        if cached_clusters:
+            cluster_jsons = cached_clusters
         with db.write() as c:
             c.execute("UPDATE syntheses SET clusters=?, stage='final', updated_at=datetime('now') "
                       "WHERE id=?", (json.dumps(
@@ -281,6 +295,18 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
             gsections.append(f"### 组 {i + 1}: {cj.get('group_name', '')}\n{papers_txt}\n共识:\n{sims}\n差异:\n{diffs}")
         topic_note = (f"本次综述聚焦的研究问题：{topic}。报告应围绕该问题组织，"
                       f"与该问题弱相关的材料单独归入「外围工作」一小节，不混入主线结论。\n") if topic else ""
+        # ---- 冻结引用键表（survey-writer 防线①：正文引用只出自此表）----
+        pr = params or {}
+        tier = pr.get("tier") or "quick"
+        style = pr.get("style") or "author_year"
+        from . import citekey as ck
+        table = ck.build_table(paper_rows, api_check=(tier != "quick"))
+        citable = ck.citable_entries(table)
+        uncited_allowed = ck.need_manual(table)
+        key_lines = [f"- {e['key']} = 《{str(e['title'])[:44]}》" for e in citable]
+        key_prompt = ("\n可用引用键（提及某论文时句末标注对应键，英文如 (Wang et al., 2025a)，"
+                      "中文如（刘晓悦等，2026）；只允许使用以下键，禁止自造）：\n"
+                      + "\n".join(key_lines[:80])) if key_lines else ""
         # 证据编号表：E1/E2/… → 原文证据（跨组统一编号，报告里引用；前端可点击跳原文）
         ev_flat = []
         for cj in cluster_jsons:
@@ -302,33 +328,202 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "") -> None
             ev_lines.append(f"E{n} = 《{str(title)[:40]}》第{(e.get('page_index') or 0) + 1}页")
         ev_prompt = ("\n可用证据编号（重要论断句末用 [E<n>] 标注，只允许使用列出的编号）：\n"
                      + "\n".join(ev_lines[:60])) if ev_lines else ""
-        report = client.complete([
-            {"role": "system", "content":
-                "你是学术综述撰写人。依据提供的分组比对材料写一篇中文文献综述报告（Markdown）。"
-                + topic_note +
-                "结构固定：\n"
-                "# 文献综述\n## 一、总体概览（材料范围、主题分布，3~5 句）\n"
-                "## 二、分主题梳理（每个主题一小节：代表性工作+演进关系）\n"
-                "## 三、跨组共识（列表，每条注明来自哪些论文）\n"
-                "## 四、主要分歧（列表，说明双方立场与各自证据）\n"
-                "## 五、研究机会与局限（材料中反复出现的 gap）\n"
-                "规则：论文名用「标题（年份）」；只依据材料不编造；数值必须来自材料原文；"
-                "**重要论断句末标注证据编号如 [E3]**（编号表见材料末尾），"
-                "没有对应证据的论断不标注、且措辞须弱化（如「可能」「有待验证」）。"
-                + ev_prompt},
-            {"role": "user", "content": "\n\n".join(gsections)[:60000]},
-        ], max_tokens=6000)
+        axis = topic or pr.get("axis") or ""
+        digest_by_id = {d["id"]: d for d in digests}
+        key_of_pid = {e["id"]: e["key"] for e in citable}
+
+        if tier == "quick":
+            report = client.complete([
+                {"role": "system", "content":
+                    "你是学术综述撰写人。依据提供的分组比对材料写一篇中文文献综述报告（Markdown）。"
+                    + topic_note +
+                    "结构固定：\n"
+                    "# 文献综述\n## 一、总体概览（材料范围、主题分布，3~5 句）\n"
+                    "## 二、分主题梳理（每个主题一小节：代表性工作+演进关系）\n"
+                    "## 三、跨组共识（列表，每条注明来自哪些论文）\n"
+                    "## 四、主要分歧（列表，说明双方立场与各自证据）\n"
+                    "## 五、研究机会与局限（材料中反复出现的 gap）\n"
+                    "规则：只依据材料不编造；数值必须来自材料原文；"
+                    "**重要论断句末标注证据编号如 [E3]**（编号表见材料末尾），"
+                    "没有对应证据的论断不标注、且措辞须弱化（如「可能」「有待验证」）。"
+                    + key_prompt + ev_prompt},
+                {"role": "user", "content": "\n\n".join(gsections)[:60000]},
+            ], max_tokens=6000)
+        else:
+            # ---- 框架设计（survey-writer：分类是综述的灵魂；2-3 候选，自动选+一键换）----
+            # rewrite 复用已存框架（保证「换 X 重写」就是用户看到的那个 X，不重新生成漂移）
+            fw_data = None
+            if pr.get("rewrite"):
+                try:
+                    fw_data = json.loads(row["frameworks"] or "null")
+                    if not (isinstance(fw_data, dict) and fw_data.get("frameworks")):
+                        fw_data = None
+                except Exception:  # noqa: BLE001
+                    fw_data = None
+            for _att in range(2) if fw_data is None else []:
+                fw_raw = client.complete([
+                    {"role": "system", "content":
+                     "你是综述架构师。依据分组材料设计 2-3 个**互不相同**的综述组织框架"
+                     "（分类轴各异，如按方法范式/按问题类型/按技术路线）。输出 JSON（只输出 JSON）：\n"
+                     '{"frameworks": [{"name": "框架名(10字内)", "rationale": "为何这样分(1句)", '
+                     '"outline": [{"section": "章节标题", "budget_chars": 1200, '
+                     '"groups": [1,2], "core": false, "brief": "本章写什么(1句)"}]}], '
+                     '"recommended": 0, "reason": "推荐理由(1句)"}\n'
+                     f"约束：总字数预算≈{8000 if tier == 'standard' else 16000}；"
+                     "outline 须含引言与结语章；core=true 标注 1-2 个核心章；"
+                     "groups 用材料中的组编号；末章固定为「研究机会与局限」。"},
+                    {"role": "user", "content": "\n\n".join(gsections)[:40000]},
+                ], max_tokens=2500)
+                try:
+                    fw_data = json.loads(fw_raw[fw_raw.index("{"):fw_raw.rindex("}") + 1])
+                    if isinstance(fw_data, dict) and len(fw_data.get("frameworks") or []) >= 2:
+                        break
+                    fw_data = None
+                except (ValueError, KeyError):
+                    fw_data = None
+            if fw_data is None:   # 框架解析失败兜底：固定五段
+                fw_data = {"frameworks": [{"name": "经典五段式", "rationale": "按概览-主题-共识-分歧-机会组织",
+                             "outline": [
+                                 {"section": "总体概览", "budget_chars": 1000, "groups": list(range(1, len(cluster_jsons) + 1)), "core": False, "brief": "范围与主题分布"},
+                                 {"section": "分主题梳理", "budget_chars": 3500, "groups": list(range(1, len(cluster_jsons) + 1)), "core": True, "brief": "逐组展开"},
+                                 {"section": "跨组共识与分歧", "budget_chars": 2000, "groups": list(range(1, len(cluster_jsons) + 1)), "core": False, "brief": "共识与分歧"},
+                                 {"section": "研究机会与局限", "budget_chars": 1200, "groups": list(range(1, len(cluster_jsons) + 1)), "core": False, "brief": "gap"}]}],
+                           "recommended": 0, "reason": "解析失败回退"}
+            pick = pr.get("framework")
+            fws = fw_data["frameworks"]
+            if not isinstance(pick, int) or not (0 <= pick < len(fws)):
+                pick = fw_data.get("recommended") or 0
+            fw = fws[pick]
+            with db.write() as c:
+                c.execute("UPDATE syntheses SET frameworks=?, cluster_data=? WHERE id=?",
+                          (json.dumps(fw_data, ensure_ascii=False),
+                           json.dumps(cluster_jsons, ensure_ascii=False), synthesis_id))
+            progress(1)
+
+            # ---- 深读回原文（核心章定量数字必须出自原文块）----
+            core_secs = [s for s in fw["outline"] if s.get("core")]
+            core_pids: list[str] = []
+            for s in core_secs:
+                for gi in (s.get("groups") or []):
+                    gi0 = int(gi) - 1
+                    if 0 <= gi0 < len(cluster_jsons):
+                        for pid in cluster_jsons[gi0].get("_ids", []):
+                            if pid not in core_pids:
+                                core_pids.append(pid)
+            core_pids = core_pids[:25]
+            core_text = ""
+            if core_pids and axis:
+                try:
+                    from . import retrieval as _rt
+                    role = (db.one("SELECT role FROM users WHERE id=?", (user["id"],)) or {}).get("role")
+                    hits = _rt.search(axis, user_id=user["id"], is_admin=(role == "admin"),
+                                     paper_ids=core_pids, top_k=40)
+                    core_text = "\n\n".join(
+                        f"[{h['paper_id']}|p{(h.get('page_index') or 0) + 1}] "
+                        f"{(h.get('text') or '')[:500]}" for h in hits)[:20000]
+                except Exception:  # noqa: BLE001 —— 检索不可用则核心章仅用 digest 数字
+                    core_text = ""
+
+            # ---- 逐章写作（每章独立调用 + 章级幻影校验早发现）----
+            chapters: list[str] = []
+            for s_i, sec in enumerate(fw["outline"]):
+                gidx = [int(g) - 1 for g in (sec.get("groups") or [])
+                        if str(g).isdigit() and 0 <= int(g) - 1 < len(cluster_jsons)]
+                sec_materials = [gsections[i] for i in gidx]
+                sec_pids = [pid for i in gidx for pid in cluster_jsons[i].get("_ids", [])]
+                sec_digests = "\n\n".join(_digest_block(digest_by_id[pid])
+                                           for pid in sec_pids if pid in digest_by_id)[:24000]
+                sec_keys = "\n".join(f"- {key_of_pid[pid]} = 《{digest_by_id[pid]['title'][:40]}》"
+                                     for pid in sec_pids if pid in key_of_pid)[:1500]
+                sec_mat = "\n\n".join(sec_materials)[:24000]
+                core_note = (f"【原文深读块（定量数字优先取自此处的原文）】\n{core_text}\n"
+                             if sec.get("core") and core_text else "")
+                keys_note = (f"\n【本章可用引用键（只用这些，禁止自造）】\n{sec_keys}\n"
+                             if sec_keys else "\n（本章无可引键，勿标注引用键）\n")
+                ctx = (f"【综述主题/组织轴】{axis or '（未指定）'}\n"
+                       f"【采用框架】{fw['name']}：{fw.get('rationale', '')}\n"
+                       f"【本章】{sec['section']}（预算约 {sec.get('budget_chars', 1500)} 字）"
+                       f"——{sec.get('brief', '')}\n"
+                       f"【本章材料·分组比对】\n{sec_mat}\n"
+                       f"【本章材料·论文摘要卡】\n{sec_digests}\n"
+                       + core_note + keys_note + ev_prompt)
+                if chapters:   # 已写章节摘要（保连贯）
+                    ctx += ("\n【已写章节】" + "；".join(
+                        f"{fw['outline'][j]['section']}：{chapters[j][:120]}…" for j in range(max(0, len(chapters) - 2), len(chapters))))
+                ch = client.complete([
+                    {"role": "system", "content":
+                     "你是综述章节撰写人。只写这一章的正文（以 ## 章节标题开头），"
+                     "不要参考文献、不要总标题。规则：论断句末标注引用键（英文 (Wang et al., 2025a)、"
+                     "中文（刘晓悦等，2026），只用给定键；重要论断标 [E<n>] 证据编号；"
+                     "数值必须来自材料（深读块/摘要卡），禁止凭记忆编数字；无证据措辞弱化。"
+                     + ("本章为核心章：须包含一张 Markdown 方法/维度对比表（类型×代表工作×关键机制×适用条件）。"
+                        if sec.get("core") else "")},
+                    {"role": "user", "content": ctx[:60000]},
+                ], max_tokens=3000)
+                # 章级幻影校验（只查文有表无，早发现早修）
+                sec_ver = ck.verify_report(ch, table, style, "quick")
+                if sec_ver["phantom"]:
+                    ph = "、".join(sec_ver["phantom"][:8])
+                    ch = client.complete([
+                        {"role": "system", "content":
+                         f"修订该章：以下引用键不存在，删除或替换为材料中列出的正确键：{ph}。"
+                         "其余内容保持原样，只输出修订后的整章。"},
+                        {"role": "user", "content": ch},
+                    ], max_tokens=3000)
+                chapters.append(ch.strip())
+                progress(1)
+
+            alts = "、".join(f"「{f['name']}」" for i, f in enumerate(fws) if i != pick)
+            report = (f"# 文献综述\n\n> **组织轴**：{axis or '—'}  \n"
+                      f"> **采用框架**：{fw['name']}——{fw.get('rationale', '')}"
+                      + (f"  \n> *候选框架（可一键换）*：{alts}" if alts else "")
+                      + "\n\n" + "\n\n".join(chapters))
 
         csv_text = build_matrix_csv(digests, cluster_jsons)
         evidence_out = json.dumps(
             [{**e, "n": ev_index.get(e["evidence_id"], 0)} for e in ev_uniq],
             ensure_ascii=False)
+
+        # ---- 参考文献机械渲染 + 双向校验（survey-writer 防线③：PASS 才交付）----
+        def _assemble(body_md: str) -> str:
+            return body_md.rstrip() + "\n\n## 参考文献\n" + ck.render_references(table, style)
+
+        report = _assemble(report)
+        ver = ck.verify_report(report, table, style, tier)
+        if tier != "quick" and not ver["pass"] and (ver["missing"] or ver["phantom"]):
+            # 一次补织修复：把缺漏键与幻影清单交给模型修订正文（参考文献部分机械重建）
+            body_only = report.split("\n\n## 参考文献")[0]
+            try:
+                fixed_body = client.complete([
+                    {"role": "system", "content":
+                        "你是综述修订编辑。修订这篇综述正文，只做两类修改：\n"
+                        f"1) 以下论文在键表中但正文未引用，请把它们自然地织入相关段落"
+                        f"（补充一句定位性介绍即可，不得编造内容）：{ver['missing'][:20]}\n"
+                        f"2) 以下引用键不在键表中（幻影），删除或改为正确的键：{ver['phantom'][:20]}\n"
+                        "其他内容、结构、证据编号 [E<n>] 保持原样；只输出修订后的完整正文。"},
+                    {"role": "user", "content": body_only[:60000]},
+                ], max_tokens=6000)
+                report = _assemble(fixed_body)
+                ver = ck.verify_report(report, table, style, tier)
+            except Exception:  # noqa: BLE001 —— 修复调用失败沿用原校验结果
+                pass
+        ver_out = json.dumps(ver, ensure_ascii=False)
+
+        status = "done"
+        err = None
+        if tier != "quick" and not ver["pass"]:
+            status = "needs_fix"       # 前端显示缺漏/幻影清单，可一键重写
+            err = f"引用校验未通过：缺漏 {len(ver['missing'])} / 幻影 {len(ver['phantom'])}"
+
         with db.write() as c:
             c.execute(
-                "UPDATE syntheses SET status='done', stage='final', report_md=?, matrix_csv=?, "
-                "evidence=?, model=?, error=NULL, progress_done=progress_total, "
-                "updated_at=datetime('now') WHERE id=?",
-                (report, csv_text, evidence_out, cfg.model, synthesis_id))
+                "UPDATE syntheses SET status=?, stage='final', report_md=?, matrix_csv=?, "
+                "evidence=?, cite_table=?, verification=?, params=?, model=?, error=?, "
+                "progress_done=progress_total, updated_at=datetime('now') WHERE id=?",
+                (status, report, csv_text, evidence_out,
+                 json.dumps(table, ensure_ascii=False), ver_out,
+                 json.dumps({**pr, "axis": topic or pr.get("axis", "")}, ensure_ascii=False),
+                 cfg.model, err, synthesis_id))
         if job_update:
             job_update(progress_done=total)
     except Exception as e:  # noqa: BLE001

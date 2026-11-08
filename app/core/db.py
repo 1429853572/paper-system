@@ -407,6 +407,12 @@ class Database:
         self._add_col(c, "jobs", "batch_id", "TEXT")
         self._add_col(c, "papers", "acq_task_id", "TEXT")
         self._add_col(c, "syntheses", "evidence", "TEXT")
+        # survey-writer 升级：冻结引用键表 / 双向校验结果 / 发起参数(axis/tier/style/purpose)
+        self._add_col(c, "syntheses", "cite_table", "TEXT")
+        self._add_col(c, "syntheses", "verification", "TEXT")
+        self._add_col(c, "syntheses", "params", "TEXT")
+        self._add_col(c, "syntheses", "frameworks", "TEXT")
+        self._add_col(c, "syntheses", "cluster_data", "TEXT")   # 组比对全文（rewrite 复用）
 
     def _migrate(self, c: sqlite3.Connection, from_v: int) -> None:
         # 列级变更统一由 _ensure_columns 幂等处理；这里只做数据迁移与死表清理。

@@ -50,8 +50,16 @@ const DATA = {
     progress_done: 3, progress_total: 3, model: 'test-model',
     paper_ids: JSON.stringify(['p1', 'p2']),
     clusters: JSON.stringify([{ name: '三维重建', paper_ids: ['p1', 'p2'] }]),
-    report_md: '# 文献综述\n## 一、总体概览\n两篇论文都研究三维重建。\n## 二、分主题梳理\n### 组 1: 三维重建\n- Paper One: 方法A\n- Paper Two: 方法B\n',
+    report_md: '# 文献综述\n## 一、总体概览\n两篇论文都研究三维重建。\n## 二、分主题梳理\n### 组 1: 三维重建\n- Paper One: 方法A\n- Paper Two: 方法B\n\n## 参考文献\n- (Fei et al., 2024) x. ',
     matrix_csv: '主题组,标题\n三维重建,Paper One\n', error: null,
+    verification: JSON.stringify({pass: true, missing: [], phantom: [], stale: [], refs_n: 2, table_n: 2, cjk: 800}),
+    frameworks: JSON.stringify({recommended: 0, reason: 'test',
+      frameworks: [{name: '按先验范式', rationale: 'r1', outline: []},
+                   {name: '按问题类型', rationale: 'r2', outline: []}]}),
+    cite_table: JSON.stringify([
+      {id: 'p1', key: 'Fei et al., 2024', evidence: 'api', title: 'Paper One', venue: 'CVPR', year: '2024', arxiv: ''},
+      {id: 'p2', key: '刘晓悦等，2026', evidence: 'zh-manual', title: 'Paper Two', venue: '', year: '2026', arxiv: ''}]),
+    params: JSON.stringify({tier: 'standard', style: 'author_year', axis: '测试轴'}),
     created_at: '2026-11-07 11:00:00', updated_at: '2026-11-07 11:09:00' } },
   '/api/papers/p1': { paper: { id: 'p1', title: 'Paper One', parse_status: 'parsed', visibility: 'shared', owner_id: 1 }, blocks: [], total: 0 },
   '/api/papers/p1/bilingual': { pairs: [], versions: [] },
@@ -315,9 +323,16 @@ window.__T.state.selected.add('p1'); window.__T.state.selected.add('p2');
 doc.querySelector('.batch-card[data-act="review"]').click();
 await new Promise((r) => setTimeout(r, 200));
 const synPop = [...doc.querySelectorAll('.ui-pop')].find(p => p.textContent.includes('发起综述'));
-ok('综述预估确认弹窗出现', !!synPop && synPop.textContent.includes('3 次 LLM 调用'),
-   synPop ? synPop.textContent.slice(0, 80) : '未找到弹窗');
+ok('综述参数弹窗出现（survey-writer 五问）', !!synPop, '未找到弹窗');
+ok('参数弹窗含组织轴输入', !!synPop?.querySelector('#syn-axis'));
+ok('参数弹窗含三档篇幅', synPop && synPop.querySelectorAll('input[name=syn-tier]').length === 3);
+ok('参数弹窗含引用式/用途', !!synPop?.querySelector('#syn-style') && !!synPop?.querySelector('#syn-purpose'));
+ok('调用数联动显示', synPop && synPop.querySelector('#syn-calls')?.textContent === '3');
 if (synPop) {
+  // 选 standard → 调用数 +8
+  const stdRadio = synPop.querySelector('input[name=syn-tier][value="standard"]');
+  stdRadio.checked = true; stdRadio.dispatchEvent(new window.Event('change'));
+  ok('选 standard 调用数 +8', synPop.querySelector('#syn-calls').textContent === '11');
   synPop.querySelector('[data-ok]').click();
   await new Promise((r) => setTimeout(r, 350));
   // 新批次自动展开（_batchOpen=synb）→ renderSynJob
@@ -333,6 +348,13 @@ if (synPop) {
        doc.querySelector('.syn-nav-group b').textContent.includes('三维重建'));
     ok('论文可点回阅读', !!doc.querySelector('[data-syn-paper="p1"]'));
     ok('导出键存在', !!doc.querySelector('#syn-dl-md') && !!doc.querySelector('#syn-dl-csv'));
+    ok('校验徽章 PASS', !!doc.querySelector('.syn-head .badge.ok') &&
+       doc.querySelector('.syn-head .badge.ok').textContent.includes('PASS'));
+    ok('框架卡渲染 + 换框架键', !!doc.querySelector('.syn-fw') &&
+       !!doc.querySelector('[data-fw-rewrite="1"]'));
+    ok('参考文献卡渲染（键+已核验徽章）', !!doc.querySelector('.syn-refs') &&
+       doc.querySelector('.syn-refs').textContent.includes('Fei et al., 2024') &&
+       doc.querySelector('.syn-refs .badge.ok'));
     doc.querySelector('#syn-back').click();
     await new Promise((r) => setTimeout(r, 250));
     ok('返回批量页', !!doc.querySelector('.batch-ops'));

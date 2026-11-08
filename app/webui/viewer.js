@@ -2318,19 +2318,59 @@ async function runSynthesis(anchor, ids = null) {
   try {
     est = await api('/api/synthesize/estimate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
   } catch (e) { toast(e.message); return; }
-  const msg = `将综述 ${est.valid} 篇论文：\n· 自动聚成 ${est.groups} 个主题组\n` +
-    (est.missing_summaries ? `· ${est.missing_summaries} 篇缺导读，将自动补齐\n` : '· 导读已全部就绪（零补齐成本）\n') +
-    `· 预计 ${est.calls} 次 LLM 调用` +
-    (est.no_parse?.length ? `\n· ${est.no_parse.length} 篇未解析完成，将被剔除` : '');
-  if (!(await uiConfirm(msg, {title: '📑 发起综述', okText: '开始', anchor}))) return;
-  try {
-    const d = await api('/api/synthesize', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
-    toast(`综述已启动（预计 ${d.estimate.calls} 次调用），进度见下方批次面板`);
-    state._batchOpen = new Set([d.batch_id]);
-    await renderTaskPanel();
-    switchPage('tasks');
-    setTimeout(() => $('#task-body')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
-  } catch (e) { toast('综述启动失败: ' + e.message); }
+
+  // 参数弹窗（survey-writer 五问的落地：轴最关键；quick 可空轴）
+  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
+  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop syn-launch'});
+  const extra = {quick: 0, standard: 8, deep: 14};
+  const updCalls = () => {
+    const tier = pop.querySelector('input[name=syn-tier]:checked')?.value || 'quick';
+    pop.querySelector('#syn-calls').textContent = est.calls + extra[tier];
+  };
+  pop.innerHTML = `
+    <div class="ui-pop-title">📑 发起综述（${est.valid} 篇 · ${est.groups} 组${est.missing_summaries ? ` · 补导读 ${est.missing_summaries}` : ''}）</div>
+    <div class="syn-f-row"><label>组织轴</label>
+      <input id="syn-axis" placeholder="综述围绕的主线问题（standard/deep 必填），如：前馈大模型输出如何用于 3DGS 初始化"></div>
+    <div class="syn-f-row"><label>篇幅档</label>
+      <label class="syn-seg"><input type="radio" name="syn-tier" value="quick" checked>快速（~3k 字·一次成文）</label>
+      <label class="syn-seg"><input type="radio" name="syn-tier" value="standard">标准（~8k 字·章节化+框架）</label>
+      <label class="syn-seg"><input type="radio" name="syn-tier" value="deep">详尽（15k+·核心章逐组）</label></div>
+    <div class="syn-f-row"><label>引用式</label>
+      <select id="syn-style"><option value="author_year">作者-年份 (Wang et al., 2025a)</option>
+        <option value="numeric">数字编号 [1]（GB/T）</option></select></div>
+    <div class="syn-f-row"><label>用途</label>
+      <select id="syn-purpose"><option value="note">个人笔记（方法细节）</option>
+        <option value="proposal">开题/学位（研究空白）</option>
+        <option value="submit">投稿初稿（贡献分类）</option></select></div>
+    <div class="muted" style="font-size:11px;margin:4px 0">预计 <b id="syn-calls">${est.calls}</b> 次 LLM 调用；引用键表自动核验，机器校验通过才交付</div>
+    <div class="ui-pop-foot"><button class="btn small" data-cancel>取消</button>
+      <button class="btn small primary" data-ok>开始综述</button></div>`;
+  backdrop.appendChild(pop);
+  document.body.appendChild(backdrop);
+  $$('input[name=syn-tier]', pop).forEach(r => r.onchange = updCalls);
+  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
+  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  document.addEventListener('keydown', onKey, true);
+  backdrop.onclick = e => { if (e.target === backdrop) close(); };
+  pop.querySelector('[data-cancel]').onclick = close;
+  const okBtn = pop.querySelector('[data-ok]');
+  okBtn.onclick = async () => {
+    const params = {
+      axis: pop.querySelector('#syn-axis').value.trim(),
+      tier: pop.querySelector('input[name=syn-tier]:checked').value,
+      style: pop.querySelector('#syn-style').value,
+      purpose: pop.querySelector('#syn-purpose').value};
+    close();
+    try {
+      const d = await api('/api/synthesize', {method: 'POST',
+        body: JSON.stringify({paper_ids: ids, params})});
+      toast(`综述已启动（${params.tier} 档，预计 ${d.estimate.calls} 次调用）——进度见「任务」页`);
+      state._batchOpen = new Set([d.batch_id]);
+      await renderTaskPanel();
+      switchPage('tasks');
+      setTimeout(() => $('#task-body')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
+    } catch (e) { toast('综述启动失败: ' + e.message); }
+  };
 }
 const BATCH_ST = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
                   failed: '失败', canceled: '已取消'};
@@ -2387,6 +2427,12 @@ async function showSynthesisReport(sid) {
   let evidence = [];
   try { evidence = JSON.parse(s.evidence || '[]'); } catch { /* ignore */ }
   const evByN = new Map((evidence || []).map(e => [e.n, e]));
+  let ver = null, fws = null, ctab = [];
+  try { ver = JSON.parse(s.verification || 'null'); } catch { /* ignore */ }
+  try { fws = JSON.parse(s.frameworks || 'null'); } catch { /* ignore */ }
+  try { ctab = JSON.parse(s.cite_table || '[]'); } catch { /* ignore */ }
+  const pr = (() => { try { return JSON.parse(s.params || '{}'); } catch { return {}; } })();
+  const pickIdx = (typeof pr.framework === 'number') ? pr.framework : (fws?.recommended ?? 0);
   const byId = new Map([...state.papers, ...state._batchPapers].map(p => [p.id, p]));
   const nav = clusters.map((c, i) => `
     <div class="syn-nav-group">
@@ -2402,6 +2448,7 @@ async function showSynthesisReport(sid) {
         <button class="btn small" id="syn-back">← 返回批量</button>
         <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title)}</b>
         <span class="muted" style="font-size:11px">${esc(s.model || '')} · ${esc((s.updated_at || '').slice(0, 16))}</span>
+        ${ver ? `<span class="badge ${ver.pass ? 'ok' : 'err'}" title="引用双向校验">${ver.pass ? '✓ 引用校验 PASS' : '引用校验需修复'}（${ver.table_n - ver.missing.length}/${ver.table_n}）</span>` : ''}
         <button class="btn small" id="syn-dl-md">⬇ MD</button>
         <button class="btn small" id="syn-dl-csv">⬇ CSV</button>
       </div>
@@ -2409,6 +2456,35 @@ async function showSynthesisReport(sid) {
         <aside class="syn-nav card"><b>主题分组</b>${clusters.length ? nav : '<p class="muted">无分组信息</p>'}</aside>
         <div class="syn-report card" id="syn-report"></div>
       </div>
+      ${fws?.frameworks?.length > 1 ? `
+      <div class="card syn-fw">
+        <b>组织框架</b>
+        <div class="syn-fw-cur">当前：${esc(fws.frameworks[pickIdx]?.name || '')} —— ${esc(fws.frameworks[pickIdx]?.rationale || '')}</div>
+        <div class="syn-fw-alts">${fws.frameworks.map((f, i) => i === pickIdx ? '' : `
+          <button class="btn small" data-fw-rewrite="${i}">换「${esc(f.name)}」重写</button>`).join('')}
+        </div>
+        <div class="muted" style="font-size:11px">换框架只重跑章节化（组比对与键表复用，成本约为首次的 1/3）</div>
+      </div>` : ''}
+      ${ctab.length ? `
+      <div class="card syn-refs">
+        <b>参考文献（冻结键表 · ${ctab.filter(e => e.evidence !== 'inferred').length} 条可引${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length ? ` · ${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length} 条待核验` : ''}）</b>
+        <div class="syn-refs-list">${ctab.map(e => `
+          <div class="syn-ref-row ${e.evidence === 'inferred' ? 'weak' : ''}">
+            <code>(${esc(e.key)})</code>
+            <span class="syn-ref-main">${esc((e.title || '').slice(0, 60))}
+              <span class="muted" style="font-size:11px">${esc([e.venue, e.year, e.arxiv ? 'arXiv:' + e.arxiv : ''].filter(Boolean).join(' · '))}</span></span>
+            ${e.evidence === 'api' ? '<span class="badge ok">已核验</span>'
+              : e.evidence === 'watermark' ? '<span class="badge run">水印</span>'
+              : e.evidence === 'inferred' ? '<span class="badge err" title="元数据未核验，未进入正文引用">待核验</span>' : ''}
+          </div>`).join('')}</div>
+      </div>` : ''}
+      ${ver && !ver.pass ? `
+      <div class="card syn-fix">
+        <b style="color:var(--err)">引用校验未通过</b>
+        ${ver.missing?.length ? `<div>缺漏（表有文无，${ver.missing.length} 条）：${ver.missing.map(k => `<code>${esc(k)}</code>`).join(' ')}</div>` : ''}
+        ${ver.phantom?.length ? `<div>幻影（文有表无）：${ver.phantom.map(k => `<code>${esc(k)}</code>`).join(' ')}</div>` : ''}
+        <div class="muted" style="font-size:11px">可稍后重试综述，或先在文献信息页核验元数据（待核验条目不参与正文引用）</div>
+      </div>` : ''}
       ${evidence.length ? `<div class="card syn-ev">
         <b>证据索引（点击编号跳原文）</b>
         <div class="syn-ev-list">${evidence.map(e => `
@@ -2439,6 +2515,17 @@ async function showSynthesisReport(sid) {
         block_id: e.block_id, text: e.text }));
     });
   }
+  // 换框架重写
+  $$('#page-batch [data-fw-rewrite]').forEach(b => b.onclick = async () => {
+    if (!(await uiConfirm('用候选框架重写本综述？（组比对与键表复用，只重跑章节化）',
+                          {title: '换框架重写', anchor: b}))) return;
+    try {
+      await api(`/api/syntheses/${encodeURIComponent(sid)}/rewrite`,
+                {method: 'POST', body: JSON.stringify({framework: +b.dataset.fwRewrite})});
+      toast('重写已入队——进度见「任务」页');
+      renderSynList();
+    } catch (e) { toast('重写失败: ' + e.message); }
+  });
   // 证据索引行点击同样跳原文
   $$('#page-batch .syn-ev-row').forEach(row => row.onclick = () => {
     const e = evByN.get(+row.dataset.ev);

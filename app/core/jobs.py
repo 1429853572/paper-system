@@ -503,7 +503,8 @@ class Scheduler:
                     payload = json.loads(job["payload"] or "{}")
                     synthesis.run({"id": job["user_id"]}, payload.get("synthesis_id"),
                                   job_update=lambda **f: self._update(job["id"], **f),
-                                  topic=payload.get("topic") or "")
+                                  topic=payload.get("topic") or "",
+                                  params=payload.get("params") or {})
                     self._update(job["id"], status="done", progress_done=1, progress_total=1)
                     # 专题任务闭环：综述完成 → 专题状态置「已完成」
                     tid = payload.get("task_id")

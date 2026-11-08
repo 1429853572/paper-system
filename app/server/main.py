@@ -858,11 +858,24 @@ async def synthesize_start(request: Request):
     if live:
         raise HTTPException(409, "已有一篇综述在进行中，请等它完成或先删除")
     sid = synthesis.create(u["id"], ids, est)
+    # survey-writer 参数：axis=组织轴（quick 可空）、tier 篇幅档、style 引用式、purpose 用途
+    params = body.get("params") or {}
+    tier = params.get("tier") if params.get("tier") in ("quick", "standard", "deep") else "quick"
+    style = params.get("style") if params.get("style") in ("author_year", "numeric") else "author_year"
+    axis = (params.get("axis") or "").strip()[:200]
+    if tier in ("standard", "deep") and not axis:
+        raise HTTPException(400, "standard/deep 档需要填写组织轴（综述围绕的主线问题）")
+    pr = {"tier": tier, "style": style, "purpose": (params.get("purpose") or "note")[:40],
+          "axis": axis}
+    calls = est["calls"] + ({"standard": 8, "deep": 14}.get(tier, 0))
+    est = {**est, "calls": calls}   # syntheses.progress_total 用调整后调用数
     batch_id = uuid.uuid4().hex[:12]
-    scheduler.enqueue(u["id"], "synthesis", None, {"synthesis_id": sid, "batch_id": batch_id},
-                      priority="background", progress_total=est["calls"])
-    audit(u["id"], "synthesize", f"{len(est['valid'])} 篇 batch={batch_id}")
-    return {"synthesis_id": sid, "batch_id": batch_id, "estimate": est}
+    scheduler.enqueue(u["id"], "synthesis", None,
+                      {"synthesis_id": sid, "batch_id": batch_id, "params": pr},
+                      priority="background", progress_total=calls)
+    audit(u["id"], "synthesize", f"{len(est['valid'])} 篇 tier={tier} batch={batch_id}")
+    return {"synthesis_id": sid, "batch_id": batch_id, "estimate": {**est, "calls": calls},
+            "params": pr}
 
 
 @app.get("/api/syntheses")
@@ -891,6 +904,44 @@ def get_synthesis(sid: str, request: Request):
     u = require(request)
     row = _own_synthesis(u, sid)
     return {"synthesis": dict(row)}
+
+
+@app.post("/api/syntheses/{sid}/rewrite")
+async def rewrite_synthesis(sid: str, request: Request):
+    """换框架重写：复用已存的组比对与键表（零重复消化成本），只重跑章节化+校验。"""
+    u = require(request)
+    row = _own_synthesis(u, sid)
+    body = await request.json()
+    try:
+        pick = int(body.get("framework") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "framework 必须是数字")
+    import json as _j
+    try:
+        fws = _j.loads(row["frameworks"] or "[]")
+    except Exception:  # noqa: BLE001
+        fws = None
+    if not fws or not (0 <= pick < len(fws.get("frameworks") or [])):
+        raise HTTPException(400, "该综述没有可换的候选框架")
+    if not row["cluster_data"]:
+        raise HTTPException(400, "缺少缓存组数据，无法低成本重写（请重新发起综述）")
+    try:
+        pr = _j.loads(row["params"] or "{}")
+    except Exception:  # noqa: BLE001
+        pr = {}
+    pr = {**pr, "framework": pick, "rewrite": True}
+    tier = pr.get("tier") or "quick"
+    calls = {"quick": 3, "standard": 9, "deep": 15}.get(tier, 3)
+    with db.write() as c:
+        c.execute("UPDATE syntheses SET status='running', error=NULL, progress_done=0, "
+                  "progress_total=?, updated_at=datetime('now') WHERE id=?", (calls, sid))
+    batch_id = uuid.uuid4().hex[:12]
+    scheduler.enqueue(u["id"], "synthesis", None,
+                      {"synthesis_id": sid, "batch_id": batch_id, "params": pr,
+                       "topic": pr.get("axis") or ""},
+                      priority="background", progress_total=calls)
+    audit(u["id"], "synthesis-rewrite", f"{sid} → 框架{pick}")
+    return {"ok": True, "framework": pick, "calls": calls}
 
 
 @app.delete("/api/syntheses/{sid}")
