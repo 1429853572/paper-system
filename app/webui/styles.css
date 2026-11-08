@@ -553,11 +553,6 @@ table.list input[type=checkbox] { width: auto; }
 .chip-q:hover { background: var(--tint-primary); border-style: solid; }
 
 /* ===== 划词工具条 ===== */
-#sel-bar { position: fixed; z-index: 80; background: #2b2f3a; border-radius: var(--r-md); padding: 4px;
-           box-shadow: 0 6px 20px rgba(0,0,0,.3); display: flex; gap: 2px; flex-direction: column; }
-#sel-bar button { border: none; background: none; color: var(--border); padding: 5px 12px; border-radius: var(--r-sm);
-                  font-size: var(--fs-sm); cursor: pointer; }
-#sel-bar button:hover { background: #4a5064; }
 
 /* ===== 引用悬浮卡片 ===== */
 #ref-pop { position: fixed; z-index: 80; background: var(--panel); border: 1px solid var(--border);
@@ -1108,3 +1103,7 @@ table.list input[type=checkbox] { width: auto; }
 .syn-ref-row code { flex: none; color: var(--primary); font-size: var(--fs-xs); }
 .syn-ref-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .syn-fix { padding: 10px 16px; border-color: var(--err); }
+
+/* 徽章语义补充：证据分级（灰=水印可信、黄=待核验），红只留给真失败 */
+.badge.evd-watermark { background: var(--bg-soft); color: var(--muted); }
+.badge.evd-pending { background: var(--tint-warn); color: var(--warn-ink); }

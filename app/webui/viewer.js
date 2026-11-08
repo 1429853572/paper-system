@@ -31,6 +31,12 @@ async function api(path, opts = {}) {
   }
   return r.json();
 }
+/* 统一时间格式：MM-DD HH:MM（同年内）/ YYYY-MM-DD HH:MM（跨年）；空值 → — */
+function fmtTime(s) {
+  if (!s) return '—';
+  const t = s.slice(0, 16).replace('T', ' ');
+  return t.length >= 16 ? t.slice(5, 16) : t;
+}
 let _toastTimer = 0;
 function toast(msg, ms = 2500) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -393,7 +399,7 @@ async function renderContentSearch() {
   try {
     const d = await api('/api/search', {method: 'POST', body: JSON.stringify({query: state.q.trim(), top_k: 20})});
     if (!d.hits.length) { el.innerHTML = '<p class="muted" style="padding:14px">标题与全文均无匹配</p>'; return; }
-    el.innerHTML = `<div style="padding:8px 14px" class="muted">${icon('search')} 全文命中 ${d.hits.length} 处（点击跳转）</div>` +
+    el.innerHTML = `<div style="padding:8px 14px" class="muted">${icon('search')} 全文命中 ${d.hits.length} 处（跨全部文库 · 不受当前库/筛选限制 · 清空搜索框返回列表）</div>` +
       d.hits.map(h => {
         const p = state.qaAllPapers?.find(x => x.id === h.paper_id) || state.papers.find(x => x.id === h.paper_id) || {};
         return `<div class="paper-item" data-id="${h.paper_id}" data-page="${h.page_index}">
@@ -592,7 +598,7 @@ $('#dir-btn').onclick = async () => {
       body: JSON.stringify({path, collection_id: state.currentCollection || null,
                             visibility: state.uploadPrivate ? 'private' : 'shared'})});
     const q = d.queued.length, sk = d.skipped.length;
-    toast(`已入库 ${q} 篇${sk ? `，跳过 ${sk} 个` : ''}——解析进度见「任务」页`, 4000);
+    toast(`已入库 ${q} 篇${sk ? `，跳过 ${sk} 个` : ''}——解析进度见「任务中心」`, 4000);
     if (sk) {
       const reasons = d.skipped.slice(0, 3).map(x => `${x.file}: ${x.reason}`).join('；');
       await uiConfirm(`以下文件未能入库：<br>${esc(reasons)}${sk > 3 ? `<br>…共 ${sk} 个` : ''}`,
@@ -1158,16 +1164,10 @@ async function loadBilingual(id, render = true) {
   try {
     const d = await api(`/api/papers/${id}/bilingual`);
     state.pairs = d.pairs; state.versions = d.versions;
-    $('#version-select').hidden = true;   // 只展示最新一份（历史版本保留在库，不占界面）
     if (render) renderContentView();
   } catch { state.pairs = []; }
 }
-$('#version-select').onchange = e => {
-  const d = e.target.value;
-  api(`/api/papers/${state.current.id}/bilingual?cache_key=${d}`).then(x => {
-    state.pairs = x.pairs; renderContentView();
-  });
-};
+/* 译文版本切换控件已移除（历史版本保留在库，如需回溯可导出对照 MD） */
 /* 解析/翻译控制按钮：按论文实时 jobstate 切换 */
 function renderJobButtons(js) {
   // 重新解析按钮（挂在主级页签行）
@@ -1475,9 +1475,11 @@ async function _refreshQueueBadge() {
     const active = d.jobs.filter(j => ['queued', 'pending_gate', 'running'].includes(j.status));
     let pend = [];
     try { pend = (await api('/api/mcp/pending')).pending; } catch { /* 忽略 */ }
-    const btn = $('#queue-btn'), badge = $('#qbadge');
-    btn.hidden = !active.length && !pend.length;
-    badge.textContent = active.length + pend.length;
+    const btn = document.querySelector('.topnav button[data-page="tasks"]'), badge = $('#qbadge');
+    if (badge) {
+      badge.hidden = !(active.length + pend.length);
+      badge.textContent = active.length + pend.length;
+    }
     // 批量中心打开时：任务区随事件实时刷新
     if (($('#page-tasks')?.style.display !== 'none' || $('#page-batch')?.style.display !== 'none')
         && Date.now() - _batchSseAt > 2000) {
@@ -1499,11 +1501,7 @@ window.mcpConfirm = async (id, approve) => {
 };
 window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: 'POST'}); toast('批量已暂停（手动任务不受影响）'); renderTaskPanel(); };
 window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); renderTaskPanel(); };
-// 顶栏「队列」按钮 → 批量中心任务进度区
-$('#queue-btn').onclick = () => {
-  switchPage('tasks');
-  setTimeout(() => $('#task-body')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
-};
+// 顶栏「任务」角标：有活跃任务才显示；点击 = 页签本来的切页行为
 setInterval(refreshQueueBadge, 8000);
 
 /* ---------------- 批量中心 ----------------
@@ -1608,19 +1606,21 @@ async function renderSynList() {
     return;
   }
   el.innerHTML = items.map(s => {
-    const stTxt = { done: '完成', failed: '失败', running: '进行中' }[s.status] || s.status;
-    const cls = { done: 'ok', failed: 'err', running: 'run' }[s.status] || 'run';
+    const stTxt = { done: '完成', failed: '失败', running: '进行中',
+                    needs_fix: '引用需修复', reviewing: '综述中' }[s.status] || s.status;
+    const cls = { done: 'ok', failed: 'err', running: 'run',
+                  needs_fix: 'err', reviewing: 'run' }[s.status] || 'run';
     const pct = s.progress_total ? Math.min(100, Math.round(100 * s.progress_done / s.progress_total)) : 0;
     return `<div class="syn-item" data-sid="${esc(s.id)}">
       <span class="badge ${cls}">${stTxt}</span>
       <span class="syn-item-main">
         <b>${esc(s.title)}</b>
-        <span class="muted" style="font-size:11px">${s.papers ?? ''} 篇 · ${esc(s.model || '')} · ${esc((s.updated_at || '').slice(5, 16))}</span>
+        <span class="muted" style="font-size:11px">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc((s.updated_at || '').slice(5, 16))}</span>
         ${s.status === 'running' ? `<div class="up-bar parse" style="max-width:280px"><i style="width:${pct}%"></i></div>` : ''}
         ${s.status === 'failed' && s.error ? `<div class="bpanel-err">${esc(s.error.slice(0, 120))}</div>` : ''}
       </span>
       <span class="spacer"></span>
-      ${s.status === 'done' ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
+      ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
         <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">⬇MD</button>
         <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">⬇CSV</button>` : ''}
       <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
@@ -2193,7 +2193,9 @@ async function showTopicDetail(tid) {
   if (t.status === 'downloading' || t.status === 'reviewing' ||
       (papers.length && parsed < papers.length)) {
     setTimeout(() => {
-      if ($('#page-batch')?.innerHTML.includes('td-search')) showTopicDetail(tid);
+      // 用户正在输入/编辑时跳过本次轮询（草稿不被覆盖）
+      const busy = document.activeElement?.closest?.('#page-batch');
+      if ($('#page-batch')?.innerHTML.includes('td-search') && !busy) showTopicDetail(tid);
     }, 4000);
   }
   $('#td-mksyn')?.addEventListener('click', async () => {
@@ -2303,12 +2305,12 @@ async function doAcquireImport() {
       items: sel, collection_id: state.currentCollection || null,
       visibility: state.uploadPrivate ? 'private' : 'shared'})});
     const q = d.queued.length, sk = d.skipped.length;
-    toast(`已采集 ${q} 篇${sk ? `，跳过 ${sk} 篇` : ''}——解析进度见「任务」页`, 4000);
+    toast(`已采集 ${q} 篇${sk ? `，跳过 ${sk} 篇` : ''}——解析进度见「任务中心」`, 4000);
     $('#acq-pop').hidden = true;
     a.sel = new Set();
     await refreshLib();
   } catch (e) { toast('采集失败: ' + e.message); }
-  if (btn) { btn.disabled = false; btn.textContent = '下载并入库（0）'; syncAcqCount(); }
+  if (btn) { btn.disabled = false; btn.textContent = '下载并入库（' + state._acq.sel.size + '）'; }
 }
 
 async function runSynthesis(anchor, ids = null) {
@@ -2364,7 +2366,7 @@ async function runSynthesis(anchor, ids = null) {
     try {
       const d = await api('/api/synthesize', {method: 'POST',
         body: JSON.stringify({paper_ids: ids, params})});
-      toast(`综述已启动（${params.tier} 档，预计 ${d.estimate.calls} 次调用）——进度见「任务」页`);
+      toast(`综述已启动（${params.tier} 档，预计 ${d.estimate.calls} 次调用）——进度见「任务中心」`);
       state._batchOpen = new Set([d.batch_id]);
       await renderTaskPanel();
       switchPage('tasks');
@@ -2401,13 +2403,13 @@ async function renderSynJob(sid, box) {
   try { s = (await api('/api/syntheses/' + encodeURIComponent(sid))).synthesis; } catch { /* ignore */ }
   if (!s) { box.innerHTML = '<p class="muted" style="padding:6px">综述记录不存在（可能已删除）</p>'; return; }
   const stageTxt = {cluster: '聚类分组', group: '组内精读比对', final: '跨组综合'}[s.stage] || s.stage;
-  const stTxt = {done: '完成', failed: '失败', running: '进行中'}[s.status] || s.status;
+  const stTxt = {done: '完成', failed: '失败', running: '进行中', needs_fix: '引用需修复'}[s.status] || s.status;
   const pct = s.progress_total ? Math.min(100, Math.round(100 * s.progress_done / s.progress_total)) : 0;
   box.innerHTML = `
     <div class="bpanel-row sub">
       <span class="badge ${s.status === 'done' ? 'ok' : s.status === 'failed' ? 'err' : 'run'}">${stTxt}</span>
       <span style="flex:1;min-width:0">${esc(s.title)} · ${esc(stageTxt)}${s.status === 'running' ? ` ${s.progress_done}/${s.progress_total}` : ''}</span>
-      ${s.status === 'done' ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
+      ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
         <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">⬇MD</button>
         <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">⬇CSV</button>` : ''}
       <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
@@ -2467,7 +2469,8 @@ async function showSynthesisReport(sid) {
       </div>` : ''}
       ${ctab.length ? `
       <div class="card syn-refs">
-        <b>参考文献（冻结键表 · ${ctab.filter(e => e.evidence !== 'inferred').length} 条可引${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length ? ` · ${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length} 条待核验` : ''}）</b>
+        <b title="键表：综述发起时冻结的论文引用清单（含在线核验结果）。正文引用只出自此表，保证引用真实可查。">参考文献</b>
+        <span class="muted" style="font-size:11px">${ctab.filter(e => e.evidence !== 'inferred').length} 条已核验${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length ? ` · ${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length} 条待核验（元数据未经 API 确认，未进正文）` : ''}</span>
         <div class="syn-refs-list">${ctab.map(e => `
           <div class="syn-ref-row ${e.evidence === 'inferred' ? 'weak' : ''}">
             <code>(${esc(e.key)})</code>
@@ -2736,7 +2739,9 @@ async function watchJobs() {
     }
     // 文库管理页打开时同步行内状态（批量导入时每块一事件，全量重建需节流）
     const cp = $('#page-collections');
-    if (cp && cp.style.display !== 'none' && Date.now() - _sseCollectionsAt > 3000) {
+    const qIn = document.activeElement?.id === 'lib-mgr-q';   // 正在文库管理页搜索框输入
+    if (cp && cp.style.display !== 'none' && !qIn &&
+        Date.now() - _sseCollectionsAt > 3000) {
       _sseCollectionsAt = Date.now();
       renderCollectionsPage();
     }
@@ -3725,6 +3730,7 @@ function showSelBar(sel, text) {
   const bar = Object.assign(document.createElement('div'), {className: 'sel-bar', id: 'sel-bar'});
   bar.innerHTML = `<button data-a="explain" title="解读选中文字">解读</button>
     <button data-a="ask" title="拿选中文字提问">提问</button>
+    <button data-a="quote" title="引用到问答输入框（作为上下文）">引用</button>
     <button data-a="translate" title="翻译选中文字">译</button>
     <button data-a="cite" title="智能提取：选中参考文献条目一键入库（Zotero 智能提取式）">引文</button>`;
   bar.style.top = Math.max(8, rect.top - 36) + 'px';
@@ -3734,6 +3740,12 @@ function showSelBar(sel, text) {
     hideSelBar();
     if (b.dataset.a === 'translate') translateSelection(text);
     else if (b.dataset.a === 'cite') importCitation(text);
+    else if (b.dataset.a === 'quote') {
+      // 引用到问答输入框（旧划词条的有用能力，保留）
+      switchPage('reader');
+      if (!state.qaOpen) openQaDock();
+      setQuote(text, state.pageNum - 1);
+    }
     else executeTag(BUILTIN_TAGS[b.dataset.a === 'explain' ? 1 : 2]);
   });
 }
@@ -4424,7 +4436,7 @@ async function renderCollectionsPage(preset = null) {
           <button class="btn small" onclick="libClearSel('${scopeKey}')">清空</button>
         </div>
         <div class="lib-list">
-          <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th>析</th><th>译</th><th>用量</th><th></th></tr>
+          <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th title="解析状态">解析</th><th title="翻译状态">翻译</th><th>用量</th><th></th></tr>
             ${paperRows || `<tr><td colspan="6" class="muted">${q ? '没有匹配的论文' : '空库'}</td></tr>`}</table>
         </div>
       </div>`;
@@ -4557,7 +4569,7 @@ window.libBatchAct = async (cid, act) => {
       {title: '批量重解析', danger: true}))) return;
   try {
     const d = await api('/api/batch/' + act, {method: 'POST', body: JSON.stringify({paper_ids: ids})});
-    toast(`${d.queued.length} 篇已入队${d.skipped.length ? `，跳过 ${d.skipped.length} 篇` : ''}——进度见「批量中心」`);
+    toast(`${d.queued.length} 篇已入队${d.skipped.length ? `，跳过 ${d.skipped.length} 篇` : ''}——进度见「任务中心」`);
   } catch (e) { toast('批量操作失败: ' + e.message); }
 };
 window.libBatchSynth = async cid => {
@@ -4702,41 +4714,6 @@ function followupButtons(sections) {
 }
 
 /* ================= 四项借鉴功能 ================= */
-
-/* ---- ① 划词工具条（右侧原文/译文区） ---- */
-(() => {
-  let bar = null, lastSel = null;
-  const ensureBar = () => {
-    if (bar) return bar;
-    bar = document.createElement('div');
-    bar.id = 'sel-bar'; bar.hidden = true;
-    bar.innerHTML = `<button data-a="ask">${icon('chat')} 提问</button><button data-a="cp">${icon('copy')} 复制</button>`;
-    document.body.appendChild(bar);
-    bar.onclick = e => {
-      const b = e.target.closest('button'); if (!b || !lastSel) return;
-      const {text, page} = lastSel;
-      if (b.dataset.a === 'cp') { copyText(text, '选中文字'); hideBar(); return; }
-      setQuote(text, page);   // 引用独立成块，输入框留给问题
-      hideBar();
-    };
-    return bar;
-  };
-  const hideBar = () => { if (bar) bar.hidden = true; };
-  document.addEventListener('mouseup', e => {
-    const sel = window.getSelection();
-    const text = sel ? sel.toString().trim() : '';
-    const inContent = e.target.closest && (e.target.closest('#content-view') || e.target.closest('.qa-msgs') || e.target.closest('#pdf-host'));
-    if (!text || text.length < 2 || !inContent) { hideBar(); return; }
-    const blk = e.target.closest('.blk');
-    lastSel = {text, page: blk ? +blk.dataset.page : (state.pageNum - 1)};
-    const b = ensureBar();
-    b.hidden = false;
-    const x = Math.min(e.clientX, innerWidth - 260), y = e.clientY - 44;
-    b.style.left = Math.max(8, x) + 'px'; b.style.top = Math.max(8, y) + 'px';
-  });
-  document.addEventListener('mousedown', e => { if (bar && !bar.contains(e.target)) hideBar(); });
-  window._hideSelBar = hideBar;
-})();
 
 /* ---- ② 引用悬浮预览（原文 [n] → 参考文献卡片） ---- */
 (() => {
@@ -5068,7 +5045,7 @@ window.clearQuote = () => {
   const box = $('#qa-quote');
   if (box) box.hidden = true;
   const t = $('#qa-text');
-  if (t) t.placeholder = '对着左侧文章提问…（Ctrl+Enter 发送）';
+  if (t) t.placeholder = '对着文献提问…（Ctrl+Enter 发送）';
 };
 
 
