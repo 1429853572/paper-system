@@ -124,18 +124,24 @@ def save_parse_result(paper_id: str, run_id: str, files: dict[str, bytes]) -> Pa
 
 
 def _flatten_spans(spans: list[dict]) -> str:
+    """InlineSpans → 纯文本。content 可能是 str，也可能是**嵌套一层的 spans 列表**
+    （MinerU 某些版本对 index/目录类块输出嵌套结构），递归兜底。"""
     out = []
     for s in spans or []:
         t = s.get("type")
+        c = s.get("content", "")
+        if isinstance(c, list):     # 嵌套 spans：递归展开
+            out.append(_flatten_spans(c))
+            continue
         if t == "text":
-            out.append(s.get("content", ""))
+            out.append(c)
         elif t == "equation_inline":
-            out.append(f"${s.get('content', '')}$")
+            out.append(f"${c}$")
         elif t == "code_inline":
-            out.append(f"`{s.get('content', '')}`")
+            out.append(f"`{c}`")
         elif t == "hyperlink":
-            inner = _flatten_spans(s.get("content") or [])
-            out.append(f"{inner} ({s.get('url', '')})" if inner else s.get("url", ""))
+            inner = _flatten_spans(c if isinstance(c, list) else [])
+            out.append(f"{c} ({s.get('url', '')})" if inner and c else (c or s.get("url", "")))
     return "".join(out)
 
 
