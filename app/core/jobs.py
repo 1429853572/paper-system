@@ -55,6 +55,16 @@ class EventBus:
 bus = EventBus()
 
 
+def _ts(s: str | None) -> float:
+    """sqlite 'YYYY-MM-DD HH:MM:SS'（UTC）→ epoch 秒；解析失败返回 0。"""
+    try:
+        import datetime
+        return datetime.datetime.fromisoformat(s).replace(
+            tzinfo=datetime.timezone.utc).timestamp()
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 def _emit(job_row: Any) -> None:
     # batch_id 以列为准（summary 完成时会整体覆写 payload，JSON 里可能已丢）
     batch_id = job_row["batch_id"]
