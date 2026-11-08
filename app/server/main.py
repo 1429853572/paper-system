@@ -1986,13 +1986,12 @@ async def synthesize_acq_task(tid: str, request: Request):
     u = require(request)
     t = _own_task(u, tid)
     ids = t.get("paper_ids") or []
-    if len(ids) < 2:
-        raise HTTPException(400, "入库论文不足 2 篇")
     from core import acqtask, synthesis
-    if not acqtask.all_parsed(ids):
-        pending = [i for i in ids
-                   if (db.one("SELECT parse_status s FROM papers WHERE id=?", (i,)) or {}).get("s") != "parsed"]
-        raise HTTPException(400, f"还有 {len(pending)} 篇未解析完成，完成后即可生成综述")
+    # 未解析完成（failed/skipped/pending）的剔除而非硬拒——一篇卡死不该锁死整个专题
+    ids = [i for i in ids
+           if (db.one("SELECT parse_status s FROM papers WHERE id=? AND deleted_at IS NULL", (i,)) or {}).get("s") == "parsed"]
+    if len(ids) < 2:
+        raise HTTPException(400, "解析完成的论文不足 2 篇（未完成/失败/跳过的已剔除；可先重试解析）")
     # 已有综述：仅当成功完成才复用；失败/进行中的允许重建（否则永久无法重跑）
     if t.get("synthesis_id"):
         prev = db.one("SELECT status FROM syntheses WHERE id=?", (t["synthesis_id"],))

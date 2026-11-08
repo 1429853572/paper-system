@@ -9,7 +9,7 @@ GLWT 许可，源码内联于 app/core/vendor/caj2pdf/）。
   这里做一层 sys.modules 兼容垫片（PyPDF2 → pypdf），避免额外依赖与版本冲突
 - 格式判定交给 caj2pdf 自己的 CAJParser（CAJ/HN/C8/KDH/PDF 都认），
   我们只在它失败时给出可读原因
-- KDH 格式需 mutool 修复 xref（容器内无）→ 明确报错并保留原文件，不丢数据
+- CAJ/KDH 转换的 xref 修复需 mutool（镜像已装 mupdf-tools）→ 缺失时明确报错保留原文件
 """
 from __future__ import annotations
 
@@ -111,4 +111,4 @@ def tool_status() -> dict:
     """转换器可用性（供诊断展示）。"""
     return {"available": _vendor_ready(),
             "mutool": bool(os.path.exists("/usr/bin/mutool")),
-            "note": "CAJ/HN/C8 可转；KDH 需 mutool（容器内未装）；伪 PDF 直接用"}
+            "note": "CAJ/HN/C8/KDH 可转（需 mutool，镜像已装）；伪装 PDF 的直接用"}

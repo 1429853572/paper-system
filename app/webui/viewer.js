@@ -168,16 +168,12 @@ function esc(s) {
 const ICONS = {
   close: '<path d="M4 4l8 8M12 4l-8 8"/>',
   plus: '<path d="M8 3v10M3 8h10"/>',
-  minus: '<path d="M3 8h10"/>',
   chevD: '<path d="M4 6l4 4 4-4"/>',
-  chevU: '<path d="M4 10l4-4 4 4"/>',
   chevL: '<path d="M10 3L5 8l5 5"/>',
   chevR: '<path d="M6 3l5 5-5 5"/>',
   dblL: '<path d="M7.5 4L3.5 8l4 4M11.5 4l-4 4 4 4"/>',
   dblR: '<path d="M8.5 4l4 4-4 4M4.5 4l4 4-4 4"/>',
-  arrowL: '<path d="M13 8H3M7 4L3 8l4 4"/>',
   arrowR: '<path d="M3 8h10M9 4l4 4-4 4"/>',
-  download: '<path d="M8 2v8M5 7l3 3 3-3M3 13.5h10"/>',
   upload: '<path d="M8 10V2.5M5 5l3-3 3 3M3 13.5h10"/>',
   save: '<path d="M3.5 3.5h8l2 2v7a1 1 0 01-1 1h-9a1 1 0 01-1-1v-9a1 1 0 011-1z"/><path d="M5.5 3.5v3h5v-3M5.5 13V9.5h5V13"/>',
   trash: '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 9.5h5.8l.6-9.5"/>',
@@ -188,7 +184,6 @@ const ICONS = {
   globe: '<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c2.3 2.8 2.3 8.2 0 11-2.3-2.8-2.3-8.2 0-11z"/>',
   play: '<path d="M5.5 3.5v9l7-4.5z"/>',
   stop: '<rect x="4" y="4" width="8" height="8" rx="1.5"/>',
-  menu: '<path d="M3 4.5h10M3 8h10M3 11.5h10"/>',
   copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5h-7v7"/>',
   doc: '<path d="M4 2.5h5.5L12.5 5.5V13.5h-8.5z"/><path d="M9.5 2.5v3h3"/>',
   folder: '<path d="M2.5 5a1 1 0 011-1h3.2l1.5 1.8h5.3a1 1 0 011 1v6.2a1 1 0 01-1 1h-10a1 1 0 01-1-1V5z"/>',
@@ -213,8 +208,6 @@ const ICONS = {
   note: '<path d="M3.5 3h9v7l-3 3h-6z"/><path d="M9.5 13v-3h3"/>',
   pin: '<path d="M8 13.5V9M8 9C6 9 4.5 7.8 4.5 5.8V3.5h7v2.3C11.5 7.8 10 9 8 9z"/>',
   tag: '<path d="M2.5 8.3V3.5h4.8l6 6-4.8 4.8-6-6z"/><circle cx="5.2" cy="5.2" r=".9"/>',
-  funnel: '<path d="M1.8 2.6h12.4a.5.5 0 01.39.81L9.9 9.4v4.1a.6.6 0 01-.87.54l-2.4-1.2a.6.6 0 01-.33-.54V9.4L1.41 3.41A.5.5 0 011.8 2.6z"/>',
-  checklist: '<path d="M2.2 4.3l1.5 1.5 2.7-3M2.2 11.3l1.5 1.5 2.7-3M9.2 4.4h4.6M9.2 11.6h4.6"/>',
   search: '<circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5"/>',
   book: '<path d="M8 4.2C6.6 3 4.2 2.8 2.6 3.6v9c1.6-.8 4-.6 5.4.6 1.4-1.2 3.8-1.4 5.4-.6v-9C11.8 2.8 9.4 3 8 4.2z"/><path d="M8 4.2v9"/>',
   moon: '<path d="M13.2 9.7A5.7 5.7 0 016.3 2.8a5.7 5.7 0 106.9 6.9z"/>',
@@ -1498,8 +1491,6 @@ async function _refreshQueueBadge() {
   } catch {}
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshQueueBadge(); });
-window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); };
-window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); };
 window.mcpConfirm = async (id, approve) => {
   try {
     const r = await api('/api/mcp/confirm', {method: 'POST', body: JSON.stringify({action_id: id, approve})});
@@ -1616,7 +1607,7 @@ async function renderSynList() {
   }
   el.innerHTML = items.map(s => {
     const stTxt = { done: '完成', failed: '失败', running: '进行中',
-                    needs_fix: '引用需修复', reviewing: '综述中' }[s.status] || s.status;
+                    needs_fix: '引用需修复' }[s.status] || s.status;
     const cls = { done: 'ok', failed: 'err', running: 'run',
                   needs_fix: 'err', reviewing: 'run' }[s.status] || 'run';
     const pct = s.progress_total ? Math.min(100, Math.round(100 * s.progress_done / s.progress_total)) : 0;
@@ -1624,7 +1615,7 @@ async function renderSynList() {
       <span class="badge ${cls}">${stTxt}</span>
       <span class="syn-item-main">
         <b>${esc(s.title)}</b>
-        <span class="muted" style="font-size:11px">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc((s.updated_at || '').slice(5, 16))}</span>
+        <span class="muted" style="font-size:11px">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc(fmtTime(s.updated_at))}</span>
         ${s.status === 'running' ? `<div class="up-bar parse" style="max-width:280px"><i style="width:${pct}%"></i></div>` : ''}
         ${s.status === 'failed' && s.error ? `<div class="bpanel-err">${esc(s.error.slice(0, 120))}</div>` : ''}
       </span>
@@ -1887,7 +1878,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         <span class="tt ${tt.cls}">${tt.icon} ${tt.label}</span>
         <span class="muted">${b.done}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}${b.canceled ? ` · ${b.canceled} 取消` : ''}</span>
         <span class="spacer"></span>
-        <span class="muted" style="font-size:11px">${esc((b.updated_at || '').slice(5, 16))}</span>
+        <span class="muted" style="font-size:11px">${esc(fmtTime(b.updated_at))}</span>
         <span class="ic">${icon('chevD')}</span>
       </div>
       <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
@@ -2073,7 +2064,7 @@ async function showTopicsView() {
             <span class="badge ${t.status === 'done' ? 'ok' : t.status === 'failed' ? 'err' : 'run'}">${TASK_STATUS[t.status] || t.status}</span>
             <span class="tp-main">
               <b>${esc(t.title)}</b>
-              <span class="muted" style="font-size:11px">${esc(t.query)} · ${esc(t.site)} · 候选 ${t.cand_selected}/${t.cand_total} · 已下载 ${t.cand_done} · 入库 ${t.papers} 篇 · ${esc((t.updated_at || '').slice(5, 16))}</span>
+              <span class="muted" style="font-size:11px">${esc(t.query)} · ${esc(t.site)} · 候选 ${t.cand_selected}/${t.cand_total} · 已下载 ${t.cand_done} · 入库 ${t.papers} 篇 · ${esc(fmtTime(t.updated_at))}</span>
               ${t.error ? `<span class="bpanel-err" style="padding:0">${esc(t.error.slice(0, 120))}</span>` : ''}
             </span>
             <button class="btn small primary" data-tp-open="${esc(t.id)}">打开</button>
@@ -2151,6 +2142,7 @@ async function showTopicDetail(tid) {
             </span>
             ${c.dl_status === 'done' ? '<span class="badge ok">已入库</span>'
               : c.dl_status === 'failed' ? `<span class="badge err" title="${esc(c.error || '')}">失败</span>`
+              : c.dl_status === 'skipped' ? '<span class="badge priv" title="无下载链接或内容重复未计入">跳过</span>'
               : c.in_library ? '<span class="badge priv">已在库</span>' : ''}
           </label>`).join('')}
       </div>` : ''}
@@ -2160,9 +2152,9 @@ async function showTopicDetail(tid) {
           ? papers.map(p => esc((p.title || '').slice(0, 40))).join('、')
           : '尚未下载入库任何文献'}</div>
         ${t.synthesis_id ? `<button class="btn small primary" id="td-syn">查看综述报告</button>`
-          : `<button class="btn small primary" id="td-mksyn" ${(parsed < papers.length || papers.length < 2) ? 'disabled' : ''}>
+          : `<button class="btn small primary" id="td-mksyn" ${papers.length < 2 ? 'disabled' : ''}>
               ${papers.length < 2 ? '至少需要 2 篇入库论文'
-                : parsed < papers.length ? `还有 ${papers.length - parsed} 篇未解析完成`
+                : parsed < papers.length ? `剔除 ${papers.length - parsed} 篇未完成后生成（${parsed} 篇）`
                 : '生成综述报告'}</button>`}
       </div>
     </div>`;
@@ -2417,7 +2409,7 @@ async function renderSynJob(sid, box) {
   const pct = s.progress_total ? Math.min(100, Math.round(100 * s.progress_done / s.progress_total)) : 0;
   box.innerHTML = `
     <div class="bpanel-row sub">
-      <span class="badge ${s.status === 'done' ? 'ok' : s.status === 'failed' ? 'err' : 'run'}">${stTxt}</span>
+      <span class="badge ${s.status === 'done' ? 'ok' : s.status === 'failed' || s.status === 'needs_fix' ? 'err' : 'run'}">${stTxt}</span>
       <span style="flex:1;min-width:0">${esc(s.title)} · ${esc(stageTxt)}${s.status === 'running' ? ` ${s.progress_done}/${s.progress_total}` : ''}</span>
       ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
         <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">⬇MD</button>
@@ -2889,11 +2881,6 @@ window.saveMeta = async (pid) => {
     renderMeta();
   } catch (e) { toast('保存失败: ' + e.message); }
 };
-window.reindexPaper = async (pid) => {
-  if (!(await uiConfirm('重建该论文的块结构与检索索引？（从已存解析产物重新入库，不重新解析、不影响译文）', {title: '重建索引'}))) return;
-  const r = await api(`/api/papers/${pid}/reindex`, {method: 'POST'});
-  toast(`已重建 ${r.blocks} 块 / ${r.chunks} 分块，向量回填中`);
-};
 window.verifyMeta = async (pid) => {
   toast('联网校准中…（arXiv/S2/CrossRef，只发送标题）');
   try {
@@ -3335,7 +3322,7 @@ async function renderSessList() {
     <div class="qa-sess-item ${x.id === state.qaSession ? 'on' : ''}" onclick="switchSess('${x.id}')">
       <div style="flex:1;min-width:0">
         <div class="qa-sess-title">${esc(x.title || '未命名会话')}</div>
-        <div class="muted" style="font-size:var(--fs-xs)">${(x.updated_at || '').slice(5, 16)}</div>
+        <div class="muted" style="font-size:var(--fs-xs)">${fmtTime(x.updated_at)}</div>
       </div>
       <button class="btn small" onclick="event.stopPropagation();renameSess('${x.id}', '${esc((x.title || '').replace(/'/g, "\'"))}')" title="重命名">${icon('edit', 12)}</button>
       <button class="btn small danger" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>
@@ -3558,7 +3545,7 @@ function sendQa() {
   }
   const parsedScope = [...state.qaPapers].filter(p2 => {
     const pp = state.qaAllPapers.find(x => x.id === p2);
-    return !pp || pp.parse_status === 'parsed';
+    return !pp || ['parsed', 'skipped'].includes(pp.parse_status);  // skipped 可重解析，允许入 scope
   });
   if (!parsedScope.length) { toast('所选论文尚未解析完成，请稍候'); return; }
   $('#qa-text').value = '';
@@ -3960,9 +3947,9 @@ async function renderTrash() {
   $('#page-trash').innerHTML = `<div class="card"><h2 style="display:flex;gap:10px;align-items:center">回收站（30 天后自动清理）
     <button class="btn small danger" style="margin-left:auto" onclick="emptyTrash()">${icon('trash')} 清空回收站</button></h2>
     <table class="list"><tr><th>标题</th><th>删除时间</th><th></th></tr>
-    ${d.papers.map(p => `<tr><td>${esc(p.title)}</td><td class="muted">${p.deleted_at}</td>
+    ${d.papers.map(p => `<tr><td>${esc(p.title)}</td><td class="muted">${fmtTime(p.deleted_at)}</td>
       <td class="row-actions"><button class="btn small" onclick="restorePaper('${p.id}')">恢复</button>
-      </td></tr>`).join('') || '<tr><td colspan="3" class="muted">回收站为空</td></tr>'}</table></div>`;
+      </td></tr>`).join('') || '<tr><td colspan="3" class="muted">回收站为空——删除的论文在此保留 30 天，可随时恢复</td></tr>'}</table></div>`;
 }
 window.restorePaper = async id => { await api(`/api/papers/${id}/restore`, {method: 'POST'}); toast('已恢复'); renderTrash(); await refreshLib(); };
 
@@ -4072,10 +4059,10 @@ async function renderAdminZone() {
       <div id="audit-list" style="max-height:220px;overflow-y:auto;font-size:var(--fs-xs)">
         ${audit.rows.length ? audit.rows.map(r =>
           `<div style="padding:3px 0;border-bottom:1px solid var(--line-soft)">
-             <span class="muted">${(r.created_at || '').slice(5, 16)}</span>
+             <span class="muted">${fmtTime(r.created_at)}</span>
              <b>${esc(r.username || '系统')}</b> ${esc(r.action)}
              <span class="muted">${esc(r.detail || '').slice(0, 40)}</span>
-           </div>`).join('') : '<p class="muted">暂无记录</p>'}
+           </div>`).join('') : '<p class="muted">暂无记录——尚无敏感操作（删除/重置密码等会记录在此）</p>'}
       </div>
     </div>
     <div class="set-card">
@@ -4089,7 +4076,7 @@ async function renderAdminZone() {
           else if (r.purpose === 'translate') byName[k].translate += r.p + r.c;
         });
         return Object.entries(byName).map(([name, t]) =>
-          `<tr><td>${esc(name)}</td><td class="muted" style="font-size:11px">问答 ${(t.chat).toLocaleString()} tok · 翻译 ${(t.translate).toLocaleString()} tok</td></tr>`).join('') || '<tr><td class="muted">暂无用量</td></tr>';
+          `<tr><td>${esc(name)}</td><td class="muted" style="font-size:11px">问答 ${(t.chat).toLocaleString()} tok · 翻译 ${(t.translate).toLocaleString()} tok</td></tr>`).join('') || '<tr><td class="muted">暂无用量——问答/翻译/导读产生 token 后按日统计在此</td></tr>';
       })()}</table>
     </div>
     <div class="set-card">
@@ -4110,7 +4097,7 @@ window.logoutAll = async () => {
 };
 window.toggleUser = async (uid, uname, disable) => {
   const act = disable ? '禁用' : '重新启用';
-  if (!(await uiConfirm(`${act}用户 ${uname}？${disable ? '该用户将无法登录，已有会话全部失效。' : ''}`, {title: `${act}用户`, danger: !disable}))) return;
+  if (!(await uiConfirm(`${act}用户 ${uname}？${disable ? '该用户将无法登录，已有会话全部失效。' : ''}`, {title: `${act}用户`, danger: disable}))) return;
   try {
     await api(`/api/admin/users/${uid}/${disable ? 'disable' : 'enable'}`, {method: 'POST'});
     toast(`已${act}`); renderAdminZone();
@@ -4376,6 +4363,7 @@ async function renderCollectionsPage(preset = null) {
     const tj = s.translate_job;
     const parseBadge = s.parsing ? "<span class=\"badge run\">" + icon('clock', 12) + "解析</span>"
       : p.parse_status === 'parsed' ? "<span class=\"badge ok\">" + icon('check') + "</span>"
+      : p.parse_status === 'skipped' ? '<span class="badge priv" title="超页数未自动解析，可手动重解析">已跳过</span>'
       : "<span class=\"badge err\">" + icon('close') + "</span>";
     const trBadge = s.translating ? `<span class="badge run">${icon('globe')}${tj ? tj.done + '/' + tj.total : ''}</span>`
       : tj?.status === 'done' ? "<span class=\"badge ok\">译" + icon('check') + "</span>"
@@ -4559,13 +4547,6 @@ document.addEventListener('click', async e => {
     pop.hidden = true;
   }
 });
-window.toggleColOpen = cid => {
-  const s = JSON.parse(localStorage.getItem('ps-col-open') || '{}');
-  s[cid] = s[cid] === false ? true : false;
-  localStorage.setItem('ps-col-open', JSON.stringify(s));
-  renderCollections();          // 侧栏树
-  if ($('#page-collections') && $('#page-collections').style.display !== 'none') renderCollectionsPage().catch(() => {});
-};
 
 function libSelected(cid) {
   return $$('.lib-ck').filter(x => x.dataset.cid === cid && x.checked).map(x => x.dataset.pid);
@@ -4943,8 +4924,7 @@ const renderBlockBody = b => {
     if (e.target.closest && e.target.closest('.blk')) clear();
   });
   // 滚动/渲染时清除，防止蓝框滞留
-  window._hoverClear = clear;
-  $('#pdf-host').addEventListener('scroll', clear);
+    $('#pdf-host').addEventListener('scroll', clear);
   const cv = $('#content-view'); cv && cv.addEventListener('scroll', clear);
 })();
 
@@ -5173,12 +5153,6 @@ window.figCropPass = async () => {
   });
 })();
 
-window.retranslatePaper = async pid => {
-  if (!(await uiConfirm('用当前模型/术语表重新翻译，生成新版本？（消耗 token，旧版本保留）', {title: '强制重译', danger: false}))) return;
-  await api('/api/papers/translate', {method: 'POST',
-    body: JSON.stringify({paper_ids: [pid], force_new_version: true})});
-  toast('重译已入队（完成后自动展示最新版）');
-};
 
 /* 统一联动色板（按块类型）——PDF 框与右侧高亮同色 */
 const TYPE_COLORS = {text: '#4a6cf7', title: '#8a5cf6', paragraph_title: '#8a5cf6', doc_title: '#8a5cf6',
