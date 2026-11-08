@@ -244,8 +244,12 @@ if (libCk) {
 window.__T.switchPage('batch');
 window.__T.state.selected.clear();   // 清掉步骤6 勾选
 await new Promise((r) => setTimeout(r, 500));   // renderBatchPage 进页即 loadBpPicker（全量拉取）
-ok('未圈定时操作卡置灰', [...doc.querySelectorAll('#page-batch .batch-card')]
-   .every(c => c.classList.contains('off')));
+ok('未圈定时操作卡置灰（采集/专题除外）', (() => {
+  const cards = [...doc.querySelectorAll('#page-batch .batch-card')];
+  const ops = cards.filter(c => !['acquire', 'topics'].includes(c.dataset.act));
+  const free = cards.filter(c => ['acquire', 'topics'].includes(c.dataset.act));
+  return ops.every(c => c.classList.contains('off')) && free.every(c => !c.classList.contains('off'));
+})());
 const acts = [...doc.querySelectorAll('.batch-card')].map(c => c.dataset.act);
 ok('批量卡含 采集/专题/综述入口', acts.includes('acquire') && acts.includes('topics') && acts.includes('review'),
    acts.join(','));
