@@ -37,6 +37,12 @@ function fmtTime(s) {
   const t = s.slice(0, 16).replace('T', ' ');
   return t.length >= 16 ? t.slice(5, 16) : t;
 }
+/* 公共防抖（原先 7 处各自 clearTimeout+setTimeout 手写，行为微妙不一致） */
+function debounce(fn, ms = 300) {
+  let t = 0;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
 let _toastTimer = 0;
 function toast(msg, ms = 2500) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -185,6 +191,12 @@ const ICONS = {
   play: '<path d="M5.5 3.5v9l7-4.5z"/>',
   stop: '<rect x="4" y="4" width="8" height="8" rx="1.5"/>',
   copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5h-7v7"/>',
+  brain: '<path d="M8 2.5a2.5 2.5 0 00-2.5 2.5v.5A2 2 0 004 7.4V10a2 2 0 002 2h1v1.5h2V12h1a2 2 0 002-2V7.4a2 2 0 00-1.5-1.9V5A2.5 2.5 0 008 2.5z"/>',
+  globe2: '<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c2.3 2.8 2.3 8.2 0 11-2.3-2.8-2.3-8.2 0-11z"/>',
+  tag2: '<path d="M2.5 3.5h4l6 6-3 3-6-6z"/><circle cx="5" cy="5" r=".8"/>',
+  recycle: '<path d="M4 11l1.5-6L8 3l2.5 2L12 11M4 11l8 0M6.5 5h4"/>',
+  stack: '<rect x="2.5" y="3" width="8" height="8" rx="1.2"/><path d="M5.5 5.5h2M5.5 7.5h3"/>',
+  inbox: '<path d="M2.5 9V5.5L5 3.5h6l2.5 2V9a1.5 1.5 0 01-1.5 1.5H4A1.5 1.5 0 012.5 9z"/><path d="M5.5 6.5h5"/>',
   doc: '<path d="M4 2.5h5.5L12.5 5.5V13.5h-8.5z"/><path d="M9.5 2.5v3h3"/>',
   folder: '<path d="M2.5 5a1 1 0 011-1h3.2l1.5 1.8h5.3a1 1 0 011 1v6.2a1 1 0 01-1 1h-10a1 1 0 01-1-1V5z"/>',
   library: '<path d="M3 13.5V3.5M6.3 13.5V3.5M9.6 13.5V3.5M2 13.5h12"/>',
@@ -1512,10 +1524,10 @@ state._batchPreset = null;      // 从文库批量条带过来的圈定
 state._batchPapers = [];        // 圈定来源论文缓存（供明细显示标题）
 
 const BATCH_ACTS = {
-  summary:   {label: '🧠 批量导读', desc: '为圈定论文生成 9 字段导读；已有导读的自动跳过'},
-  translate: {label: '🌐 批量翻译', desc: '翻译圈定论文；已有完整译文的自动跳过'},
-  meta:      {label: '🏷 元数据补全', desc: '联网校准（arXiv/S2/CrossRef）+ AI 补缺失字段'},
-  parse:     {label: '♻️ 批量重解析', desc: '重新提取全文；仅自己上传的论文可执行，译文对应关系作废'},
+  summary:   {label: '批量导读', desc: '为圈定论文生成 9 字段导读；已有导读的自动跳过'},
+  translate: {label: '批量翻译', desc: '翻译圈定论文；已有完整译文的自动跳过'},
+  meta:      {label: '元数据补全', desc: '联网校准（arXiv/S2/CrossRef）+ AI 补缺失字段'},
+  parse:     {label: '批量重解析', desc: '重新提取全文；仅自己上传的论文可执行，译文对应关系作废'},
 };
 
 async function renderBatchPage() {
@@ -1554,24 +1566,24 @@ async function renderBatchPage() {
           <div class="bp-head2">② 选择操作 <span class="muted" style="font-weight:400;font-size:11px">未圈定时操作卡置灰</span></div>
           <div class="batch-ops">
             <div class="batch-card" data-act="topics" title="专题采集任务：关键词 → 检索 → 勾选下载入库 → 一键综述（可中断可恢复）">
-              <b>📚 专题采集</b><span class="muted">关键词建专题 → 检索 → 勾选下载入库 → 自动生成综述</span></div>
+              <b>${icon('stack')} 专题采集</b><span class="muted">关键词建专题 → 检索 → 勾选下载入库 → 自动生成综述</span></div>
             <div class="batch-card" data-act="acquire" id="acq-btn" title="按关键词检索中文文献（知网/中国科学院预印本），勾选后批量下载入库">
-              <b>📥 采集文献</b><span class="muted">按关键词检索 → 勾选 → 浏览器下载入库（知网/预印本）</span></div>
+              <b>${icon('inbox')} 采集文献</b><span class="muted">按关键词检索 → 勾选 → 浏览器下载入库（知网/预印本）</span></div>
             <div class="batch-card primary ${state.selected.size ? '' : 'off'}" data-act="review" title="自动分组→组内比对→跨组综合，生成可导出的综述报告">
-              <b>📑 综述报告</b><span class="muted">多文献自动分组 · 逐组比对 · 跨组综合 · 导出 MD/CSV（2~90 篇）——批量处理的核心产出</span></div>
+              <b>${icon('doc')} 综述报告</b><span class="muted">多文献自动分组 · 逐组比对 · 跨组综合 · 导出 MD/CSV（2~90 篇）——批量处理的核心产出</span></div>
             ${Object.entries(BATCH_ACTS).map(([k, v]) => `
               <div class="batch-card ${state.selected.size ? '' : 'off'}" data-act="${k}" title="${esc(v.desc)}">
                 <b>${v.label}</b><span class="muted">${esc(v.desc)}</span>
               </div>`).join('')}
             <div class="batch-card ${state.selected.size ? '' : 'off'}" data-act="bibtex">
-              <b>📚 导出 BibTeX</b><span class="muted">圈定论文合并为一个 .bib 文件直接下载</span></div>
+              <b>${icon('library')} 导出 BibTeX</b><span class="muted">圈定论文合并为一个 .bib 文件直接下载</span></div>
             <div class="batch-card ${state.selected.size ? '' : 'off'}" data-act="delete">
-              <b>🗑 移入回收站</b><span class="muted">圈定论文整体入回收站（${state.health.trash_days || 30} 天内可恢复）</span></div>
+              <b>${icon('trash')} 移入回收站</b><span class="muted">圈定论文整体入回收站（${state.health.trash_days || 30} 天内可恢复）</span></div>
           </div>
         </div>
       </div>
       <div class="card syn-list-card">
-        <div class="bp-head"><b>📑 我的综述</b>
+        <div class="bp-head"><b>我的综述</b>
           <span class="muted" style="font-size:11px">历史报告永久保存——查看 / 导出 / 删除；进行中的显示实时进度</span>
           <span class="spacer"></span>
           <button class="btn small" id="syn-refresh">${icon('retry')} 刷新</button></div>
@@ -1581,10 +1593,8 @@ async function renderBatchPage() {
   $('#bp-clear').onclick = () => { state.selected.clear(); renderBpPicker(); syncBpCount(); };
   /* 勾选面板：库树形分组浏览（搜索/年份筛选/已选定视图/整组全选） */
   state._bpp = {q: '', year: '', view: 'all', papers: [], fold: new Set()};
-  $('#bpp-search').oninput = e => {
-    clearTimeout(state._bpp._t);
-    state._bpp._t = setTimeout(() => { state._bpp.q = e.target.value.trim(); renderBpPicker(); }, 250);
-  };
+  const _bppSearch = debounce(() => { state._bpp.q = $('#bpp-search').value.trim(); renderBpPicker(); }, 250);
+  $('#bpp-search').oninput = _bppSearch;
   $('#bpp-year').onchange = e => { state._bpp.year = e.target.value; renderBpPicker(); };
   $('#bpp-reload').onclick = () => loadBpPicker();
   $('#bpp-v-all').onclick = () => { state._bpp.view = 'all'; renderBpPicker(); };
@@ -1592,6 +1602,17 @@ async function renderBatchPage() {
   loadBpPicker();          // 勾选面板常驻，进页即加载
   renderSynList();
   updateBatchOpsState();
+}
+
+/* ---- 综述状态公共件（syn-list / 任务面板 synJob 两处复用，原先各写一份映射） ---- */
+const SYN_ST = { done: ['完成', 'ok'], failed: ['失败', 'err'], running: ['进行中', 'run'],
+                 needs_fix: ['引用需修复', 'err'] };
+function synBadge(status) {
+  const [txt, cls] = SYN_ST[status] || [status, 'run'];
+  return `<span class="badge ${cls}">${txt}</span>`;
+}
+function synPct(s) {
+  return s.progress_total ? Math.min(100, Math.round(100 * s.progress_done / s.progress_total)) : 0;
 }
 
 /* ---- 我的综述：历史报告列表（syntheses 表永久记录） ---- */
@@ -1602,17 +1623,13 @@ async function renderSynList() {
   try { items = (await api('/api/syntheses')).syntheses; }
   catch (e) { el.innerHTML = `<p class="muted" style="padding:8px 16px">加载失败: ${esc(e.message)}</p>`; return; }
   if (!items.length) {
-    el.innerHTML = '<p class="muted" style="padding:8px 16px">还没有综述——圈定 2 篇以上论文，点上方「📑 综述报告」发起</p>';
+    el.innerHTML = '<p class="muted" style="padding:8px 16px">还没有综述——圈定 2 篇以上论文，点上方「综述报告」发起</p>';
     return;
   }
   el.innerHTML = items.map(s => {
-    const stTxt = { done: '完成', failed: '失败', running: '进行中',
-                    needs_fix: '引用需修复' }[s.status] || s.status;
-    const cls = { done: 'ok', failed: 'err', running: 'run',
-                  needs_fix: 'err', reviewing: 'run' }[s.status] || 'run';
-    const pct = s.progress_total ? Math.min(100, Math.round(100 * s.progress_done / s.progress_total)) : 0;
+    const pct = synPct(s);
     return `<div class="syn-item" data-sid="${esc(s.id)}">
-      <span class="badge ${cls}">${stTxt}</span>
+      ${synBadge(s.status)}
       <span class="syn-item-main">
         <b>${esc(s.title)}</b>
         <span class="muted" style="font-size:11px">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc(fmtTime(s.updated_at))}</span>
@@ -1621,8 +1638,8 @@ async function renderSynList() {
       </span>
       <span class="spacer"></span>
       ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
-        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">⬇MD</button>
-        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">⬇CSV</button>` : ''}
+        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">MD</button>
+        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">CSV</button>` : ''}
       <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
     </div>`;
   }).join('');
@@ -1799,12 +1816,12 @@ function renderBpPicker() {
    类型彩色徽章 + 类型/状态筛选；MCP 待确认置顶。 */
 const TASK_TYPES = {
   parse:          {label: '解析',    icon: '🔍', cls: 'tt-parse'},
-  translate:      {label: '翻译',    icon: '🌐', cls: 'tt-translate'},
-  summary:        {label: '导读',    icon: '🧠', cls: 'tt-summary'},
-  meta:           {label: '元数据',  icon: '🏷', cls: 'tt-meta'},
+  translate:      {label: '翻译',    icon: 'globe2', cls: 'tt-translate'},
+  summary:        {label: '导读',    icon: 'brain', cls: 'tt-summary'},
+  meta:           {label: '元数据',  icon: 'tag2', cls: 'tt-meta'},
   embed_backfill: {label: '索引回填', icon: '🧲', cls: 'tt-embed'},
-  synthesis:      {label: '综述',    icon: '📑', cls: 'tt-synthesis'},
-  acquire:        {label: '采集下载', icon: '📥', cls: 'tt-acquire'},
+  synthesis:      {label: '综述',    icon: 'doc', cls: 'tt-synthesis'},
+  acquire:        {label: '采集下载', icon: 'inbox', cls: 'tt-acquire'},
 };
 const taskType = t => TASK_TYPES[t] || {label: t, icon: '•', cls: ''};
 state._taskFilter = {type: '', status: ''};
@@ -1856,7 +1873,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
     const bar = j.progress_total > 1
       ? `<div class="up-bar task"><i style="width:${Math.min(100, Math.round(100 * (j.progress_done || 0) / j.progress_total))}%"></i></div>` : '';
     return `<div class="task-row">
-      <span class="tt ${tt.cls}">${tt.icon} ${tt.label}</span>
+      <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
       <span class="task-main">
         <span class="task-title">${esc(j.title || j.paper_id || '（无标题）')}</span>
         ${bar}
@@ -2023,7 +2040,7 @@ async function runBatchAction(act, anchor) {
   } catch (e) { toast('批量操作失败: ' + e.message); }
 }
 
-const BATCH_TYPE_LABEL = {translate: '批量翻译', meta: '元数据补全', summary: '批量导读', parse: '批量重解析', synthesis: '📑 综述'};
+const BATCH_TYPE_LABEL = {translate: '批量翻译', meta: '元数据补全', summary: '批量导读', parse: '批量重解析', synthesis: '综述'};
 
 /* ---- 综述流水线（批量页核心卡）----
    圈定 → 成本预估确认（缺导读自动补齐 + 组内比对 + 跨组综合 = N 次调用）
@@ -2333,7 +2350,7 @@ async function runSynthesis(anchor, ids = null) {
     pop.querySelector('#syn-calls').textContent = est.calls + extra[tier];
   };
   pop.innerHTML = `
-    <div class="ui-pop-title">📑 发起综述（${est.valid} 篇 · ${est.groups} 组${est.missing_summaries ? ` · 补导读 ${est.missing_summaries}` : ''}）</div>
+    <div class="ui-pop-title">发起综述（${est.valid} 篇 · ${est.groups} 组${est.missing_summaries ? ` · 补导读 ${est.missing_summaries}` : ''}）</div>
     <div class="syn-f-row"><label>组织轴</label>
       <input id="syn-axis" placeholder="综述围绕的主线问题（standard/deep 必填），如：前馈大模型输出如何用于 3DGS 初始化"></div>
     <div class="syn-f-row"><label>篇幅档</label>
@@ -2407,15 +2424,14 @@ async function renderSynJob(sid, box) {
   try { s = (await api('/api/syntheses/' + encodeURIComponent(sid) + '/progress')).synthesis; } catch { /* ignore */ }
   if (!s) { box.innerHTML = '<p class="muted" style="padding:6px">综述记录不存在（可能已删除）</p>'; return; }
   const stageTxt = {cluster: '聚类分组', group: '组内精读比对', final: '跨组综合'}[s.stage] || s.stage;
-  const stTxt = {done: '完成', failed: '失败', running: '进行中', needs_fix: '引用需修复'}[s.status] || s.status;
-  const pct = s.progress_total ? Math.min(100, Math.round(100 * s.progress_done / s.progress_total)) : 0;
+  const pct = synPct(s);
   box.innerHTML = `
     <div class="bpanel-row sub">
-      <span class="badge ${s.status === 'done' ? 'ok' : s.status === 'failed' || s.status === 'needs_fix' ? 'err' : 'run'}">${stTxt}</span>
+      ${synBadge(s.status)}
       <span style="flex:1;min-width:0">${esc(s.title)} · ${esc(stageTxt)}${s.status === 'running' ? ` ${s.progress_done}/${s.progress_total}` : ''}</span>
       ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
-        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">⬇MD</button>
-        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">⬇CSV</button>` : ''}
+        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">MD</button>
+        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">CSV</button>` : ''}
       <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
     </div>
     ${s.status === 'running' ? `<div class="up-bar parse" style="margin:0 12px 10px"><i style="width:${pct}%"></i></div>` : ''}
@@ -4482,10 +4498,10 @@ async function renderCollectionsPage(preset = null) {
         <div class="lib-batch" id="lb-${scopeKey}" hidden>
           <b id="lb-count-${scopeKey}">0</b>&nbsp;篇选中
           <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 翻译</button>
-          <button class="btn small" onclick="libBatchAct('${scopeKey}','summary')" title="批量生成 9 字段导读">🧠 导读</button>
-          <button class="btn small" onclick="libBatchAct('${scopeKey}','meta')" title="联网校准 + AI 补缺失字段">🏷 元数据</button>
-          <button class="btn small" onclick="libBatchAct('${scopeKey}','parse')" title="重新提取全文（仅自己上传的可执行）">♻️ 重解析</button>
-          <button class="btn small" onclick="libBatchSynth('${scopeKey}')" title="自动分组比对生成综述报告">📑 综述</button>
+          <button class="btn small" onclick="libBatchAct('${scopeKey}','summary')" title="批量生成 9 字段导读">导读</button>
+          <button class="btn small" onclick="libBatchAct('${scopeKey}','meta')" title="联网校准 + AI 补缺失字段">元数据</button>
+          <button class="btn small" onclick="libBatchAct('${scopeKey}','parse')" title="重新提取全文（仅自己上传的可执行）">重解析</button>
+          <button class="btn small" onclick="libBatchSynth('${scopeKey}')" title="自动分组比对生成综述报告">综述</button>
           <button class="btn small" onclick="libBatchBibtex('${scopeKey}')" title="合并导出一个 .bib">⬇ BibTeX</button>
           <select style="width:auto;font-size:12px" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
           <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">${icon('trash')} 删除</button>
