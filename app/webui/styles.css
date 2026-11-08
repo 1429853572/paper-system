@@ -393,7 +393,7 @@ table.list th { color: var(--muted); font-weight: 500; }
 /* 问答框标题栏也是抓握点（更显眼） */
 .qa-dock-head { cursor: row-resize; user-select: none; }
 .qa-dock-head button { cursor: pointer; }
-.qa-dock.resizing .qa-dock.resizing .qa-dock-head { background: var(--tint-primary); }
+.qa-dock.resizing .qa-dock-head { background: var(--tint-primary); }
 .qa-dock { flex: 1; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--border); }
 .qa-dock-head { padding: 8px 14px; font-weight: 600; font-size: var(--fs-base); background: var(--panel-soft);
                 border-bottom: 1px solid var(--border); }

@@ -1525,7 +1525,7 @@ async function renderBatchPage() {
     <div class="batch-wrap">
       <div class="batch-intro">${icon('bulb', 12)} 先在左侧圈定论文（勾选实时计入），再点右侧操作卡；任务进度与综述历史见下方区块。</div>
       <div class="batch-grid">
-        <div class="card batch-pick">
+        <div class="card batch-pick" id="batch-pick">
           <div class="bp-head"><b>① 圈定论文</b>
             <span class="badge ok" id="bp-count">${state.selected.size} 篇</span>
             <span class="spacer"></span>
@@ -2794,6 +2794,7 @@ async function renderMeta() {
         <button class="btn small" onclick="cancelMeta()">取消</button>`
         : `<button class="btn small" onclick="editMeta('${pid}')">${icon('edit')} 编辑</button>`}
         <button class="btn small" onclick="extractMeta('${pid}')" title="用 AI 补全缺失字段（作者/摘要/关键词）">${icon('bolt')} AI 补全</button>
+        <button class="btn small" onclick="verifyMeta('${pid}')" title="联网校准：arXiv/S2/CrossRef 比对，改前→改后确认后写入">${icon('globe')} 联网校准</button>
         ${/[\u4e00-\u9fff]/.test(paper.title || '') ? `<button class="btn small" onclick="cnkiCalibrate('${pid}')" title="知网搜索候选，人工确认后写入">🇨🇳 中文源校准</button>` : ''}
       </div>
     </div>
@@ -4395,7 +4396,24 @@ async function renderCollectionsPage(preset = null) {
       <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:200px" value="${esc(state.libQuery)}">
       <input id="newlib-name" placeholder="新库名称" style="max-width:150px">
       <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 新建库</button>
-      <button class="btn" onclick="exportBibtex()" title="导出全库为 BibTeX（Zotero/EndNote 可直接导入）">⬇ BibTeX</button>
+      <button class="btn" id="export-btn" title="批量导出当前范围/勾选的论文">⬇ 导出</button>
+      <div class="tool-pop export-pop" id="export-pop" hidden>
+        <div class="tp-label">范围</div>
+        <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+          <input type="radio" name="exp-scope" value="scope" style="width:auto" checked> 当前范围（<span id="exp-scope-n">0</span> 篇，含子库）</label>
+        <label class="tp-item" id="exp-sel-item" style="display:flex;gap:8px;align-items:center;cursor:pointer" hidden>
+          <input type="radio" name="exp-scope" value="sel" style="width:auto"> 勾选的 <span id="exp-sel-n">0</span> 篇</label>
+        <div class="tp-sep"></div>
+        <div class="tp-label">内容</div>
+        <div class="dl-checks">
+          <label><input type="checkbox" data-fmt="pdf" checked> 原始 PDF</label>
+          <label><input type="checkbox" data-fmt="md" checked> 原文 MD</label>
+          <label><input type="checkbox" data-fmt="bilingual_md"> 中英对照 MD</label>
+          <label><input type="checkbox" data-fmt="bilingual_pdf"> 对照 PDF（逐篇渲染较慢）</label>
+          <label><input type="checkbox" data-fmt="bibtex"> BibTeX</label>
+        </div>
+        <button class="btn small primary" id="export-zip-btn" style="margin:8px 0 4px">⬇ 导出 ZIP</button>
+      </div>
     </div>
     <div class="lib-crumb">
       ${state.libLevel === 2 ? `<a href="#" onclick="libGoL1();return false">← 全部库</a> <span class="muted">›</span> ` : '<span class="muted">位置：</span>'}
@@ -4480,51 +4498,56 @@ async function renderCollectionsPage(preset = null) {
 }
 window.renderCollectionsPage = renderCollectionsPage;   // 内联 onclick 在全局作用域求值
 
-/* 文库管理·导出弹层：与阅读页下载弹层同款交互（fixed 锚定按钮） */
-const exportPop = $('#export-pop');
-$('#export-btn')?.addEventListener('click', e => {
-  e.stopPropagation();
-  exportPop.hidden = !exportPop.hidden;
-  if (!exportPop.hidden) {
-    const r = e.currentTarget.getBoundingClientRect();
-    exportPop.style.position = 'fixed';
-    exportPop.style.top = (r.bottom + 6) + 'px';
-    exportPop.style.right = Math.max(8, innerWidth - r.right) + 'px';
-    exportPop.style.left = 'auto';
-  }
-});
-document.addEventListener('click', e => {
-  if (exportPop && !exportPop.hidden && !exportPop.contains(e.target) &&
-      !e.target.closest('#export-btn')) exportPop.hidden = true;
-});
-$('#export-zip-btn')?.addEventListener('click', async () => {
-  const scope = document.querySelector('input[name="exp-scope"]:checked')?.value || 'scope';
-  const ids = scope === 'sel'
-    ? libSelected(state._libScopeKey)
-    : (state._libScopePapers || []).map(p => p.id);
-  const fmts = $$('#export-pop input[data-fmt]').filter(x => x.checked).map(x => x.dataset.fmt);
-  if (!ids.length) { toast('当前范围没有论文'); return; }
-  if (!fmts.length) { toast('先勾选要导出的内容'); return; }
-  const btn = $('#export-zip-btn');
-  btn.disabled = true; btn.textContent = '打包中…';
-  try {
-    let url, payload;
-    if (fmts.length === 1 && fmts[0] === 'bibtex') {
-      url = '/api/papers/export/bibtex'; payload = {paper_ids: ids};   // 纯 BibTeX → 直接 .bib
-    } else {
-      url = '/api/papers/export-zip'; payload = {paper_ids: ids, fmts};
+/* 文库管理·导出弹层：与阅读页下载弹层同款交互（fixed 锚定按钮）。
+   document 级事件委托——collections 页每次渲染重建 DOM，一次性绑定会在重渲染后失效。 */
+document.addEventListener('click', async e => {
+  const btn = e.target.closest?.('#export-btn');
+  const pop = $('#export-pop');
+  if (btn && pop) {
+    e.stopPropagation();
+    pop.hidden = !pop.hidden;
+    if (!pop.hidden) {
+      const r = btn.getBoundingClientRect();
+      pop.style.position = 'fixed';
+      pop.style.top = (r.bottom + 6) + 'px';
+      pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
+      pop.style.left = 'auto';
     }
-    const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify(payload)});
-    if (!r.ok) throw new Error((await r.json()).detail || 'HTTP ' + r.status);
-    const blob = await r.blob();
-    const a = Object.assign(document.createElement('a'),
-      {href: URL.createObjectURL(blob), download: fmts.length === 1 && fmts[0] === 'bibtex' ? 'references.bib' : '论文导出.zip'});
-    a.click(); URL.revokeObjectURL(a.href);
-    toast(`已导出 ${ids.length} 篇`);
-    exportPop.hidden = true;
-  } catch (e) { toast('导出失败: ' + e.message); }
-  btn.disabled = false; btn.textContent = '⬇ 导出 ZIP';
+    return;
+  }
+  const zip = e.target.closest?.('#export-zip-btn');
+  if (zip) {
+    const scope = document.querySelector('input[name="exp-scope"]:checked')?.value || 'scope';
+    const ids = scope === 'sel'
+      ? libSelected(state._libScopeKey)
+      : (state._libScopePapers || []).map(p => p.id);
+    const fmts = $$('#export-pop input[data-fmt]').filter(x => x.checked).map(x => x.dataset.fmt);
+    if (!ids.length) { toast('当前范围没有论文'); return; }
+    if (!fmts.length) { toast('先勾选要导出的内容'); return; }
+    zip.disabled = true; zip.textContent = '打包中…';
+    try {
+      let url, payload;
+      if (fmts.length === 1 && fmts[0] === 'bibtex') {
+        url = '/api/papers/export/bibtex'; payload = {paper_ids: ids};   // 纯 BibTeX → 直接 .bib
+      } else {
+        url = '/api/papers/export-zip'; payload = {paper_ids: ids, fmts};
+      }
+      const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                  body: JSON.stringify(payload)});
+      if (!r.ok) throw new Error((await r.json()).detail || 'HTTP ' + r.status);
+      const blob = await r.blob();
+      const a = Object.assign(document.createElement('a'),
+        {href: URL.createObjectURL(blob), download: fmts.length === 1 && fmts[0] === 'bibtex' ? 'references.bib' : '论文导出.zip'});
+      a.click(); URL.revokeObjectURL(a.href);
+      toast(`已导出 ${ids.length} 篇`);
+      pop.hidden = true;
+    } catch (err) { toast('导出失败: ' + err.message); }
+    zip.disabled = false; zip.textContent = '⬇ 导出 ZIP';
+    return;
+  }
+  if (pop && !pop.hidden && !pop.contains(e.target) && !e.target.closest('#export-btn')) {
+    pop.hidden = true;
+  }
 });
 window.toggleColOpen = cid => {
   const s = JSON.parse(localStorage.getItem('ps-col-open') || '{}');

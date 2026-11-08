@@ -58,6 +58,7 @@ else
     ADMIN_PW=$(python3 -c "import secrets;print(secrets.token_urlsafe(9))")
     CLI_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(16))")
     RENDER_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(16))")
+    ACQUIRE_TOKEN=$(python3 -c "import secrets;print(secrets.token_hex(16))")
     sed -i "s|^SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|" .env
     sed -i "s|^FERNET_KEY=.*|FERNET_KEY=${FERNET_KEY}|" .env
     sed -i "s|^ADMIN_INITIAL_PASSWORD=.*|ADMIN_INITIAL_PASSWORD=${ADMIN_PW}|" .env
