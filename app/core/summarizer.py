@@ -69,6 +69,21 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
     if p is None or run is None:
         raise ValueError("论文尚未解析完成")
 
+    # 缓存命中：同 run+model+prompt 版本的导读直接复用（重复点击=重复全文 LLM 调用是纯浪费；
+    # 批量路径已有此判断，单篇路径补齐）
+    ck = compute_key(run["id"], cfg.model)
+    cached = db.one("SELECT id, content FROM summaries WHERE paper_id=? AND cache_key=? "
+                    "ORDER BY id DESC LIMIT 1", (paper_id, ck))
+    if cached:
+        try:
+            data = json.loads(cached["content"])
+            return cached["id"], {"sections": data.get("sections", {}),
+                                  "evidence": data.get("evidence", []),
+                                  "cite_map": data.get("cite_map", {}),
+                                  "model": cfg.model, "cached": True}
+        except Exception:  # noqa: BLE001 —— 缓存损坏则重新生成
+            pass
+
     paper = {"id": p["id"], "title": p["title"]}
     context, evidence, _ = _build_context("fulltext", [paper], "summary", user)
     from .llm import LLMClient

@@ -306,8 +306,18 @@ class Scheduler:
             f = snap["files"][0]
             status = f["status"]
             prog = snap.get("progress", {})
-            self._update(job["id"], progress_done=int(prog.get("completed", 0)),
-                         progress_total=int(prog.get("total", 1)))
+            # 进度节流：变化 <10% 且距上次 emit <15s 跳过（每 5s 一 UPDATE+SELECT+SSE 广播，
+            # 89 篇批量时前端 badge 又被每个事件触发拉全量 jobs——雪上加霜）
+            _new_d, _new_t = int(prog.get("completed", 0)), int(prog.get("total", 1))
+            _last = getattr(self, "_last_prog", {})
+            _key = (job["id"], "d")
+            _last_d, _last_ts = _last.get((job["id"], "d"), -1), _last.get((job["id"], "ts"), 0.0)
+            small = (_last_d >= 0 and _new_t > 0 and
+                     (_new_d - _last_d) / _new_t < 0.10 and time.time() - _last_ts < 15)
+            if not small:
+                _last[(job["id"], "d")] = _new_d
+                _last[(job["id"], "ts")] = time.time()
+                self._update(job["id"], progress_done=_new_d, progress_total=_new_t)
             if status == "completed":
                 break
             if status in ("failed", "canceled"):

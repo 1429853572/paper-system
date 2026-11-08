@@ -263,7 +263,7 @@ document.addEventListener('click', e => {
   const pop = $('#health-pop');
   if (pop && !pop.hidden && !pop.contains(e.target) && e.target.id !== 'health-dot') pop.hidden = true;
 });
-setInterval(pollHealth, 20000);
+setInterval(() => { if (!document.hidden) pollHealth(); }, 20000)   // 后台标签页暂停;
 
 /* ---------------- 文献库 ---------------- */
 state.collections = [];
@@ -877,15 +877,19 @@ async function openPaper(id) {
   state.citeStyle = localStorage.getItem('ps-cite-style') || 'gbt7714';
   state._metaEdit = false;   // 文献信息卡的内联编辑态
   state.showLayout = false; $('#layout-btn')?.classList.remove('on');   // 布局框不跨篇残留
-  refreshJobState();   // 先取完整标志
-  loadBilingual(id, false).then(() => {   // 翻译完成才默认双语；未完成/未开始停在原文
-    // 渲染只此一次（原先 openPaper 链路全量渲染 ×3：loadBilingual 内、then 内、下方直调）
-    if (state.translatedComplete && state.view === 'orig') switchView('read', 'bilingual');
-    else renderContentView();
+  // 懒加载双语：不再 openPaper 预拉全文对照（en+zh 300-500KB/次切论文，90% 场景只看 PDF/原文）。
+  // translated 标志由 refreshJobState（jobstate 接口）带回；真正切到双语/中文视图时才拉（见 switchView 钩子）。
+  state.pairs = [];           // 清上一篇残留，防串台
+  refreshJobState().then(() => {
+    if (state.translatedComplete && state.view === 'orig'
+        && (state.rpane.readingView || 'orig') === 'orig') {
+      // 有完整译文且用户无特定子视图偏好 → 默认进双语（懒拉在 switchView 内触发）
+      switchView('read', 'bilingual');
+    } else {
+      renderContentView();
+    }
     restorePos(id);
-  }).catch(() => {});
-  renderContentView();
-  refreshJobState();          // 解析/翻译控制按钮状态
+  }).catch(() => { renderContentView(); });
   // 问答 scope 跟随当前论文（用户显式多选了其他论文则保留）
   if (state.qaPapers.size <= 1) {
     state.qaPapers.clear(); state.qaPapers.add(id);
@@ -1215,6 +1219,7 @@ async function refreshJobState() {
     renderJobButtons(js);
     if (js.translating) watchTranslation();   // 进行中→自动轮询完成刷新
   } catch {}
+  return true;
 }
 async function parseCtrl() {
   const pid = state.current.id;
@@ -1278,6 +1283,11 @@ window.updateQaBtn = () => {
 };
 function switchView(v, s) {
   updateQaBtn();
+  // 双语懒加载：首次切到双语/中文且尚未拉取（openPaper 不再预拉），此时才取全文对照
+  if (v === 'read' && ['bilingual', 'zh'].includes(s) && state.current &&
+      !(state.pairs || []).length && state.translatedComplete) {
+    loadBilingual(state.current.id, true).catch(() => {});
+  }
   // v ∈ read|meta|assets|json；兼容 orig/bilingual/zh → read+子视图；qa → 聚焦问答框
   if (['orig', 'bilingual', 'zh'].includes(v)) { s = v; v = 'read'; }
   if (v === 'qa') { switchPage('reader'); $('#qa-text')?.focus(); return; }
@@ -1470,17 +1480,15 @@ async function refreshQueueBadge() {
   await _refreshQueueBadge();
 }
 async function _refreshQueueBadge() {
+  if (document.hidden) return;   // 后台标签页暂停轮询（回来时 visibilitychange 立即刷一次）
   try {
-    const d = await api('/api/jobs?limit=200');
-    const active = d.jobs.filter(j => ['queued', 'pending_gate', 'running'].includes(j.status));
-    let pend = [];
-    try { pend = (await api('/api/mcp/pending')).pending; } catch { /* 忽略 */ }
-    const btn = document.querySelector('.topnav button[data-page="tasks"]'), badge = $('#qbadge');
+    // 轻量计数端点（两个数字）——原先拉全量 ?limit=200（~70KB）只为数个数
+    const d = await api('/api/jobs/count');
+    const badge = $('#qbadge');
     if (badge) {
-      badge.hidden = !(active.length + pend.length);
-      badge.textContent = active.length + pend.length;
+      badge.hidden = !(d.active + d.mcp_pending);
+      badge.textContent = d.active + d.mcp_pending;
     }
-    // 批量中心打开时：任务区随事件实时刷新
     if (($('#page-tasks')?.style.display !== 'none' || $('#page-batch')?.style.display !== 'none')
         && Date.now() - _batchSseAt > 2000) {
       _batchSseAt = Date.now();
@@ -1489,6 +1497,7 @@ async function _refreshQueueBadge() {
     }
   } catch {}
 }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshQueueBadge(); });
 window.retryJob = async id => { await api(`/api/jobs/${id}/retry`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); };
 window.cancelJob = async id => { await api(`/api/jobs/${id}/cancel`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); };
 window.mcpConfirm = async (id, approve) => {
@@ -2400,7 +2409,8 @@ async function renderBatchJobs(bid, box) {
 
 async function renderSynJob(sid, box) {
   let s = null;
-  try { s = (await api('/api/syntheses/' + encodeURIComponent(sid))).synthesis; } catch { /* ignore */ }
+  // 轻量 progress 端点（六字段）——detail 全量行含 report_md/evidence 0.2-0.7MB
+  try { s = (await api('/api/syntheses/' + encodeURIComponent(sid) + '/progress')).synthesis; } catch { /* ignore */ }
   if (!s) { box.innerHTML = '<p class="muted" style="padding:6px">综述记录不存在（可能已删除）</p>'; return; }
   const stageTxt = {cluster: '聚类分组', group: '组内精读比对', final: '跨组综合'}[s.stage] || s.stage;
   const stTxt = {done: '完成', failed: '失败', running: '进行中', needs_fix: '引用需修复'}[s.status] || s.status;

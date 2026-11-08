@@ -340,13 +340,22 @@ def finish_parse_run(paper_id: str, run_id: str, ok: bool, error: str = "") -> N
             c.execute("UPDATE jobs SET error=? WHERE paper_id=? AND job_type='parse'", (error, paper_id))
 
 
-def latest_blocks(paper_id: str) -> list[sqlite3.Row]:  # noqa: F821
+def latest_blocks(paper_id: str, offset: int = 0, limit: int = 0) -> list[sqlite3.Row]:  # noqa: F821
+    """最新 done run 的块（可选 SQL 分页）。
+
+    分页下推：原先全量 SELECT 再由调用方 Python 切片——800 块论文滚动加载
+    20 批 = 20 次全量读（O(N²) 读放大）。LIMIT/OFFSET 走
+    (parse_run_id, page_index) 排序路径，每批只读所需行。
+    """
     run = db.one(
         "SELECT id FROM parse_runs WHERE paper_id=? AND status='done' ORDER BY created_at DESC LIMIT 1",
         (paper_id,),
     )
     if run is None:
         return []
-    return db.all(
-        "SELECT * FROM blocks WHERE parse_run_id=? ORDER BY page_index, block_index", (run["id"],)
-    )
+    sql = "SELECT * FROM blocks WHERE parse_run_id=? ORDER BY page_index, block_index"
+    args: tuple = (run["id"],)
+    if limit:
+        sql += " LIMIT ? OFFSET ?"
+        args = (run["id"], int(limit), max(0, int(offset)))
+    return db.all(sql, args)

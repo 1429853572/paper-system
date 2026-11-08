@@ -163,9 +163,14 @@ def _shutdown() -> None:
 
 
 # ---------------- 健康与配置自检 ----------------
+_health_cache: list = [0.0, None]   # [ts, payload]——每标签页 20s 轮询 × 两个上游探测（10s+5s 超时）
+
 @app.get("/api/health")
 def health():
-    # 本地 AI 服务（xinference：embedding + rerank）
+    # 30s 服务端缓存：上游探测贵（mineru /health 10s 超时 + embedding 5s），多标签页轮询放大
+    now = time.time()
+    if _health_cache[1] and now - _health_cache[0] < 30:
+        return _health_cache[1]
     ai_ok = False
     models: list[str] = []
     try:
@@ -177,8 +182,10 @@ def health():
             ai_ok = any("bge-m3" in m for m in models)
     except Exception:  # noqa: BLE001
         pass
-    return {"db": True, "mineru": mineru.healthy(), "ai": ai_ok, "models": models,
-            "trash_days": int(config.get("retention", "trash_days"))}
+    payload = {"db": True, "mineru": mineru.healthy(), "ai": ai_ok, "models": models,
+               "trash_days": int(config.get("retention", "trash_days"))}
+    _health_cache[:] = [now, payload]
+    return payload
 
 
 # ---------------- 登录/注册 ----------------
@@ -505,7 +512,11 @@ def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
     cond = "deleted_at IS NULL" if not trash else "deleted_at IS NOT NULL"
     limit = max(1, min(500, page_size or 500))
     offset = max(0, (page - 1)) * limit if page else 0
-    rows = db.all(f"SELECT * FROM papers WHERE {cond}{vis} ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}",
+    # 列表裁剪：abstract/keywords/file_hash 前端列表不用（详情页返回），
+    # 89 篇 × abstract 1-2KB ≈ 90% 传输浪费
+    rows = db.all(f"SELECT id,owner_id,visibility,title,authors,year,page_count,file_size,"
+                  f"parse_status,collection_id,journal,created_at,deleted_at "
+                  f"FROM papers WHERE {cond}{vis} ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}",
                   tuple(args))
     return {"papers": [dict(r) for r in rows], "page": page, "has_more": len(rows) == limit}
 
@@ -521,12 +532,23 @@ def paper_detail(paper_id: str, request: Request, offset: int = 0, limit: int = 
     if p is None or p["deleted_at"]:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
-    blocks = ingest.latest_blocks(paper_id)
-    total = len(blocks)
+    # SQL 分页（分页时 total 用 COUNT 单独取，块只读所需行——原先全量读再 Python 切片）
     if limit:
-        blocks = blocks[offset:offset + limit]
+        blocks = ingest.latest_blocks(paper_id, offset=offset, limit=limit)
+        total = _blocks_count(paper_id)
+    else:
+        blocks = ingest.latest_blocks(paper_id)
+        total = len(blocks)
     return {"paper": dict(p), "blocks": [dict(b) for b in blocks],
             "total": total, "offset": offset, "limit": limit}
+
+
+def _blocks_count(paper_id: str) -> int:
+    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
+                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    if run is None:
+        return 0
+    return db.one("SELECT COUNT(*) AS n FROM blocks WHERE parse_run_id=?", (run["id"],))["n"]
 
 
 def _require_visible(u: dict, paper) -> None:
@@ -666,9 +688,14 @@ def list_jobs(request: Request, status: str = "", job_type: str = "",
     if batch_id:
         cond += " AND j.batch_id=?"
         args.append(batch_id)
+    # 列裁剪：payload（synthesis 任务可达数 KB）与 remote_task_id 前端不用；
+    # synthesis 任务把 synthesis_id 从 payload 提取为独立字段（前端渲染综述行用）
     rows = db.all(
-        "SELECT j.*, u.username, p.title FROM jobs j "
-        "LEFT JOIN users u ON u.id=j.user_id LEFT JOIN papers p ON p.id=j.paper_id "
+        "SELECT j.id, j.user_id, j.job_type, j.paper_id, j.batch_id, j.priority, j.status, "
+        "j.progress_done, j.progress_total, j.error, j.created_at, j.updated_at, "
+        "u.username, p.title, json_extract(j.payload, '$.synthesis_id') AS synthesis_id "
+        "FROM jobs j LEFT JOIN users u ON u.id=j.user_id "
+        "LEFT JOIN papers p ON p.id=j.paper_id "
         f"WHERE 1=1{cond} ORDER BY j.updated_at DESC LIMIT {int(limit)}",
         tuple(args),
     )
@@ -903,7 +930,11 @@ def _own_synthesis(u: dict, sid: str):
 def get_synthesis(sid: str, request: Request):
     u = require(request)
     row = _own_synthesis(u, sid)
-    return {"synthesis": dict(row)}
+    d = dict(row)
+    # 大列不下发：cluster_data 仅 rewrite 服务端用（直读库）；matrix_csv 有独立 export 端点
+    d.pop("cluster_data", None)
+    d.pop("matrix_csv", None)
+    return {"synthesis": d}
 
 
 @app.post("/api/syntheses/{sid}/rewrite")
@@ -958,6 +989,20 @@ def delete_synthesis(sid: str, request: Request):
     return {"ok": True}
 
 
+@app.get("/api/syntheses/{sid}/progress")
+def synthesis_progress(sid: str, request: Request):
+    """进度轮询专用（仅六字段）——综述运行期 2~6s 一拉，
+    detail 全量行含 report_md/evidence/cite_table（0.2~0.7MB），轮询用它纯属浪费。"""
+    u = require(request)
+    row = db.one("SELECT id,user_id FROM syntheses WHERE id=?", (sid,))
+    if row is None:
+        raise HTTPException(404, "综述不存在")
+    if u["role"] != "admin" and row["user_id"] != u["id"]:
+        raise HTTPException(403, "无权访问他人综述")
+    r = db.one("SELECT status,stage,progress_done,progress_total,error FROM syntheses WHERE id=?", (sid,))
+    return {"synthesis": dict(r)}
+
+
 @app.get("/api/syntheses/{sid}/export")
 def export_synthesis(sid: str, request: Request, fmt: str = "md"):
     u = require(request)
@@ -976,6 +1021,24 @@ def export_synthesis(sid: str, request: Request, fmt: str = "md"):
     return Response(content=data, media_type=media,
                     headers={"Content-Disposition":
                              f"attachment; filename=\"{fname}\"; filename*=UTF-8''{quote(fname)}"})
+
+
+@app.get("/api/jobs/count")
+def jobs_count(request: Request):
+    """badge 轮询专用：只回 {active, mcp_pending} 两个数字。
+    原 ?limit=200 每次拉全量（~70KB）只为数个数，空闲单页 ≈8.6MB/h。"""
+    u = require(request)
+    scope = "" if u["role"] == "admin" else " AND user_id=?"
+    args = () if u["role"] == "admin" else (u["id"],)
+    n = db.one(f"SELECT COUNT(*) AS n FROM jobs WHERE status IN "
+               f"('queued','pending_gate','running'){scope}", args)["n"]
+    pend = 0
+    try:
+        from core import mcpserver
+        pend = len(mcpserver.pending_for(u["id"]))
+    except Exception:  # noqa: BLE001
+        pass
+    return {"active": n, "mcp_pending": pend}
 
 
 @app.get("/api/jobs/stream")
@@ -1376,10 +1439,18 @@ def paper_assets(paper_id: str, request: Request):
                  "ORDER BY created_at DESC LIMIT 1", (paper_id,))
     if run is None:
         return {"figures": [], "tables": [], "formulas": []}
-    mf = ingest.PAPERS_DIR / paper_id / "parse" / run["id"] / "middle_json.json"
+    parse_dir = ingest.PAPERS_DIR / paper_id / "parse" / run["id"]
+    mf = parse_dir / "middle_json.json"
     if not mf.exists():
         return {"figures": [], "tables": [], "formulas": []}
     import json as _json
+    # 物化清单优先：解析完成时已归并好（middle_json 144KB/篇，每次 openPaper 重读+重算归并浪费）
+    cached = parse_dir / "assets.json"
+    if cached.exists():
+        try:
+            return _json.loads(cached.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 —— 清单损坏回退现算
+            pass
     middle = _json.loads(mf.read_text(encoding="utf-8"))
 
     def _flat_text(content) -> str:
@@ -1510,7 +1581,12 @@ def paper_assets(paper_id: str, request: Request):
             "SELECT block_id, page_index, text FROM blocks WHERE parse_run_id=? AND type='equation' "
             "AND TRIM(text)<>'' ORDER BY page_index, block_index", (run_id,))
     ]
-    return {"figures": figures, "tables": tables, "formulas": formulas}
+    result = {"figures": figures, "tables": tables, "formulas": formulas}
+    try:   # 懒物化：算一次写盘，后续请求直接读清单
+        cached.write_text(_json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except Exception:  # noqa: BLE001 —— 只读文件系统等场景静默跳过
+        pass
+    return result
 
 
 # ---------------- 文献信息（管理器式） ----------------
@@ -2326,7 +2402,8 @@ async def batch_delete_papers(request: Request):
     u = require(request)
     body = await request.json()
     ids = [x for x in (body.get("paper_ids") or [])][:100]
-    n = 0
+    # 先校验+取消远程任务，再单事务批量软删（原先每篇 2-3 个独立事务：写锁+fsync ×N）
+    todo, titles = [], []
     for pid in ids:
         p = db.one("SELECT id, title, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
         if p is None:
@@ -2337,14 +2414,20 @@ async def batch_delete_papers(request: Request):
         for j in db.all("SELECT * FROM jobs WHERE paper_id=? AND status IN ('queued','pending_gate','running')", (pid,)):
             if j["remote_task_id"]:
                 mineru.cancel(j["remote_task_id"])
-            with db.write() as c:
-                c.execute("UPDATE jobs SET status='canceled' WHERE id=?", (j["id"],))
+        todo.append(pid)
+        titles.append(p["title"])
+    if todo:
+        marks = ",".join("?" * len(todo))
         with db.write() as c:
-            c.execute("UPDATE papers SET deleted_at=datetime('now') WHERE id=?", (pid,))
-            c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (pid,))
-        audit(u["id"], "batch-delete", p["title"])
-        n += 1
-    return {"ok": True, "count": n}
+            c.execute(f"UPDATE jobs SET status='canceled' WHERE paper_id IN ({marks}) "
+                      "AND status IN ('queued','pending_gate','running')", tuple(todo))
+            c.execute(f"UPDATE papers SET deleted_at=datetime('now') WHERE id IN ({marks})", tuple(todo))
+            c.execute(f"DELETE FROM chunks_fts WHERE paper_id IN ({marks})", tuple(todo))
+        for t in titles:
+            audit(u["id"], "batch-delete", t)
+        from core.retrieval import invalidate_vec_cache
+        invalidate_vec_cache()
+    return {"ok": True, "count": len(todo)}
 
 
 @app.post("/api/trash/empty")

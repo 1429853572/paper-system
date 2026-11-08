@@ -383,6 +383,13 @@ class Database:
             # 批量中心进度面板按批次聚合
             c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_batch "
                       "ON jobs(batch_id) WHERE batch_id IS NOT NULL")
+            # 高频点查/排序索引（审计：parse_runs 按 paper 查 done run、summaries 按篇取最新、
+            # jobs 列表按 updated_at 排序原先全表扫+sort）
+            c.execute("CREATE INDEX IF NOT EXISTS idx_parse_runs_paper "
+                      "ON parse_runs(paper_id, status)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_summaries_paper "
+                      "ON summaries(paper_id, created_at DESC)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at DESC)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_llm_calls_paper "
                       "ON llm_calls(paper_id)")
             # WAL 常开

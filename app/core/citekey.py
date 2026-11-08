@@ -82,8 +82,8 @@ def build_table(paper_rows: list[dict], api_check: bool = True,
         if api_check and not p.get("meta_verified_at"):
             try:
                 from .meta import verify_meta_online
-                r = verify_meta_online(p["id"], apply=False)
-                api_hit = bool(r.get("verified"))
+                r = verify_meta_online(p["id"], apply=True)   # apply=True：命中即回写
+                api_hit = bool(r.get("verified"))             # meta_verified_at 落库，二次免费
             except Exception:  # noqa: BLE001 —— 核验失败按本地证据分级，不阻塞建表
                 pass
             if progress_cb:

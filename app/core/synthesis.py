@@ -300,7 +300,16 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
         tier = pr.get("tier") or "quick"
         style = pr.get("style") or "author_year"
         from . import citekey as ck
-        table = ck.build_table(paper_rows, api_check=(tier != "quick"))
+        # rewrite 复用冻结键表（与 cluster_data 同款）——否则每次换框架重写
+        # 都对全部未核验论文重打外网核验（90 篇最多 270 次串行请求）
+        table = None
+        if pr.get("rewrite"):
+            try:
+                table = json.loads(row["cite_table"] or "null")
+            except Exception:  # noqa: BLE001
+                table = None
+        if not table:
+            table = ck.build_table(paper_rows, api_check=(tier != "quick"))
         citable = ck.citable_entries(table)
         uncited_allowed = ck.need_manual(table)
         key_lines = [f"- {e['key']} = 《{str(e['title'])[:44]}》" for e in citable]
