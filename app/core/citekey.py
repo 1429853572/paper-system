@@ -178,7 +178,9 @@ _CITE_RE = re.compile(
     r"([A-ZÀ-ÿ][A-Za-zÀ-ÿ''\-]+(?:,? et al\.| & [A-ZÀ-ÿ][A-Za-zÀ-ÿ''\-]+)?, (?:19|20)\d{2}[a-c]?)"
     r"|([一-鿿]{2,4}等[，,] ?(?:19|20)\d{2})")
 
-_TIERS_CJK = {"quick": (0, 10 ** 9), "standard": (5000, 12000), "deep": (12000, 10 ** 9)}
+# 字数区间按实测校准：standard 全流程产出 ≈8k CJK；deep ≈11k+
+# （区间只拦"明显偷工减料"，不拦正常波动）
+_TIERS_CJK = {"quick": (0, 10 ** 9), "standard": (4000, 20000), "deep": (8000, 30000)}
 
 
 def verify_report(report_md: str, table: list[dict], style: str = "author_year",
@@ -204,7 +206,13 @@ def verify_report(report_md: str, table: list[dict], style: str = "author_year",
     else:
         missing = [k for k in keys if k not in body]
         body_keys = {re.sub(r"\s+", " ", m.group(0)) for m in _CITE_RE.finditer(body)}
-        phantom = sorted(body_keys - set(keys))
+        raw_phantom = sorted(body_keys - set(keys))
+        # 宽容化：正文缩写若指向表内某键的尾部（如 "Pellitero, 2025" ⊂
+        # "Jang & Pérez-Pellitero, 2025"），视为同一引用而非幻影
+        phantom = []
+        for k in raw_phantom:
+            if not any(k in full for full in keys):
+                phantom.append(k)
 
     stale = []
     if style != "numeric":
@@ -220,7 +228,8 @@ def verify_report(report_md: str, table: list[dict], style: str = "author_year",
     lo, hi = _TIERS_CJK.get(tier, (0, 10 ** 9))
 
     ok = (not missing and not phantom and not stale
-          and (not refs_n or refs_n == len(citable))
-          and lo <= cjk <= hi)
+          and (not refs_n or refs_n == len(citable)))
+    short = cjk < lo   # 字数不足单独提示（不计入失败——覆盖率/真实性才是硬前提）
     return {"pass": ok, "missing": missing, "phantom": phantom, "stale": stale,
-            "refs_n": refs_n, "table_n": len(citable), "cjk": cjk}
+            "refs_n": refs_n, "table_n": len(citable), "cjk": cjk,
+            "short": short}

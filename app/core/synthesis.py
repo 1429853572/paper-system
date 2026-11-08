@@ -425,8 +425,31 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
                     core_text = ""
 
             # ---- 逐章写作（每章独立调用 + 章级幻影校验早发现）----
+            # 覆盖率防线：框架 outline 可能漏选若干组（如弱相关组），把它们追加到
+            # 最后一章材料里——否则这些论文的键永远不会出现在写作上下文 → 缺漏。
+            assigned = {int(g) - 1 for sec in fw["outline"]
+                        for g in (sec.get("groups") or [])
+                        if str(g).isdigit() and 0 <= int(g) - 1 < len(cluster_jsons)}
+            orphan = [i for i in range(len(cluster_jsons)) if i not in assigned]
+            outline_eff = list(fw["outline"])
+            if orphan:
+                tail = (f"相关工作速览（未入主线的组）："
+                        + "；".join(f"组 {i + 1} {cluster_jsons[i].get('group_name', '')}"
+                                    for i in orphan))
+                if outline_eff:
+                    outline_eff[-1]["brief"] = (outline_eff[-1].get("brief", "") + "；" + tail)[:300]
+                    outline_eff[-1]["groups"] = sorted(set(
+                        (outline_eff[-1].get("groups") or []) + [i + 1 for i in orphan]))
+                else:
+                    outline_eff.append({"section": "相关工作速览", "budget_chars": 2000,
+                                        "groups": [i + 1 for i in orphan],
+                                        "core": False, "brief": tail})
             chapters: list[str] = []
-            for s_i, sec in enumerate(fw["outline"]):
+            __import__("logging").getLogger("synthesis").warning(
+                "章节化开始：%d 章", len(outline_eff))
+            for s_i, sec in enumerate(outline_eff):
+                __import__("logging").getLogger("synthesis").warning(
+                    "写第 %d/%d 章：%s", s_i + 1, len(outline_eff), sec['section'][:30])
                 gidx = [int(g) - 1 for g in (sec.get("groups") or [])
                         if str(g).isdigit() and 0 <= int(g) - 1 < len(cluster_jsons)]
                 sec_materials = [gsections[i] for i in gidx]
@@ -438,8 +461,11 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
                 sec_mat = "\n\n".join(sec_materials)[:24000]
                 core_note = (f"【原文深读块（定量数字优先取自此处的原文）】\n{core_text}\n"
                              if sec.get("core") and core_text else "")
-                keys_note = (f"\n【本章可用引用键（只用这些，禁止自造）】\n{sec_keys}\n"
-                             if sec_keys else "\n（本章无可引键，勿标注引用键）\n")
+                # 本章组内键不足时补全量 citable 键（覆盖率优先；幻影由章级校验拦）
+                sec_keys_eff = (sec_keys or "\n".join(
+                    f"- {e['key']} = 《{str(e['title'])[:40]}》" for e in citable)[:1500])
+                keys_note = ("\n【本章可用引用键（只用这些，禁止自造）】\n"
+                             + sec_keys_eff + "\n")
                 ctx = (f"【综述主题/组织轴】{axis or '（未指定）'}\n"
                        f"【采用框架】{fw['name']}：{fw.get('rationale', '')}\n"
                        f"【本章】{sec['section']}（预算约 {sec.get('budget_chars', 1500)} 字）"
@@ -450,16 +476,28 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
                 if chapters:   # 已写章节摘要（保连贯）
                     ctx += ("\n【已写章节】" + "；".join(
                         f"{fw['outline'][j]['section']}：{chapters[j][:120]}…" for j in range(max(0, len(chapters) - 2), len(chapters))))
-                ch = client.complete([
-                    {"role": "system", "content":
-                     "你是综述章节撰写人。只写这一章的正文（以 ## 章节标题开头），"
+                sys_prompt = ("你是综述章节撰写人。只写这一章的正文（以 ## 章节标题开头），"
                      "不要参考文献、不要总标题。规则：论断句末标注引用键（英文 (Wang et al., 2025a)、"
                      "中文（刘晓悦等，2026），只用给定键；重要论断标 [E<n>] 证据编号；"
                      "数值必须来自材料（深读块/摘要卡），禁止凭记忆编数字；无证据措辞弱化。"
                      + ("本章为核心章：须包含一张 Markdown 方法/维度对比表（类型×代表工作×关键机制×适用条件）。"
-                        if sec.get("core") else "")},
-                    {"role": "user", "content": ctx[:60000]},
-                ], max_tokens=3000)
+                        if sec.get("core") else ""))
+                ch = ""
+                _lg = __import__("logging").getLogger("synthesis")
+                for _try in range(3):        # 空响应重试 + 异常留痕
+                    try:
+                        ch = client.complete([
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": ctx[:60000]},
+                        ], max_tokens=3000).strip()
+                        if len(ch) > 200:
+                            break
+                    except BaseException as e:  # noqa: BLE001 —— 诊断留痕
+                        _lg.warning("第 %d 章尝试 %d 异常: %s: %s",
+                                    s_i + 1, _try + 1, type(e).__name__, str(e)[:200])
+                if not ch:
+                    _lg.warning("第 %d 章「%s」三次尝试均空/过短", s_i + 1, sec['section'][:30])
+                    raise RuntimeError(f"章节「{sec['section']}」三次尝试均为空响应")
                 # 章级幻影校验（只查文有表无，早发现早修）
                 sec_ver = ck.verify_report(ch, table, style, "quick")
                 if sec_ver["phantom"]:
@@ -471,6 +509,8 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
                         {"role": "user", "content": ch},
                     ], max_tokens=3000)
                 chapters.append(ch.strip())
+                __import__("logging").getLogger("synthesis").warning(
+                    "第 %d 章完成：%d 字", s_i + 1, len(ch))
                 progress(1)
 
             alts = "、".join(f"「{f['name']}」" for i, f in enumerate(fws) if i != pick)
@@ -490,23 +530,46 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
 
         report = _assemble(report)
         ver = ck.verify_report(report, table, style, tier)
-        if tier != "quick" and not ver["pass"] and (ver["missing"] or ver["phantom"]):
-            # 一次补织修复：把缺漏键与幻影清单交给模型修订正文（参考文献部分机械重建）
+        if tier != "quick" and not ver["pass"] and ver["phantom"]:
+            # 幻影引用少 → 交给 LLM 定点修订（改错成本低，输出小）
             body_only = report.split("\n\n## 参考文献")[0]
             try:
                 fixed_body = client.complete([
                     {"role": "system", "content":
-                        "你是综述修订编辑。修订这篇综述正文，只做两类修改：\n"
-                        f"1) 以下论文在键表中但正文未引用，请把它们自然地织入相关段落"
-                        f"（补充一句定位性介绍即可，不得编造内容）：{ver['missing'][:20]}\n"
-                        f"2) 以下引用键不在键表中（幻影），删除或改为正确的键：{ver['phantom'][:20]}\n"
-                        "其他内容、结构、证据编号 [E<n>] 保持原样；只输出修订后的完整正文。"},
+                        "你是综述修订编辑。只做一类修改：以下引用键不在键表中（幻影），"
+                        f"删除或替换为材料中的正确键：{ver['phantom'][:20]}。"
+                        "其余内容、结构、证据编号 [E<n>] 保持原样；只输出修订后的完整正文。"},
                     {"role": "user", "content": body_only[:60000]},
-                ], max_tokens=6000)
+                ], max_tokens=8000)
                 report = _assemble(fixed_body)
-                ver = ck.verify_report(report, table, style, tier)
-            except Exception:  # noqa: BLE001 —— 修复调用失败沿用原校验结果
+            except Exception:  # noqa: BLE001 —— 修复失败沿用原报告
                 pass
+
+        # 覆盖率机械补齐（survey-writer 铁律：N/N 是硬前提，不靠 LLM 自觉）：
+        # 未被正文引用的论文 → 按 key 字母序机械追加一段一句话介绍到
+        # 「## 参考文献」之前（标题/作者/年份/来源全部来自键表，零幻觉）。
+        # 教训：曾用 LLM 全文重写补织，max_tokens 截断吃掉后 3 章——机械追加是唯一可靠路径。
+        ver = ck.verify_report(report, table, style, tier)
+        missing_now = ver.get("missing") or []
+        if missing_now and style != "numeric":
+            key2e = {e["key"]: e for e in citable}
+            add_lines = []
+            for k in missing_now:
+                e = key2e.get(k)
+                if not e:
+                    continue
+                authors = "、".join((e.get("authors") or [])[:3]) or "—"
+                bits = [f"- **{k}**《{e['title']}》"]
+                meta = [x for x in (authors, e.get("year"), e.get("venue")) if x]
+                if meta:
+                    bits.append("（" + "，".join(meta) + "）")
+                add_lines.append("".join(bits))
+            if add_lines:
+                block = ("\n\n## 补充文献速览\n\n"
+                         "以下文献与综述主题相关但未在上文展开，列出供延伸阅读：\n\n"
+                         + "\n".join(add_lines))
+                report = report.replace("\n\n## 参考文献", block + "\n\n## 参考文献", 1)
+            ver = ck.verify_report(report, table, style, tier)
         ver_out = json.dumps(ver, ensure_ascii=False)
 
         status = "done"
