@@ -563,7 +563,7 @@ $('#ident-btn').onclick = async () => {
     if (nopdf) msg += `，${nopdf} 篇无公开 PDF`;
     if (nf) msg += `，${nf} 条未识别`;
     toast(msg, 4000);
-    if (q) { ta.value = ''; upPop.hidden = true; await refreshLib(); }
+    if (q) { ta.value = ''; upPop.hidden = true; await loadCollections(); await refreshLib(); }
   } catch (e) { toast('导入失败: ' + e.message); }
   btn.disabled = false; btn.textContent = '导入';
 };
@@ -2581,6 +2581,7 @@ setInterval(() => {
 }, 6000);
 
 let _batchSseAt = 0;
+let _sidebarAt = 0;   // 侧栏计数节流（上传/导入高峰每篇都会 +1）
 
 /* ---------------- 找相关（Semantic Scholar 三模式排卡，llm-for-zotero /discover_related 式） ----
    推荐/参考文献/引证三页签；勾选一键导入（DOI/标题自动查重，无公开 PDF 不可导）。 */
@@ -2711,6 +2712,11 @@ async function watchJobs() {
       loadPapers();
     }
     if (ev.job_type === 'parse' && (ev.status === 'done' || ev.status === 'failed')) {
+      // 侧栏计数节流刷新（导入/上传高峰期数字跟着跳，不用手动刷新页面）
+      if (Date.now() - _sidebarAt > 3000) {
+        _sidebarAt = Date.now();
+        loadCollections().catch(() => {});
+      }
       api('/api/papers').then(d => {
         state.qaAllPapers = d.papers;
         if (state.view === 'qa') {
