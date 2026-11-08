@@ -1978,8 +1978,10 @@ function syncBpCount() {
 
 /* 未圈定 → 操作卡置灰（点击仍给引导 toast，不真禁用） */
 function updateBatchOpsState() {
+  // 采集/专题是独立入口（自带检索），不随圈定状态置灰
   $$('#page-batch .batch-card').forEach(c =>
-    c.classList.toggle('off', !state.selected.size));
+    c.classList.toggle('off', !state.selected.size &&
+      !['acquire', 'topics'].includes(c.dataset.act)));
 }
 
 async function runBatchAction(act, anchor) {
@@ -4323,14 +4325,60 @@ window.libOpenLib = cid => {          // 第一层点库 → 进第二层
   renderCollectionsPage();
 };
 
+/* 文库管理顶部工具条（第一/第二层共用：标题/搜索/新建库/导出弹层） */
+function libMgrToolbarHtml(d) {
+  return `
+    <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <h2 style="margin:0;flex:1">文献库管理</h2>
+      <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:200px" value="${esc(state.libQuery)}">
+      <input id="newlib-name" placeholder="新库名称" style="max-width:150px">
+      <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 新建库</button>
+      <button class="btn" id="export-btn" title="批量导出当前范围/勾选的论文">⬇ 导出</button>
+      <div class="tool-pop export-pop" id="export-pop" hidden>
+        <div class="tp-label">范围</div>
+        <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+          <input type="radio" name="exp-scope" value="scope" style="width:auto" checked> 当前范围（<span id="exp-scope-n">0</span> 篇，含子库）</label>
+        <label class="tp-item" id="exp-sel-item" style="display:flex;gap:8px;align-items:center;cursor:pointer" hidden>
+          <input type="radio" name="exp-scope" value="sel" style="width:auto"> 勾选的 <span id="exp-sel-n">0</span> 篇</label>
+        <div class="tp-sep"></div>
+        <div class="tp-label">内容</div>
+        <div class="dl-checks">
+          <label><input type="checkbox" data-fmt="pdf" checked> 原始 PDF</label>
+          <label><input type="checkbox" data-fmt="md" checked> 原文 MD</label>
+          <label><input type="checkbox" data-fmt="bilingual_md"> 中英对照 MD</label>
+          <label><input type="checkbox" data-fmt="bilingual_pdf"> 对照 PDF（逐篇渲染较慢）</label>
+          <label><input type="checkbox" data-fmt="bibtex"> BibTeX</label>
+        </div>
+        <button class="btn small primary" id="export-zip-btn" style="margin:8px 0 4px">⬇ 导出 ZIP</button>
+      </div>
+    </div>`;
+}
+
+function bindLibMgrToolbar() {
+  const qIn = $('#lib-mgr-q');
+  if (qIn) {
+    qIn.oninput = e => {
+      state.libQuery = e.target.value;
+      clearTimeout(state._libQTimer);
+      state._libQTimer = setTimeout(async () => {
+        if (state.libLevel === 1) { renderCollectionsPage(); }
+        else { await renderCollectionsPage(); }
+        const n = $('#lib-mgr-q');
+        if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
+      }, 300);
+    };
+  }
+}
+
 async function renderCollectionsPage(preset = null) {
   const d = preset || await api('/api/collections');
   state.collections = d.collections;
   state.totalPapers = d.total;
   state._statuses = (await api('/api/statuses')).statuses;
   const el = $('#page-collections');
-  if (state.libLevel === 1) {           // 第一层：库列表
-    el.innerHTML = libLevel1Html(d);
+  if (state.libLevel === 1) {           // 第一层：库列表（顶部工具条与第二层同一套，含新建库/搜索/导出）
+    el.innerHTML = libMgrToolbarHtml(d) + libLevel1Html(d);
+    bindLibMgrToolbar();
     bindLibLevel1();
     return;
   }
@@ -4388,13 +4436,7 @@ async function renderCollectionsPage(preset = null) {
   // ---- 组装 ----
   const selName = sel ? (d.collections.find(c => c.id === sel)?.name || '') : '';
   const selNameArg = selName.replace(/'/g, "\\'");   // 塞进内联 onclick 的单引号参数
-  el.innerHTML = `
-    <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <h2 style="margin:0;flex:1">文献库管理</h2>
-      <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:200px" value="${esc(state.libQuery)}">
-      <input id="newlib-name" placeholder="新库名称" style="max-width:150px">
-      <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 新建库</button>
-      <button class="btn" id="export-btn" title="批量导出当前范围/勾选的论文">⬇ 导出</button>
+  el.innerHTML = libMgrToolbarHtml(d) + `
       <div class="tool-pop export-pop" id="export-pop" hidden>
         <div class="tp-label">范围</div>
         <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
