@@ -121,11 +121,6 @@ def attach_papers(task_id: str, paper_ids: list[str]) -> None:
     update(task_id, paper_ids=ids)
 
 
-def task_of_paper(paper_id: str) -> str | None:
-    row = db.one("SELECT acq_task_id FROM papers WHERE id=?", (paper_id,))
-    return row["acq_task_id"] if row else None
-
-
 def all_parsed(paper_ids: list[str]) -> bool:
     """全部论文解析完成（综述的前置条件）。"""
     if not paper_ids:

@@ -357,6 +357,12 @@ def _quota_overrides(user_id: int) -> dict:
     return json.loads(row["overrides"]) if row and row["overrides"] else {}
 
 
+# 活跃任务状态字面量（原散落 12 处，语义改动时是隐患点）
+_ACTIVE_JOBS = "('queued','pending_gate','running')"
+# 每日解析配额的计数口径：在途 + 今日已完成
+_PARSE_COUNTED = "('queued','pending_gate','running','done')"
+
+
 def _daily_parse_limit(is_admin: bool, overrides: dict) -> int:
     """今日解析上限：admin 用全站上限，member 用个人覆盖或全局默认。"""
     limit = overrides.get("daily_parse_papers")
@@ -367,24 +373,50 @@ def _daily_parse_limit(is_admin: bool, overrides: dict) -> int:
     return int(limit)
 
 
-def _check_daily_quota(user_id: int, is_admin: bool, overrides: dict) -> None:
-    limit = _daily_parse_limit(is_admin, overrides)
-    today = db.one(
+def _parse_used_today(user_id: int) -> int:
+    """今日解析计数（_check_daily_quota 与 /api/me/quota 同口径共用）。"""
+    return db.one(
         "SELECT COUNT(*) AS n FROM jobs WHERE user_id=? AND job_type='parse' "
-        "AND status IN ('queued','pending_gate','running','done') "
+        f"AND status IN {_PARSE_COUNTED} "
         "AND date(created_at)=date('now')",
         (user_id,),
-    )
-    if today and today["n"] >= limit:
+    )["n"]
+
+
+def _disk_used(owner_id: int) -> int:
+    return db.one("SELECT COALESCE(SUM(file_size),0) AS b FROM papers "
+                  "WHERE owner_id=? AND deleted_at IS NULL", (owner_id,))["b"]
+
+
+def _tokens_30d(user_id: int) -> int:
+    return db.one("SELECT COALESCE(SUM(prompt_tokens+completion_tokens),0) AS t FROM llm_calls "
+                  "WHERE user_id=? AND created_at>=date('now','-30 day')", (user_id,))["t"]
+
+
+def _check_daily_quota(user_id: int, is_admin: bool, overrides: dict) -> None:
+    limit = _daily_parse_limit(is_admin, overrides)
+    if _parse_used_today(user_id) >= limit:
         raise HTTPException(429, f"今日解析已达上限 {limit} 篇")
+
+
+def _enforce_parse_quota(u: dict) -> dict:
+    """论文创建入口共用的配额闸（6 处）：取 overrides + 校验每日解析上限。"""
+    overrides = _quota_overrides(u["id"])
+    _check_daily_quota(u["id"], u["role"] == "admin", overrides)
+    return overrides
+
+
+def _get_paper_or_404(paper_id: str, u: dict):
+    """取论文行 + 404 + 可见性校验（同构模式；软删行同报 404）。"""
+    _get_paper_or_404(paper_id, u)
+    return p
 
 
 @app.post("/api/papers/upload")
 async def upload_papers(request: Request, files: list[UploadFile]):
     u = require(request)
     is_admin = u["role"] == "admin"
-    overrides = _quota_overrides(u["id"])
-    _check_daily_quota(u["id"], is_admin, overrides)
+    overrides = _enforce_parse_quota(u)
 
     # 体积预检：Content-Length 超限直接拒绝（避免整文件读进内存后才检查）；
     # 多文件批量按上限 ×2 估算（multipart 开销 +20MB），只拦明显超限的请求
@@ -441,7 +473,7 @@ async def upload_papers(request: Request, files: list[UploadFile]):
             results.append({"name": fname, "status": "skipped", "paper_id": paper_id,
                             "reason": f"{pages} 页超过上限 {max_pages}，已入库但未自动解析"})
             continue
-        tier = "standard" if (is_admin or overrides.get("max_tier", "standard") != "advanced") else "standard"
+        tier = "standard"   # （max_tier 死配置已删——原条件两分支同值，恒 standard）
         scheduler.enqueue(
             u["id"], "parse", paper_id,
             {"tier": tier, "original_name": f.filename, "visibility": visibility},
@@ -579,10 +611,7 @@ def _require_owner(u: dict, paper) -> None:
 @app.get("/api/papers/{paper_id}/pdf")
 def paper_pdf(paper_id: str, request: Request):
     u = require(request)
-    p = db.one("SELECT * FROM papers WHERE id=?", (paper_id,))
-    if p is None or p["deleted_at"]:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+    _get_paper_or_404(paper_id, u)
     import mimetypes
     path = None
     base = ingest.PAPERS_DIR / paper_id
@@ -605,10 +634,7 @@ def paper_pdf(paper_id: str, request: Request):
 @app.get("/api/papers/{paper_id}/markdown")
 def paper_markdown(paper_id: str, request: Request, run: str = ""):
     u = require(request)
-    p = db.one("SELECT * FROM papers WHERE id=?", (paper_id,))
-    if p is None or p["deleted_at"]:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+    _get_paper_or_404(paper_id, u)
     if not run:
         r = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
                    "ORDER BY created_at DESC LIMIT 1", (paper_id,))
@@ -631,10 +657,7 @@ def paper_markdown(paper_id: str, request: Request, run: str = ""):
 @app.get("/api/papers/{paper_id}/images/{name}")
 def paper_image(paper_id: str, name: str, request: Request):
     u = require(request)
-    p = db.one("SELECT * FROM papers WHERE id=?", (paper_id,))
-    if p is None or p["deleted_at"]:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+    _get_paper_or_404(paper_id, u)
     base = (ingest.PAPERS_DIR / paper_id / "parse").resolve()
     matches = sorted(base.glob(f"*/images/{name}"))
     if not matches or not str(matches[0].resolve()).startswith(str(base)):
@@ -654,7 +677,7 @@ def delete_paper(paper_id: str, request: Request):
     if p["visibility"] == "private" and p["owner_id"] != u["id"] and u["role"] != "admin":
         raise HTTPException(403, "只能删除自己的私人论文")
     # 取消在途任务
-    for j in db.all("SELECT * FROM jobs WHERE paper_id=? AND status IN ('queued','pending_gate','running')", (paper_id,)):
+    for j in db.all(f"SELECT * FROM jobs WHERE paper_id=? AND status IN {_ACTIVE_JOBS}", (paper_id,)):
         if j["remote_task_id"]:
             mineru.cancel(j["remote_task_id"])
         with db.write() as c:
@@ -797,7 +820,7 @@ async def batch_action(action: str, request: Request):
         for pid, _p in papers:
             in_flight = db.one(
                 "SELECT id FROM jobs WHERE paper_id=? AND job_type='translate' "
-                "AND status IN ('queued','pending_gate','running')", (pid,))
+                f"AND status IN {_ACTIVE_JOBS}", (pid,))
             if in_flight:
                 skipped.append(pid)
                 continue
@@ -856,7 +879,7 @@ def list_batches(request: Request, limit: int = 20):
         "SELECT batch_id, MIN(job_type) AS job_type, COUNT(*) AS total, "
         "SUM(status='done') AS done, SUM(status='failed') AS failed, "
         "SUM(status='canceled') AS canceled, "
-        "SUM(status IN ('queued','pending_gate','running')) AS active, "
+        f"SUM(status IN {_ACTIVE_JOBS}) AS active, "
         "MIN(created_at) AS started_at, MAX(updated_at) AS updated_at "
         f"FROM jobs WHERE batch_id IS NOT NULL AND batch_id!=''{scope} "
         f"GROUP BY batch_id ORDER BY MAX(updated_at) DESC LIMIT {int(limit)}")
@@ -994,7 +1017,7 @@ def delete_synthesis(sid: str, request: Request):
     u = require(request)
     row = _own_synthesis(u, sid)
     if row["status"] == "running":   # 在途：连带取消队列任务
-        for j in db.all("SELECT * FROM jobs WHERE payload LIKE ? AND status IN ('queued','pending_gate','running')",
+        for j in db.all(f"SELECT * FROM jobs WHERE payload LIKE ? AND status IN {_ACTIVE_JOBS}",
                         (f'%{sid}%',)):
             with db.write() as c:
                 c.execute("UPDATE jobs SET status='canceled' WHERE id=?", (j["id"],))
@@ -1045,7 +1068,7 @@ def jobs_count(request: Request):
     scope = "" if u["role"] == "admin" else " AND user_id=?"
     args = () if u["role"] == "admin" else (u["id"],)
     n = db.one(f"SELECT COUNT(*) AS n FROM jobs WHERE status IN "
-               f"('queued','pending_gate','running'){scope}", args)["n"]
+               f"{ _ACTIVE_JOBS }{scope}", args)["n"]
     pend = 0
     try:
         from core import mcpserver
@@ -1106,21 +1129,11 @@ def me_quota(request: Request):
     """
     u = require(request)
     overrides = _quota_overrides(u["id"])
-    used = db.one(
-        "SELECT COUNT(*) AS n FROM jobs WHERE user_id=? AND job_type='parse' "
-        "AND status IN ('queued','pending_gate','running','done') "
-        "AND date(created_at)=date('now')", (u["id"],))
-    disk = db.one(
-        "SELECT COALESCE(SUM(file_size),0) AS b FROM papers "
-        "WHERE owner_id=? AND deleted_at IS NULL", (u["id"],))
-    t30 = db.one(
-        "SELECT COALESCE(SUM(prompt_tokens+completion_tokens),0) AS t FROM llm_calls "
-        "WHERE user_id=? AND created_at>=date('now','-30 day')", (u["id"],))
-    return {"parse_used": used["n"] if used else 0,
+    return {"parse_used": _parse_used_today(u["id"]),
             "parse_limit": _daily_parse_limit(u["role"] == "admin", overrides),
-            "disk_used_bytes": disk["b"] if disk else 0,
+            "disk_used_bytes": _disk_used(u["id"]),
             "disk_limit_gb": overrides.get("max_disk_gb") or config.get("limits", "disk_quota_gb"),
-            "tokens_30d": t30["t"] if t30 else 0}
+            "tokens_30d": _tokens_30d(u["id"])}
 
 
 # ---------------- 管理 ----------------
@@ -1277,7 +1290,7 @@ async def import_url(request: Request):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "无效 URL")
     _assert_public_url(url)
-    _check_daily_quota(u["id"], u["role"] == "admin", _quota_overrides(u["id"]))
+    _enforce_parse_quota(u)
     from core.urlimport import import_paper_from_url
     r = import_paper_from_url(
         u["id"], url,
@@ -1404,7 +1417,7 @@ def delete_collection(cid: str, request: Request):
         raise HTTPException(403, "库内含他人共享的论文——整库删除（含论文入回收站）仅管理员可执行")
     n = 0
     for p in papers:
-        for j in db.all("SELECT * FROM jobs WHERE paper_id=? AND status IN ('queued','pending_gate','running')",
+        for j in db.all(f"SELECT * FROM jobs WHERE paper_id=? AND status IN {_ACTIVE_JOBS}",
                         (p["id"],)):
             if j["remote_task_id"]:
                 mineru.cancel(j["remote_task_id"])
@@ -1768,10 +1781,7 @@ def export_session(session_id: str, request: Request):
 def export_summary(paper_id: str, request: Request):
     """导读导出 Markdown（9 字段 + 证据页码）。"""
     u = require(request)
-    p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+    _get_paper_or_404(paper_id, u)
     s = db.one("SELECT * FROM summaries WHERE paper_id=? ORDER BY created_at DESC LIMIT 1", (paper_id,))
     if s is None:
         raise HTTPException(404, "尚未生成导读")
@@ -2111,8 +2121,7 @@ async def acquire_import(request: Request):
     if not picks:
         raise HTTPException(400, "items 为空")
     is_admin = u["role"] == "admin"
-    overrides = _quota_overrides(u["id"])
-    _check_daily_quota(u["id"], is_admin, overrides)     # 与上传链路同款：解析配额不能被绕过
+    overrides = _enforce_parse_quota(u)   # 与上传链路同款：解析配额不能被绕过
     from core import acquire, caj as caj_mod
 
     batch_id = uuid.uuid4().hex[:12]
@@ -2198,8 +2207,7 @@ async def import_directory(request: Request):
     body = await request.json()
     target = _safe_import_dir((body.get("path") or "").strip())
     is_admin = u["role"] == "admin"
-    overrides = _quota_overrides(u["id"])
-    _check_daily_quota(u["id"], is_admin, overrides)     # 与上传链路同款：解析配额不能被绕过
+    overrides = _enforce_parse_quota(u)   # 与上传链路同款：解析配额不能被绕过
     from core import caj as caj_mod
 
     files = [p for p in sorted(target.rglob("*"))
@@ -2461,7 +2469,7 @@ async def batch_delete_papers(request: Request):
         _require_visible(u, p)
         if p["visibility"] == "private" and p["owner_id"] != u["id"] and u["role"] != "admin":
             continue
-        for j in db.all("SELECT * FROM jobs WHERE paper_id=? AND status IN ('queued','pending_gate','running')", (pid,)):
+        for j in db.all(f"SELECT * FROM jobs WHERE paper_id=? AND status IN {_ACTIVE_JOBS}", (pid,)):
             if j["remote_task_id"]:
                 mineru.cancel(j["remote_task_id"])
         todo.append(pid)
@@ -2470,7 +2478,7 @@ async def batch_delete_papers(request: Request):
         marks = ",".join("?" * len(todo))
         with db.write() as c:
             c.execute(f"UPDATE jobs SET status='canceled' WHERE paper_id IN ({marks}) "
-                      "AND status IN ('queued','pending_gate','running')", tuple(todo))
+                      f"AND status IN {_ACTIVE_JOBS}", tuple(todo))
             c.execute(f"UPDATE papers SET deleted_at=datetime('now') WHERE id IN ({marks})", tuple(todo))
             c.execute(f"DELETE FROM chunks_fts WHERE paper_id IN ({marks})", tuple(todo))
         for t in titles:
@@ -2493,63 +2501,12 @@ def empty_trash(request: Request):
     return {"purged": len(rows)}
 
 
-@app.get("/api/export/bibtex")
-def export_bibtex(request: Request, collection_id: str = ""):
-    """整库/按库导出 BibTeX（Zotero/EndNote 可直接导入）."""
-    u = require(request)
-    vis = "" if u["role"] == "admin" else " AND (visibility='shared' OR owner_id=?)"
-    args: list[Any] = [] if u["role"] == "admin" else [u["id"]]
-    if collection_id:
-        ids = [x for x in collection_id.split(",") if x]
-        vis += f" AND collection_id IN ({','.join('?' * len(ids))})"
-        args.extend(ids)
-    rows = db.all(
-        f"SELECT id, title, authors, year, journal, doi, abstract, keywords FROM papers "
-        f"WHERE deleted_at IS NULL{vis} ORDER BY created_at", tuple(args))
-    out = ["% BibTeX export from paper-system", ""]
-    for r in rows:
-        key = _bibtex_key(r)
-        authors = r["authors"] or ""
-        fields = [("title", (r["title"] or "").replace("{", "").replace("}", "")),
-                  ("author", authors),
-                  ("journal", r["journal"] or ""),
-                  ("year", r["year"] or ""),
-                  ("doi", r["doi"] or "")]
-        if r["keywords"]:
-            fields.append(("keywords", r["keywords"].strip("[]\"' ")))
-        if r["abstract"]:
-            fields.append(("abstract", r["abstract"].replace("{", "").replace("}", "")))
-        out.append(f"@article{{{key},")
-        for k, v in fields:
-            if v:
-                out.append(f"  {k} = {{{v}}},")
-        out.append("}")
-        out.append("")
-    md = "\n".join(out)
-    return _md_response(md, f"paper-system-{len(rows)}-papers.bib")
-
-
-def _bibtex_key(r) -> str:
-    """生成 BibTeX 引用键：首作者姓+年份+标题首词."""
-    import re as _re
-    authors = (r["authors"] or "").split(",")[0].strip()
-    surname = authors.split()[-1] if authors else "anon"
-    surname = _re.sub(r"[^A-Za-z]", "", surname) or "anon"
-    year = _re.sub(r"[^0-9]", "", r["year"] or "")[:4] or "0000"
-    words = _re.sub(r"[^A-Za-z ]", " ", r["title"] or "").split()
-    first = words[0].lower() if words else "paper"
-    return f"{surname.lower()}{year}{first}"
-
-
 # ---------------- 导出下载（原文/双语 PDF·MD·ZIP 组合） ----------------
 @app.get("/api/papers/{paper_id}/download/{fmt}")
 def download_paper(paper_id: str, fmt: str, request: Request, items: str = ""):
     """fmt: pdf(原始PDF) md(原文md) bilingual_md bilingual_pdf zh_pdf en_pdf zip(组合)"""
     u = require(request)
-    p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+    _get_paper_or_404(paper_id, u)
     from core.exporter import (_zip_base_name, bilingual_md, build_zip, en_md,
                                md_to_pdf, original_md, zh_md)
     base = _zip_base_name(dict(p))
@@ -2683,7 +2640,7 @@ def _cancel_paper_jobs(paper_id: str, job_type: str) -> int:
     n = 0
     for j in db.all(
         "SELECT * FROM jobs WHERE paper_id=? AND job_type=? "
-        "AND status IN ('queued','pending_gate','running')",
+        f"AND status IN {_ACTIVE_JOBS}",
         (paper_id, job_type),
     ):
         if j["remote_task_id"]:
@@ -2734,8 +2691,7 @@ def start_parse(paper_id: str, request: Request):
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
     _require_owner(u, p)   # 重解析会作废旧译文对应关系，仅属主可操作
-    overrides = _quota_overrides(u["id"])
-    _check_daily_quota(u["id"], is_admin, overrides)
+    _enforce_parse_quota(u)
     _cancel_paper_jobs(paper_id, "parse")  # 重解析前清掉在途旧任务
     # URL 导入的论文：从历史任务继承 url（无本地原件）
     prev = db.one("SELECT payload FROM jobs WHERE paper_id=? AND job_type='parse' "
@@ -2760,7 +2716,7 @@ def paper_jobstate(paper_id: str, request: Request):
     _require_visible(u, p)
     rows = db.all(
         "SELECT job_type, status, progress_done, progress_total FROM jobs WHERE paper_id=? "
-        "AND job_type IN ('parse','translate') AND status IN ('queued','pending_gate','running')",
+        f"AND job_type IN ('parse','translate') AND status IN {_ACTIVE_JOBS}",
         (paper_id,),
     )
 
@@ -2801,7 +2757,7 @@ async def translate_papers(request: Request):
         # 防重复：已有进行中的翻译任务 → 跳过（除非显式 force_new_version）
         in_flight = db.one(
             "SELECT id FROM jobs WHERE paper_id=? AND job_type='translate' "
-            "AND status IN ('queued','pending_gate','running')", (pid,))
+            f"AND status IN {_ACTIVE_JOBS}", (pid,))
         if in_flight and not body.get("force_new_version"):
             skipped.append(pid)
             continue
@@ -2834,10 +2790,7 @@ def paper_cite(paper_id: str, request: Request):
     前端拿到后本地切换样式、即时预览，不弹窗、不逐次请求。
     """
     u = require(request)
-    p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+    _get_paper_or_404(paper_id, u)
     from core.cite import STYLES, DEFAULT_STYLE, all_styles, csl_json, CSL_STYLES
     return {
         "styles": all_styles(dict(p)),          # 旧内置渲染：bibtex 用；CSL 失败时兜底
@@ -2853,10 +2806,7 @@ def paper_cite(paper_id: str, request: Request):
 def paper_discover(paper_id: str, request: Request, mode: str = "rec", limit: int = 20):
     """相关文献发现：rec=相关推荐 / refs=参考文献 / cites=引证。结果带 in_library 标记。"""
     u = require(request)
-    p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+    _get_paper_or_404(paper_id, u)
     from core import discover as _disc
     try:
         items = _disc.discover(dict(p), mode, limit)
@@ -2997,7 +2947,7 @@ async def discover_import(request: Request):
     items = [x for x in (body.get("items") or []) if isinstance(x, dict)][:20]
     if not items:
         raise HTTPException(400, "items 为空")
-    _check_daily_quota(u["id"], u["role"] == "admin", _quota_overrides(u["id"]))
+    _enforce_parse_quota(u)
     out = []
     imported = 0
     for it in items:

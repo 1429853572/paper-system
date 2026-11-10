@@ -17,7 +17,7 @@ import re as _re
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 def cjk_space(s: str) -> str:
@@ -70,9 +70,7 @@ CREATE TABLE IF NOT EXISTS invite_codes (
 
 CREATE TABLE IF NOT EXISTS user_quotas (
     user_id   INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    overrides TEXT NOT NULL DEFAULT '{}',            -- 按用户覆盖 limits.* 的 JSON
-    daily_parse_used TEXT NOT NULL DEFAULT '',       -- 'YYYY-MM-DD:count' 取最新
-    disk_used_bytes  INTEGER NOT NULL DEFAULT 0
+    overrides TEXT NOT NULL DEFAULT '{}'             -- 按用户覆盖 limits.* 的 JSON（用量全部现算，不留快照列）
 );
 
 CREATE TABLE IF NOT EXISTS papers (
@@ -112,9 +110,7 @@ CREATE TABLE IF NOT EXISTS parse_runs (
     id          TEXT PRIMARY KEY,                    -- run + 随机串（v1 形态）
     paper_id    TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
     tier        TEXT NOT NULL,
-    mineru_task_id TEXT,                             -- 远程 task_id（仅存活期有效）
     status      TEXT NOT NULL DEFAULT 'running',     -- running|done|failed|stale
-    result_dir  TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -437,6 +433,17 @@ class Database:
         # 已下线功能的残留表（block_notes 段落批注 / block_merges 段落合并）一律清除。
         c.execute("DROP TABLE IF EXISTS block_notes")
         c.execute("DROP TABLE IF EXISTS block_merges")
+        if from_v < 18:
+            # v18：死列清理——用量全部现算（user_quotas 快照列从未有读写，
+            # parse_runs 的远程 id/目录实际记录在 jobs.remote_task_id 与 MinerU 侧）
+            for tbl, col in (("user_quotas", "daily_parse_used"),
+                             ("user_quotas", "disk_used_bytes"),
+                             ("parse_runs", "mineru_task_id"),
+                             ("parse_runs", "result_dir")):
+                try:
+                    c.execute(f"ALTER TABLE {tbl} DROP COLUMN {col}")
+                except sqlite3.OperationalError:
+                    pass   # 新装库的 schema 已无该列
         if from_v < 17:
             # v17：FTS 中文检索修复——索引文本 CJK 空格化，按 chunks 全量重建
             rows = c.execute(

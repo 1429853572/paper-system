@@ -100,15 +100,3 @@ def convert_bytes(data: bytes, name: str = "paper.caj") -> bytes:
         return out.read_bytes()
 
 
-def convert_file(src: Path, dst: Path) -> Path:
-    """文件版转换（保留原文件，失败不删）。"""
-    pdf = convert_bytes(src.read_bytes(), src.name)
-    dst.write_bytes(pdf)
-    return dst
-
-
-def tool_status() -> dict:
-    """转换器可用性（供诊断展示）。"""
-    return {"available": _vendor_ready(),
-            "mutool": bool(os.path.exists("/usr/bin/mutool")),
-            "note": "CAJ/HN/C8/KDH 可转（需 mutool，镜像已装）；伪装 PDF 的直接用"}

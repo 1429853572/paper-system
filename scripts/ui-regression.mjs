@@ -174,8 +174,9 @@ try {
 
 // 3) 关键函数存在性
 // window 挂载的关键函数（内联 onclick 依赖它们）
-// 注意: 段落合并/段落批注/补译已下线(用户要求移除)，不在检查范围
-for (const fn of ['exportBibtex', 'quickDelete', 'lightbox', 'loadMoreBlocks',
+// 注意: 段落合并/段落批注/补译已下线(用户要求移除)，不在检查范围；
+//       exportBibtex 已删（孤儿端点 GET /api/export/bibtex 一并移除，批量走 /api/papers/export/bibtex）
+for (const fn of ['quickDelete', 'lightbox', 'loadMoreBlocks',
                   'loadMorePairs', 'pdfFlashBlock', 'flashAbstract',
                   'linkDiag', 'toggleToc']) {
   if (typeof window[fn] !== 'function') errors.push(`window 函数缺失: ${fn}`);

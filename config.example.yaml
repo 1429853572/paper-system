@@ -7,15 +7,12 @@ limits:
   max_pages: 500            # PDF 页数上限
   daily_parse_papers: 200   # 每用户日解析篇数
   translate_concurrency: 2  # 每用户翻译并发
-  max_queued_jobs: 50       # 每用户在队任务数
   disk_quota_gb: 20         # 每用户磁盘配额
-  max_tier: standard        # member 可用最高解析档位 (flash/basic/standard; advanced 限 admin)
 
   # ---- 全局（保护 GPU，admin 也生效） ----
   global_daily_parse: 600   # 全局日解析产能上限
 
 scheduler:
-  parse_workers: 1          # 解析 worker（GPU 串行）
   translate_workers: 4      # 翻译 worker 池总并发
   embed_backfill_batch: 32  # embedding 后台回填批大小（控 xinference 峰值显存）
   poll_interval_sec: 10     # 队列轮询间隔
@@ -24,8 +21,6 @@ scheduler:
 rag:
   chunk_tokens: 650
   overlap_tokens: 100
-  vector_top_k: 15
-  bm25_top_k: 15
   fts_top_k: 15
 
 qa:

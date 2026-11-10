@@ -181,10 +181,6 @@ def undo_last(user_id: int) -> dict:
 
 # ---------------- 工具实现（读直接跑） ----------------
 
-def _visible_cond() -> str:
-    return " AND p.deleted_at IS NULL"
-
-
 def run_tool(user_id: int, name: str, args: dict) -> dict:
     if name == "search_papers":
         q = f"%{(args.get('query') or '').strip()}%"

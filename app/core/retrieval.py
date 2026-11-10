@@ -322,23 +322,7 @@ def search(query: str, *, user_id: int, is_admin: bool,
 
 # ---- 库存/重建 ----
 
-def index_version() -> str:
-    return f"{EMBED_MODEL}:{EMBED_DIMS}:v1"
-
-
 # ================= 交叉编码器重排（可选） =================
-def rerank_available() -> bool:
-    if not config.get("rerank", "enabled"):
-        return False
-    base = os.environ.get("RERANK_BASE_URL") or config.get("rerank", "base_url")
-    if not base:
-        return False
-    try:
-        r = httpx.get(f"{base.rstrip('/')}/health", timeout=3)
-        return r.status_code == 200
-    except httpx.HTTPError:
-        return False
-
 
 def rerank_chunks(query: str, chunks: list[dict], top_n: int, keep: int) -> list[dict]:
     """用交叉编码器对候选重排（失败则原样返回，不影响可用性）。"""

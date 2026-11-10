@@ -17,13 +17,10 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "max_pages": 500,
         "daily_parse_papers": 200,
         "translate_concurrency": 2,
-        "max_queued_jobs": 50,
         "disk_quota_gb": 20,
-        "max_tier": "standard",
         "global_daily_parse": 600,
     },
     "scheduler": {
-        "parse_workers": 1,
         "translate_workers": 4,
         "embed_backfill_batch": 32,
         "poll_interval_sec": 10,
@@ -32,8 +29,6 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
     "rag": {
         "chunk_tokens": 650,
         "overlap_tokens": 100,
-        "vector_top_k": 15,
-        "bm25_top_k": 15,
         "fts_top_k": 15,
     },
     "qa": {

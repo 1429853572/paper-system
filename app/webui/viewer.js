@@ -171,6 +171,7 @@ function esc(s) {
 /* 内联 onclick 的 JS 字符串参数转义（先 JS 层再属性层；esc() 的 &#39; 会被
    HTML 解码回 ' 再进 JS 解析，两者叠加=互相抵消——含引号文本会让按钮语法错误）。
    顺序：反斜杠→单引号（JS 层）→ & → "（属性层，解码后还原为字面量）。 */
+const fmtGB = b => (b || 0) / 1073741824;   // 字节 → GB（用量展示共用）
 const jsArg = s => String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")
   .replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 
@@ -199,7 +200,6 @@ const ICONS = {
   brain: '<path d="M8 2.5a2.5 2.5 0 00-2.5 2.5v.5A2 2 0 004 7.4V10a2 2 0 002 2h1v1.5h2V12h1a2 2 0 002-2V7.4a2 2 0 00-1.5-1.9V5A2.5 2.5 0 008 2.5z"/>',
   globe2: '<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c2.3 2.8 2.3 8.2 0 11-2.3-2.8-2.3-8.2 0-11z"/>',
   tag2: '<path d="M2.5 3.5h4l6 6-3 3-6-6z"/><circle cx="5" cy="5" r=".8"/>',
-  recycle: '<path d="M4 11l1.5-6L8 3l2.5 2L12 11M4 11l8 0M6.5 5h4"/>',
   stack: '<rect x="2.5" y="3" width="8" height="8" rx="1.2"/><path d="M5.5 5.5h2M5.5 7.5h3"/>',
   inbox: '<path d="M2.5 9V5.5L5 3.5h6l2.5 2V9a1.5 1.5 0 01-1.5 1.5H4A1.5 1.5 0 012.5 9z"/><path d="M5.5 6.5h5"/>',
   doc: '<path d="M4 2.5h5.5L12.5 5.5V13.5h-8.5z"/><path d="M9.5 2.5v3h3"/>',
@@ -209,18 +209,11 @@ const ICONS = {
   sliders: '<path d="M3 5h10M3 11h10"/><circle cx="6" cy="5" r="1.8"/><circle cx="10" cy="11" r="1.8"/>',
   star: '<path d="M8 2.5l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.7l-3.6 1.9.7-4L2.2 6.8l4-.6L8 2.5z"/>',
   lock: '<rect x="4" y="7" width="8" height="6.5" rx="1.5"/><path d="M5.5 7V5.5a2.5 2.5 0 015 0V7"/>',
-  unlock: '<rect x="4" y="7" width="8" height="6.5" rx="1.5"/><path d="M5.5 7V5.5a2.5 2.5 0 014.9-.8"/>',
-  layout: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/>',
-  panelL: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/>',
-  panelR: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M10 3v10"/>',
-  zoomIn: '<circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M7 5.5v3M5.5 7h3"/>',
-  zoomOut: '<circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M5.5 7h3"/>',
   bulb: '<path d="M6 13.5h4M6.3 11.2c0-2.2-1.8-2.7-1.8-4.7a3.5 3.5 0 017 0c0 2-1.8 2.5-1.8 4.7h-3.4z"/>',
   user: '<circle cx="8" cy="5.5" r="2.5"/><path d="M3 13.5c.6-3 2.6-4.2 5-4.2s4.4 1.2 5 4.2"/>',
   key: '<circle cx="5.5" cy="10.5" r="2.5"/><path d="M7.5 8.5L13 3M11 3h2v2"/>',
   bolt: '<path d="M8.5 2L4 9h3l-.5 5L12 7H9l-.5-5z"/>',
   crown: '<path d="M3 11.5L2.5 5l3.5 2L8 3.5 10 7l3.5-2L13 11.5H3z"/>',
-  image: '<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="M3.5 11.5l3-3 2.5 2.5 1.5-1.5 2.5 2.5"/>',
   chart: '<path d="M3 13.5V3M3 13.5h10M6.5 13.5V8M10 13.5V5.5"/>',
   note: '<path d="M3.5 3h9v7l-3 3h-6z"/><path d="M9.5 13v-3h3"/>',
   pin: '<path d="M8 13.5V9M8 9C6 9 4.5 7.8 4.5 5.8V3.5h7v2.3C11.5 7.8 10 9 8 9z"/>',
@@ -229,7 +222,6 @@ const ICONS = {
   book: '<path d="M8 4.2C6.6 3 4.2 2.8 2.6 3.6v9c1.6-.8 4-.6 5.4.6 1.4-1.2 3.8-1.4 5.4-.6v-9C11.8 2.8 9.4 3 8 4.2z"/><path d="M8 4.2v9"/>',
   moon: '<path d="M13.2 9.7A5.7 5.7 0 016.3 2.8a5.7 5.7 0 106.9 6.9z"/>',
   sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M15 8h-1.5M2.5 8H1M12.9 3.1l-1.1 1.1M4.2 11.8l-1.1 1.1M12.9 12.9l-1.1-1.1M4.2 4.2L3.1 3.1"/>',
-  logout: '<path d="M6 13.5H3.5a1 1 0 01-1-1v-9a1 1 0 011-1H6M9.5 11L13.5 8l-4-3M13.5 8H6"/>',
   warn: '<path d="M8 2.2L14 12.5H2L8 2.2z"/><path d="M8 6.4v3.1M8 11.7v.1"/>',
   quote: '<path d="M2.8 12.4c0-3.3 1.4-5.9 4-6.9l.7 1.5C6 7.8 5.2 9.2 5 10.6h2.4v3.6H2.8v-1.8zM8.8 12.4c0-3.3 1.4-5.9 4-6.9l.7 1.5c-1.5.8-2.3 2.2-2.5 3.6h2.4v3.6H8.8v-1.8z"/>',
 };
@@ -542,7 +534,7 @@ async function refreshQuotaHint() {
   if (!el) return;
   const q = await api('/api/me/quota').catch(() => null);
   if (!q) { el.textContent = ''; return; }
-  el.textContent = `今日解析 ${q.parse_used}/${q.parse_limit} 篇 · 磁盘 ${((q.disk_used_bytes || 0) / 1073741824).toFixed(1)}/${q.disk_limit_gb}G`;
+  el.textContent = `今日解析 ${q.parse_used}/${q.parse_limit} 篇 · 磁盘 ${fmtGB(q.disk_used_bytes).toFixed(1)}/${q.disk_limit_gb}G`;
 }
 $('#upload-arrow')?.addEventListener('click', e => {
   e.stopPropagation();
@@ -670,7 +662,7 @@ async function uploadFiles(files, targetCid) {
   if (!pdfs.length) { toast('支持 PDF / 图片 / Office 文档'); return; }
   try {   // 磁盘软提醒：超上限警告但不拦截（展示口径，硬拦在 max_file_mb/页数过滤）
     const q = await api('/api/me/quota');
-    const usedGb = (q.disk_used_bytes || 0) / 1073741824;
+    const usedGb = fmtGB(q.disk_used_bytes);
     if (q.disk_limit_gb && usedGb >= q.disk_limit_gb)
       toast(`磁盘已用 ${usedGb.toFixed(1)}GB，已达上限 ${q.disk_limit_gb}GB——建议清理回收站或联系管理员`, 5000);
   } catch { /* ignore */ }
@@ -2077,7 +2069,6 @@ async function runBatchAction(act, anchor) {
   } catch (e) { toast('批量操作失败: ' + e.message); }
 }
 
-const BATCH_TYPE_LABEL = {translate: '批量翻译', meta: '元数据补全', summary: '批量导读', parse: '批量重解析', synthesis: '综述'};
 
 /* ---- 综述流水线（批量页核心卡）----
    圈定 → 成本预估确认（缺导读自动补齐 + 组内比对 + 跨组综合 = N 次调用）
@@ -4100,7 +4091,7 @@ async function renderMeQuota() {
   ]);
   if (!q) return;
   const pPct = q.parse_limit ? Math.round(q.parse_used / q.parse_limit * 100) : 0;
-  const usedGb = (q.disk_used_bytes || 0) / 1073741824;
+  const usedGb = fmtGB(q.disk_used_bytes);
   const dPct = q.disk_limit_gb ? Math.round(usedGb / q.disk_limit_gb * 100) : 0;
   const bar = (pct, warn) => `<div style="height:6px;background:var(--line-soft);border-radius:3px;overflow:hidden;margin-top:4px">
     <i style="display:block;height:100%;width:${Math.min(100, pct)}%;background:${pct >= warn ? 'var(--warn)' : 'var(--primary)'}"></i></div>`;
@@ -4147,7 +4138,7 @@ async function renderAdminZone() {
         return `<tr>
         <td>${esc(u.username)} ${u.role === 'admin' ? '<span class="badge priv">admin</span>' : ''}
           ${u.disabled === 2 ? '<span class="badge priv">已注销</span>' : ''}${u.disabled === 1 ? '<span class="badge err">已禁用</span>' : ''}</td>
-        <td style="font-size:11px">${u.papers} 篇<br><span class="muted">${((u.disk_used || 0) / 1073741824).toFixed(2)}G · 30d ${(u.tokens_30d || 0).toLocaleString()}tok</span></td>
+        <td style="font-size:11px">${u.papers} 篇<br><span class="muted">${fmtGB(u.disk_used).toFixed(2)}G · 30d ${(u.tokens_30d || 0).toLocaleString()}tok</span></td>
         <td class="row-actions">
           <details class="q-edit"><summary class="btn small" title="编辑限额">${icon('sliders')}${n ? ` ${n}` : ''}</summary>
             <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;padding:6px 2px;align-items:center">
@@ -5448,11 +5439,6 @@ window.emptyTrash = async () => {
   const r = await api('/api/trash/empty', {method: 'POST'});
   toast(`已彻底删除 ${r.purged} 篇`);
   renderTrash(); await refreshLib();
-};
-
-window.exportBibtex = () => {
-  location.href = '/api/export/bibtex';
-  toast('开始下载 BibTeX（Zotero/EndNote 可直接导入）');
 };
 
 /* 增量加载解析块（滚动到底自动续拉；只追加新行，不全量重渲染） */

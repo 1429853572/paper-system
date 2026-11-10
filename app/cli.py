@@ -160,8 +160,8 @@ def cmd_backup(args):
     print(r.stdout or r.stderr)
 
 
-def cmd_restore(args):
-    """从备份恢复。"""
+def cmd_restore_backup(args):
+    """从备份恢复（宿主机请直接用 ./psys restore，容器内无 scripts/）。"""
     import subprocess
     cmd = ["bash", "scripts/restore.sh"]
     if args.date:
@@ -174,7 +174,6 @@ def cmd_export_images(args):
     """离线部署：导出全部镜像 tar。"""
     dest = Path(args.out)
     dest.mkdir(parents=True, exist_ok=True)
-    dest = Path(args.out)
     print("提示: install.sh --offline 读取的是 deploy/offline/，建议 --out deploy/offline")
     # 镜像清单与 compose.yml 对齐（xinference 的 digest 从 compose 读取，不再硬编码）
     images = ["mineru:4.1.6", "papersys-app:v1", "caddy:2.11.7-alpine"]
@@ -259,9 +258,9 @@ def main() -> None:
     p.add_argument("--keep", type=int, default=0, help="保留份数（0=用配置默认）")
     p.set_defaults(fn=cmd_backup)
 
-    p = sub.add_parser("restore", help="从备份恢复（默认最近一份）")
+    p = sub.add_parser("restore-backup", help="从备份恢复（默认最近一份；回收站恢复见 restore）")
     p.add_argument("--date", default="", help="指定备份日期 YYYY-MM-DD")
-    p.set_defaults(fn=cmd_restore)
+    p.set_defaults(fn=cmd_restore_backup)
 
     p = sub.add_parser("export-images", help="导出镜像 tar（离线部署）")
     p.add_argument("--out", default="offline-images")
