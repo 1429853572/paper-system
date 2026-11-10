@@ -271,6 +271,11 @@ table.list th { color: var(--muted); font-weight: 500; }
   .page { padding: 20px calc((100% - 1500px) / 2 + 28px); }}
 
 /* 中屏：收窄侧栏 */
+/* 右栏工具行/子页签：窄视口防文字折行（找相/关、提/问、双语/对照） */
+@media (max-width: 1280px) {
+  .rpane-head button, .r-subtabs button { white-space: nowrap; padding-inline: 8px; }
+  .rpane-tools .btn { white-space: nowrap; padding-inline: 8px; font-size: var(--fs-sm); }
+}
 @media (max-width: 1280px) {
   :root { --sidebar-w: 240px; }
   .pane-left { width: 44%; }
@@ -296,7 +301,12 @@ table.list th { color: var(--muted); font-weight: 500; }
   .topbar { flex-wrap: wrap; }
   .page { padding: 14px; }
   table.list { font-size: var(--fs-sm); }
-  table.list th, table.list td { padding: 6px 6px; }}
+  table.list th, table.list td { padding: 6px 6px; }
+  .qa-dock-head { flex-wrap: wrap; }
+  .qa-dock-head .spacer { display: none; }
+  .rpane-head, .r-subtabs { flex-wrap: wrap; }
+  .pane-right .view-tabs button { padding: 6px 9px; }
+  #download-pop, #discover-pop { max-width: calc(100vw - 16px); }}
 
 /* 手机竖屏 */
 @media (max-width: 560px) {
@@ -811,11 +821,7 @@ table.list input[type=checkbox] { width: auto; }
 /* ===== 批量中心（左圈定 / 右操作 / 底进度） ===== */
 .batch-wrap { max-width: 1240px; margin: 0 auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
 .batch-intro { color: var(--muted); font-size: var(--fs-sm); padding: 0 2px; display: flex; align-items: center; gap: 5px; }
-.batch-grid { display: grid; grid-template-columns: minmax(340px, 380px) 1fr; gap: 14px; align-items: start; }
-@media (max-width: 1024px) {
-  .batch-grid { grid-template-columns: 1fr; }
-  .batch-pick { position: static; }   /* 堆叠后取消 sticky */}
-.batch-pick, .batch-pick { position: sticky; top: 12px; }
+.batch-grid { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }   /* 圈定面板已移除：单列全宽 */
 .batch-right { min-width: 0; container-type: inline-size; }   /* 操作卡列数随自身宽度（缩放/侧栏折叠均自适应） */
 .bp-head2 { font-weight: 700; margin: 2px 2px 10px; font-size: var(--fs-md); }
 .batch-ops { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }

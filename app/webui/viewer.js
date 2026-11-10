@@ -791,6 +791,10 @@ $('#side-expand').onclick = () => {
   applySidebarCollapse();
 };
 applySidebarCollapse();
+/* 初始即按视口宽收放（resize 监听只在变化时触发，窄窗口直开/刷新不会走 resize） */
+if (innerWidth < 1100 && !state.sidebarCollapsed) {
+  state._autoFolded = true; state.sidebarCollapsed = true; applySidebarCollapse();
+}
 
 /* 批量选择已收敛到「文库管理」页（勾选 → 完整批量条）与「批量中心」页；
    侧栏回归纯导航。state.selected 仍由文库页复选框维护（全站共享）。 */
@@ -1519,8 +1523,9 @@ async function renderBatchPage() {
   const cols = state.collections || [];
   el.innerHTML = `
     <div class="batch-wrap">
-      <div class="batch-intro">${icon('bulb', 12)} 综述：在「文库管理」勾选论文 → 批量条点「综述」；专题/采集在此发起；综述历史与批次进度见下方。
-        <div class="batch-right">
+      <div class="batch-intro">${icon('bulb', 12)} 综述：在「文库管理」勾选论文 → 批量条点「综述」；专题/采集在此发起；综述历史与批次进度见下方。</div>
+      <div class="batch-grid">
+        <div class="batch-right batch-right-full">
           <div class="bp-head2">选择操作 <span class="muted" style="font-weight:400;font-size:11px">未圈定时综述卡置灰——勾选在「文库管理」进行</span></div>
           <div class="batch-ops">
             <div class="batch-card" data-act="topics" title="专题采集任务：关键词 → 检索 → 勾选下载入库 → 一键综述（可中断可恢复）">
@@ -3097,7 +3102,8 @@ window.applyQaLayout = () => {
   const top = $('#rpane-top'), dock = $('#qa-dock'), handle = $('#rpane-handle');
   if (state.qaOpen) {
     dock.hidden = false; handle.hidden = false;
-    top.style.flex = 'none'; top.style.height = state.rpane.top + '%';
+    top.style.flex = 'none';
+    top.style.height = `min(${state.rpane.top}%, calc(100% - 240px))`;   // dock 保底 240px（矮视口不被挤没）
   } else {
     dock.hidden = true; handle.hidden = true;
     top.style.flex = '1 1 auto'; top.style.height = '';
@@ -4973,7 +4979,16 @@ applyRpaneCollapse();
   const zi = $('#zoom-in'), zo = $('#zoom-out');
   if (zi) zi.addEventListener('click', () => state.fitWidth = false);
   if (zo) zo.addEventListener('click', () => state.fitWidth = false);
-  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => applyVsplit(), 250); });
+  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => {
+    applyVsplit();
+    // ≤1100 自动收起侧栏（缩放/分屏场景；仅自动收放，不改写用户手动偏好）
+    const narrow = innerWidth < 1100;
+    if (narrow && !state.sidebarCollapsed && !state._autoFolded) {
+      state._autoFolded = true; state.sidebarCollapsed = true; applySidebarCollapse();
+    } else if (!narrow && state._autoFolded) {
+      state._autoFolded = false; state.sidebarCollapsed = false; applySidebarCollapse();
+    }
+  }, 250); });
   // PDF 栏宽变化 → 重绘页面与全部覆盖层（布局框/高亮/文字层随尺寸走）
   if (window.ResizeObserver) {
     let rw;
