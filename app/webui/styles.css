@@ -1100,3 +1100,10 @@ table.list input[type=checkbox] { width: auto; }
 .onboard-step span { font-size: var(--fs-xs); color: var(--muted); line-height: 1.6; }
 .onboard-step code { background: var(--bg-soft); padding: 0 5px; border-radius: var(--r-xs);
                      font-size: var(--fs-xs); color: var(--primary); }
+
+/* 管理区限额行内编辑器（details 展开式，summary 沿用按钮外观） */
+details.q-edit { display: inline-block; }
+details.q-edit > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+details.q-edit > summary::-webkit-details-marker { display: none; }
+details.q-edit[open] > summary { outline: 1.5px solid var(--primary); }
+details.q-edit[open] { display: block; width: 100%; }

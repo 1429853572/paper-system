@@ -352,19 +352,25 @@ def _quota_overrides(user_id: int) -> dict:
     return json.loads(row["overrides"]) if row and row["overrides"] else {}
 
 
-def _check_daily_quota(user_id: int, is_admin: bool, overrides: dict) -> None:
+def _daily_parse_limit(is_admin: bool, overrides: dict) -> int:
+    """今日解析上限：admin 用全站上限，member 用个人覆盖或全局默认。"""
     limit = overrides.get("daily_parse_papers")
     if is_admin:
         limit = config.get("limits", "global_daily_parse")
     elif limit is None:
         limit = config.get("limits", "daily_parse_papers")
+    return int(limit)
+
+
+def _check_daily_quota(user_id: int, is_admin: bool, overrides: dict) -> None:
+    limit = _daily_parse_limit(is_admin, overrides)
     today = db.one(
         "SELECT COUNT(*) AS n FROM jobs WHERE user_id=? AND job_type='parse' "
         "AND status IN ('queued','pending_gate','running','done') "
         "AND date(created_at)=date('now')",
         (user_id,),
     )
-    if today and today["n"] >= int(limit):
+    if today and today["n"] >= limit:
         raise HTTPException(429, f"今日解析已达上限 {limit} 篇")
 
 
@@ -513,10 +519,12 @@ def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
     limit = max(1, min(500, page_size or 500))
     offset = max(0, (page - 1)) * limit if page else 0
     # 列表裁剪：abstract/keywords/file_hash 前端列表不用（详情页返回），
-    # 89 篇 × abstract 1-2KB ≈ 90% 传输浪费
-    rows = db.all(f"SELECT id,owner_id,visibility,title,authors,year,page_count,file_size,"
-                  f"parse_status,collection_id,journal,created_at,deleted_at "
-                  f"FROM papers WHERE {cond}{vis} ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}",
+    # 89 篇 × abstract 1-2KB ≈ 90% 传输浪费；owner_name 供 shared 论文归属标识
+    rows = db.all(f"SELECT p.id,p.owner_id,p.visibility,p.title,p.authors,p.year,p.page_count,"
+                  f"p.file_size,p.parse_status,p.collection_id,p.journal,p.created_at,p.deleted_at,"
+                  f"u.username AS owner_name "
+                  f"FROM papers p LEFT JOIN users u ON u.id=p.owner_id "
+                  f"WHERE {cond}{vis} ORDER BY p.created_at DESC LIMIT {limit} OFFSET {offset}",
                   tuple(args))
     return {"papers": [dict(r) for r in rows], "page": page, "has_more": len(rows) == limit}
 
@@ -528,7 +536,8 @@ def paper_detail(paper_id: str, request: Request, offset: int = 0, limit: int = 
     limit=0 表示不分页（兼容旧调用）；前端用 limit 做首屏 + 增量加载。
     """
     u = require(request)
-    p = db.one("SELECT * FROM papers WHERE id=?", (paper_id,))
+    p = db.one("SELECT p.*, u.username AS owner_name FROM papers p "
+               "LEFT JOIN users u ON u.id=p.owner_id WHERE p.id=?", (paper_id,))
     if p is None or p["deleted_at"]:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
@@ -1084,6 +1093,31 @@ def usage(request: Request):
     return {"by_user": [dict(r) for r in by_user], "by_day": [dict(r) for r in by_day]}
 
 
+@app.get("/api/me/quota")
+def me_quota(request: Request):
+    """个人用量自助面板：今日解析配额 / 磁盘占用 / 近 30 天 token。
+
+    磁盘为「展示+软提醒」口径（超限由前端警告，不在后端硬拦）。
+    """
+    u = require(request)
+    overrides = _quota_overrides(u["id"])
+    used = db.one(
+        "SELECT COUNT(*) AS n FROM jobs WHERE user_id=? AND job_type='parse' "
+        "AND status IN ('queued','pending_gate','running','done') "
+        "AND date(created_at)=date('now')", (u["id"],))
+    disk = db.one(
+        "SELECT COALESCE(SUM(file_size),0) AS b FROM papers "
+        "WHERE owner_id=? AND deleted_at IS NULL", (u["id"],))
+    t30 = db.one(
+        "SELECT COALESCE(SUM(prompt_tokens+completion_tokens),0) AS t FROM llm_calls "
+        "WHERE user_id=? AND created_at>=date('now','-30 day')", (u["id"],))
+    return {"parse_used": used["n"] if used else 0,
+            "parse_limit": _daily_parse_limit(u["role"] == "admin", overrides),
+            "disk_used_bytes": disk["b"] if disk else 0,
+            "disk_limit_gb": overrides.get("max_disk_gb") or config.get("limits", "disk_quota_gb"),
+            "tokens_30d": t30["t"] if t30 else 0}
+
+
 # ---------------- 管理 ----------------
 @app.post("/api/admin/invite")
 def create_invite(request: Request, days: int = 7):
@@ -1099,8 +1133,11 @@ def create_invite(request: Request, days: int = 7):
 def admin_users(request: Request):
     require_admin(request)
     rows = db.all(
-        "SELECT u.id, u.username, u.role, u.created_at, q.overrides, "
-        "(SELECT COUNT(*) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS papers "
+        "SELECT u.id, u.username, u.role, u.disabled, u.created_at, q.overrides, "
+        "(SELECT COUNT(*) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS papers, "
+        "(SELECT COALESCE(SUM(p.file_size),0) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS disk_used, "
+        "(SELECT COALESCE(SUM(lc.prompt_tokens+lc.completion_tokens),0) FROM llm_calls lc "
+        "WHERE lc.user_id=u.id AND lc.created_at>=date('now','-30 day')) AS tokens_30d "
         "FROM users u LEFT JOIN user_quotas q ON q.user_id=u.id ORDER BY u.id")
     return {"users": [dict(r) for r in rows]}
 
@@ -1233,6 +1270,7 @@ async def import_url(request: Request):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "无效 URL")
     _assert_public_url(url)
+    _check_daily_quota(u["id"], u["role"] == "admin", _quota_overrides(u["id"]))
     from core.urlimport import import_paper_from_url
     r = import_paper_from_url(
         u["id"], url,
@@ -2067,6 +2105,7 @@ async def acquire_import(request: Request):
         raise HTTPException(400, "items 为空")
     is_admin = u["role"] == "admin"
     overrides = _quota_overrides(u["id"])
+    _check_daily_quota(u["id"], is_admin, overrides)     # 与上传链路同款：解析配额不能被绕过
     from core import acquire, caj as caj_mod
 
     batch_id = uuid.uuid4().hex[:12]
@@ -2370,7 +2409,9 @@ def papers_statuses(request: Request, paper_ids: str = "", limit: int = 0):
         latest.setdefault(j["paper_id"], {})[j["job_type"]] = j
     tokens = {r["paper_id"]: r for r in db.all(
         "SELECT paper_id, SUM(prompt_tokens) p, SUM(completion_tokens) c, COUNT(*) calls "
-        "FROM llm_calls WHERE paper_id IS NOT NULL GROUP BY paper_id")}
+        "FROM llm_calls WHERE paper_id IS NOT NULL"
+        + ("" if u["role"] == "admin" else " AND user_id=?"),
+        () if u["role"] == "admin" else (u["id"],))}
     out = {}
     for p in papers:
         lj = latest.get(p["id"], {})
@@ -2946,6 +2987,7 @@ async def discover_import(request: Request):
     items = [x for x in (body.get("items") or []) if isinstance(x, dict)][:20]
     if not items:
         raise HTTPException(400, "items 为空")
+    _check_daily_quota(u["id"], u["role"] == "admin", _quota_overrides(u["id"]))
     out = []
     imported = 0
     for it in items:

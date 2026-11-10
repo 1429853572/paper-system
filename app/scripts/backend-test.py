@@ -110,5 +110,41 @@ t3 = [{"id": "n1", "key": "[1]", "evidence": "api", "title": "A"},
 refs = render_references(t, "numeric")
 ok("numeric 渲染有序号", bool(__import__("re").match(r"^\d+\. ", refs)), refs[:30])
 
+print("== 多用户配额（临时库）==")
+from server.main import _daily_parse_limit, _check_daily_quota
+from fastapi import HTTPException
+ok("admin 用全站上限", _daily_parse_limit(True, {}) == 600)
+ok("member 默认上限", _daily_parse_limit(False, {}) == 200)
+ok("member 覆盖生效", _daily_parse_limit(False, {"daily_parse_papers": 5}) == 5)
+# 触发 429：把该用户今日 parse 任务计数顶到上限
+with db.write() as c:
+    c.execute("INSERT INTO jobs(id,user_id,job_type,status,payload) VALUES(90001,?, 'parse','done','{}')", (uid,))
+    c.execute("INSERT INTO jobs(id,user_id,job_type,status,payload) VALUES(90002,?, 'parse','running','{}')", (uid,))
+try:
+    _check_daily_quota(uid, False, {"daily_parse_papers": 2})
+    ok("达上限触发 429", False, "未抛异常")
+except HTTPException as e:
+    ok("达上限触发 429", e.status_code == 429 and "上限" in e.detail, f"{e.status_code} {e.detail}")
+ok("admin 不受 member 上限约束", _check_daily_quota(uid, True, {"daily_parse_papers": 2}) is None)
+
+# admin/users 与 papers 列表的新列（disabled bug 修复面 + owner_name 归属标识）
+row = db.one(
+    "SELECT u.id, u.disabled, u.username, "
+    "(SELECT COUNT(*) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS papers, "
+    "(SELECT COALESCE(SUM(p.file_size),0) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS disk_used, "
+    "(SELECT COALESCE(SUM(lc.prompt_tokens+lc.completion_tokens),0) FROM llm_calls lc "
+    "WHERE lc.user_id=u.id AND lc.created_at>=date('now','-30 day')) AS tokens_30d "
+    "FROM users u LEFT JOIN user_quotas q ON q.user_id=u.id WHERE u.id=?", (uid,))
+ok("admin/users SQL 含 disabled/disk_used/tokens_30d",
+   all(k in row.keys() for k in ("disabled", "disk_used", "tokens_30d")), str(dict(row)))
+with db.write() as c:
+    c.execute("INSERT INTO papers(id,owner_id,visibility,title,parse_status,file_size,file_hash) VALUES('px1',?,'shared','T','parsed',1024,'h1')", (uid,))
+pj = db.one("SELECT p.id, p.owner_id, u.username AS owner_name FROM papers p "
+            "LEFT JOIN users u ON u.id=p.owner_id WHERE p.id='px1'")
+ok("papers JOIN 出 owner_name", pj["owner_name"] == "unit", str(dict(pj)))
+with db.write() as c:
+    c.execute("DELETE FROM papers WHERE id='px1'")
+    c.execute("DELETE FROM jobs WHERE id IN (90001, 90002)")
+
 print(f"\n结果: {PASS} 通过, {FAIL} 失败")
 sys.exit(1 if FAIL else 0)

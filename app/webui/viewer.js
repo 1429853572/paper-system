@@ -461,7 +461,7 @@ function renderPapers() {
         <div class="name">${esc(name)}</div>
         <div class="meta"><span class="badge err">失败</span>
           <span class="muted up-msg" title="${esc(u.msg || '')}">${esc((u.msg || '').slice(0, 36))}</span>
-          <button class="up-act" data-idx="${idx}" data-act="retry">重试</button>
+          ${/上限/.test(u.msg || '') ? '' : '<button class="up-act" data-idx="' + idx + '" data-act="retry">重试</button>'}
           <button class="up-act" data-idx="${idx}" data-act="drop">移除</button></div>
       </div>
     </div>` : `
@@ -483,6 +483,7 @@ function renderPapers() {
         <div class="name">${esc(p.title || p.id)}</div>
         <div class="meta">${statusBadge(p)}
           ${p.visibility === 'private' ? '<span class="badge priv">私人</span>' : ''}
+          ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" title="上传者">· ${esc(p.owner_name)}</span>` : ''}
           <span>${(p.page_count || '?')}页</span><span>${p.file_size ? (p.file_size/1048576).toFixed(1) + 'M' : ''}</span>
         </div>${bar}
       </div>
@@ -529,12 +530,22 @@ $('#upload-private')?.addEventListener('change', e => {
   toast(state.uploadPrivate ? '新上传的文献将仅自己可见' : '新上传的文献将对所有人可见');
 });
 const upPop = $('#upload-pop');
+/* 429 预知与友好化：弹层打开即展示今日余量；「上限」类错误附重置说明、不渲染无效重试按钮 */
+const quotaTip = msg => /上限/.test(msg || '') ? msg + '——明日 0 点重置，也可请管理员在设置页调整限额' : msg;
+async function refreshQuotaHint() {
+  const el = $('#quota-hint');
+  if (!el) return;
+  const q = await api('/api/me/quota').catch(() => null);
+  if (!q) { el.textContent = ''; return; }
+  el.textContent = `今日解析 ${q.parse_used}/${q.parse_limit} 篇 · 磁盘 ${((q.disk_used_bytes || 0) / 1073741824).toFixed(1)}/${q.disk_limit_gb}G`;
+}
 $('#upload-arrow')?.addEventListener('click', e => {
   e.stopPropagation();
   upPop.hidden = !upPop.hidden;
   upPop.style.bottom = '52px'; upPop.style.top = 'auto';
   upPop.style.right = '12px'; upPop.style.left = 'auto';
   updateUploadTarget(); updateVisToggle();
+  if (!upPop.hidden) refreshQuotaHint();
 });
 $('#upload-file-btn').onclick = () => { upPop.hidden = true; $('#file-input').click(); };
 document.addEventListener('click', e => {
@@ -551,7 +562,7 @@ $('#url-import-btn').onclick = async () => {
     $('#url-import-input').value = '';
     upPop.hidden = true;
     await refreshLib();
-  } catch (e) { toast('导入失败: ' + e.message); }
+  } catch (e) { toast(quotaTip('导入失败: ' + e.message), 5000); }
 };
 $('#url-import-input').onkeydown = e => { if (e.key === 'Enter') $('#url-import-btn').click(); };
 /* 标识符导入（zotero-mcp 式）：DOI / arXiv ID / BibTeX → 元数据 + OA PDF */
@@ -575,7 +586,7 @@ $('#ident-btn').onclick = async () => {
     if (nf) msg += `，${nf} 条未识别`;
     toast(msg, 4000);
     if (q) { ta.value = ''; upPop.hidden = true; await loadCollections(); await refreshLib(); }
-  } catch (e) { toast('导入失败: ' + e.message); }
+  } catch (e) { toast(quotaTip('导入失败: ' + e.message), 5000); }
   btn.disabled = false; btn.textContent = '导入';
 };
 $('#ident-input').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) $('#ident-btn').click(); };
@@ -612,7 +623,7 @@ $('#dir-btn').onclick = async () => {
     upPop.hidden = true;
     await loadImportDirs();
     await refreshLib();
-  } catch (e) { toast('目录导入失败: ' + e.message); }
+  } catch (e) { toast(quotaTip('目录导入失败: ' + e.message), 5000); }
   btn.disabled = false; btn.textContent = '📁 目录导入';
 };
 loadImportDirs();
@@ -652,6 +663,12 @@ async function uploadFiles(files, targetCid) {
   const okFile = f => /\.(pdf|png|jpe?g|docx?|pptx?|xlsx?)$/i.test(f.name);
   const pdfs = [...files].filter(okFile);
   if (!pdfs.length) { toast('支持 PDF / 图片 / Office 文档'); return; }
+  try {   // 磁盘软提醒：超上限警告但不拦截（展示口径，硬拦在 max_file_mb/页数过滤）
+    const q = await api('/api/me/quota');
+    const usedGb = (q.disk_used_bytes || 0) / 1073741824;
+    if (q.disk_limit_gb && usedGb >= q.disk_limit_gb)
+      toast(`磁盘已用 ${usedGb.toFixed(1)}GB，已达上限 ${q.disk_limit_gb}GB——建议清理回收站或联系管理员`, 5000);
+  } catch { /* ignore */ }
   const vis = state.uploadPrivate ? 'private' : 'shared';
   const col = (targetCid || state.currentCollection) ? `&collection_id=${targetCid || state.currentCollection}` : '';
   const cid = targetCid || state.currentCollection || '';
@@ -2329,7 +2346,7 @@ async function doAcquireImport() {
     $('#acq-pop').hidden = true;
     a.sel = new Set();
     await refreshLib();
-  } catch (e) { toast('采集失败: ' + e.message); }
+  } catch (e) { toast(quotaTip('采集失败: ' + e.message), 5000); }
   if (btn) { btn.disabled = false; btn.textContent = '下载并入库（' + state._acq.sel.size + '）'; }
 }
 
@@ -2708,7 +2725,7 @@ function renderDiscover() {
             (dup ? `，${dup} 篇已在库跳过` : '') + (nopdf ? `，${nopdf} 篇无公开 PDF` : ''));
       pop.hidden = true;
       loadPapers();
-    } catch (e) { toast('导入失败: ' + e.message); }
+    } catch (e) { toast(quotaTip('导入失败: ' + e.message), 5000); }
   });
 }
 $('#discover-btn')?.addEventListener('click', e => { e.stopPropagation(); openDiscover(); });
@@ -2802,7 +2819,8 @@ async function renderMeta() {
       <div class="meta-line">${icon('user')} <span id="m-authors">${esc(paper.authors || '—')}</span></div>
       <div class="meta-line" id="m-rank"><span class="muted">期刊分区：加载中…</span></div>
       <div class="meta-line">${icon('library')} <span id="m-src">${esc([paper.journal, paper.year, paper.doi ? 'DOI: ' + paper.doi : ''].filter(Boolean).join(' · ') || '—')}</span>
-        ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">${icon('check')} 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>`;
+        ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">${icon('check')} 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>
+      ${paper.owner_name && paper.owner_id !== state.me?.id ? `<div class="meta-line">${icon('user')} <span class="muted">上传者 ${esc(paper.owner_name)}</span></div>` : ''}`;
 
   $('#content-view').innerHTML = `
     <div class="meta-head card">
@@ -3855,7 +3873,7 @@ async function boot() {
       switchPage('settings');
       setTimeout(() => $('#admin-zone')?.scrollIntoView({block: 'start', behavior: 'smooth'}), 350);
     }
-    else if (act === 'usage') { switchPage('settings'); setTimeout(() => $('#usage-zone')?.scrollIntoView({block: 'center'}), 300); }
+    else if (act === 'usage') { switchPage('settings'); setTimeout(() => $('#me-quota-zone')?.scrollIntoView({block: 'center'}), 300); }
   };
   // 未配置 key 提示横幅
   if (!state.me.llm_configured.chat) {
@@ -4010,6 +4028,7 @@ async function renderSettings() {
         ${tpl('translate', d.translate, d.translate)}
       </div>
       <div class="set-col">
+        <div id="me-quota-zone"></div>
         <h2 class="page-h">${icon('book')} 翻译术语表（全局）</h2>
         <div id="gl-list" style="margin:10px 0"></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -4045,6 +4064,34 @@ async function renderSettings() {
     } catch (err) { toast('修改失败: ' + err.message); }
   };
   if (isAdmin) renderAdminZone();
+  renderMeQuota();
+}
+/* 我的用量：所有用户可见（/api/me/quota + /api/usage 对 member 自动只返回自己的数据） */
+async function renderMeQuota() {
+  const el = $('#me-quota-zone');
+  if (!el) return;
+  const [q, usage] = await Promise.all([
+    api('/api/me/quota').catch(() => null),
+    api('/api/usage').catch(() => null),
+  ]);
+  if (!q) return;
+  const pPct = q.parse_limit ? Math.round(q.parse_used / q.parse_limit * 100) : 0;
+  const usedGb = (q.disk_used_bytes || 0) / 1073741824;
+  const dPct = q.disk_limit_gb ? Math.round(usedGb / q.disk_limit_gb * 100) : 0;
+  const bar = (pct, warn) => `<div style="height:6px;background:var(--line-soft);border-radius:3px;overflow:hidden;margin-top:4px">
+    <i style="display:block;height:100%;width:${Math.min(100, pct)}%;background:${pct >= warn ? 'var(--warn)' : 'var(--primary)'}"></i></div>`;
+  const days = (usage?.by_day || []).slice(0, 7).map(r =>
+    `<tr><td>${esc(String(r.day).slice(5))}</td><td style="text-align:right;font-size:11px">${((r.p || 0) + (r.c || 0)).toLocaleString()} tok</td></tr>`).join('');
+  el.innerHTML = `
+    <h2 class="page-h">${icon('chart')} 我的用量</h2>
+    <div class="set-card">
+      <div style="font-size:12px">今日解析 <b>${q.parse_used}</b> / ${q.parse_limit} 篇${pPct >= 80 ? ' <span class="badge err">接近上限</span>' : ''}</div>
+      ${bar(pPct, 80)}
+      <div style="font-size:12px;margin-top:12px">磁盘已用 <b>${usedGb.toFixed(2)}</b> / ${q.disk_limit_gb} GB${dPct >= 90 ? ' <span class="badge err">空间紧张</span>' : ''}</div>
+      ${bar(dPct, 90)}
+      <div style="font-size:12px;margin-top:12px">近 30 天 token：<b>${(q.tokens_30d || 0).toLocaleString()}</b>${days ? '<span class="muted">（近 7 天 ↓）</span>' : ''}</div>
+      ${days ? `<table class="list" style="margin-top:4px">${days}</table>` : ''}
+    </div>`;
 }
 async function renderAdminZone() {
   const el = $('#admin-zone');
@@ -4057,22 +4104,41 @@ async function renderAdminZone() {
     <h2 class="page-h">${icon('crown')} 管理（仅管理员可见）</h2>
     <div class="set-card">
       <div class="set-head">邀请码</div>
-      <button class="btn small primary" onclick="createInvite()">${icon('plus')} 生成（7天）</button>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="invite-days" style="width:auto;font-size:12px">
+          <option value="3">3 天</option><option value="7" selected>7 天</option>
+          <option value="14">14 天</option><option value="30">30 天</option>
+        </select>
+        <button class="btn small primary" onclick="createInvite()">${icon('plus')} 生成邀请码</button>
+      </div>
       <div id="invite-out" style="margin-top:8px;font-size:13px"></div>
     </div>
     <div class="set-card">
-      <div class="set-head">用户与限额 <span class="muted" style="font-size:11px">覆盖示例 {"max_pages":1000}</span></div>
-      <table class="list">${users.users.map(u => `<tr>
-        <td>${esc(u.username)} ${u.role === 'admin' ? '<span class="badge priv">admin</span>' : ''}</td>
-        <td>${u.papers} 篇</td>
-        <td style="width:40%"><input style="font-size:11px" id="q-${u.id}" value='${esc(u.overrides || '{}')}'></td>
+      <div class="set-head">用户与限额 <span class="muted" style="font-size:11px">展开行编辑限额，留空用默认值</span></div>
+      <table class="list">${users.users.map(u => {
+        const ov = (() => { try { return JSON.parse(u.overrides || '{}'); } catch { return {}; } })();
+        state._quotaRaw = state._quotaRaw || {};
+        state._quotaRaw[u.id] = ov;
+        const n = Object.keys(ov).length;
+        return `<tr>
+        <td>${esc(u.username)} ${u.role === 'admin' ? '<span class="badge priv">admin</span>' : ''}
+          ${u.disabled === 2 ? '<span class="badge priv">已注销</span>' : ''}${u.disabled === 1 ? '<span class="badge err">已禁用</span>' : ''}</td>
+        <td style="font-size:11px">${u.papers} 篇<br><span class="muted">${((u.disk_used || 0) / 1073741824).toFixed(2)}G · 30d ${(u.tokens_30d || 0).toLocaleString()}tok</span></td>
         <td class="row-actions">
-          ${u.disabled === 2 ? '<span class="badge priv">已注销</span>' : ''}
-          <button class="btn small" onclick="saveQuota(${u.id})" title="保存限额">${icon('save')}</button>
+          <details class="q-edit"><summary class="btn small" title="编辑限额">${icon('sliders')}${n ? ` ${n}` : ''}</summary>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;padding:6px 2px;align-items:center">
+              <label>解析/日 <input id="q-${u.id}-dp" type="number" min="1" style="width:58px;font-size:12px" value="${ov.daily_parse_papers ?? ''}" placeholder="默认"></label>
+              <label>单文件MB <input id="q-${u.id}-fm" type="number" min="1" style="width:58px;font-size:12px" value="${ov.max_file_mb ?? ''}" placeholder="100"></label>
+              <label>页数 <input id="q-${u.id}-pp" type="number" min="1" style="width:58px;font-size:12px" value="${ov.max_pages ?? ''}" placeholder="∞"></label>
+              <label>磁盘GB <input id="q-${u.id}-dk" type="number" min="1" style="width:58px;font-size:12px" value="${ov.max_disk_gb ?? ''}" placeholder="20"></label>
+              <button class="btn small primary" onclick="saveQuota(${u.id})">${icon('save')} 保存</button>
+            </div>
+          </details>
           <button class="btn small danger" onclick="resetUserPw(${u.id}, '${esc(u.username)}')" title="重置为临时密码">${icon('key')}</button>
+          ${u.id !== state.me.id && u.role !== 'admin' && !u.disabled ? `<button class="btn small danger" onclick="deleteUser(${u.id}, '${esc(u.username)}')" title="注销账号（匿名化，保留其论文）">${icon('trash')}</button>` : ''}
           ${u.id !== state.me.id && !u.disabled ? `<button class="btn small danger" onclick="toggleUser(${u.id}, '${esc(u.username)}', true)" title="禁用登录">${icon('stop')}</button>` : ''}
           ${u.disabled === 1 ? `<button class="btn small" onclick="toggleUser(${u.id}, '${esc(u.username)}', false)" title="重新启用">${icon('play')}</button>` : ''}
-        </td></tr>`).join('')}</table>
+        </td></tr>`;}).join('')}</table>
       <div class="set-head" style="margin-top:14px">${icon('clock')} 审计日志 <span class="muted" style="font-weight:400">最近操作</span></div>
       <div id="audit-list" style="max-height:220px;overflow-y:auto;font-size:var(--fs-xs)">
         ${audit.rows.length ? audit.rows.map(r =>
@@ -4104,7 +4170,8 @@ async function renderAdminZone() {
 }
 /* 管理区动作（48b9862 改造时误删了实现，按钮留着 → 一按就 ReferenceError） */
 window.createInvite = async () => {
-  const d = await api('/api/admin/invite', {method: 'POST'});
+  const days = +($('#invite-days')?.value || 7);
+  const d = await api(`/api/admin/invite?days=${days}`, {method: 'POST'});
   const el = $('#invite-out');
   if (el) el.innerHTML = `邀请码: <code style="font-size:16px">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
 };
@@ -4129,12 +4196,31 @@ window.resetUserPw = async (uid, uname) => {
   } catch (e) { toast('重置失败: ' + e.message); }
 };
 
+/* 结构化限额编辑：4 个数字字段 + 保留结构化编辑器之外的历史键（_quotaRaw 渲染时缓存） */
 window.saveQuota = async uid => {
+  const ov = {...((state._quotaRaw || {})[uid] || {})};
+  const num = (suf, key) => {
+    const v = $(`#q-${uid}-${suf}`)?.value.trim();
+    if (v) ov[key] = +v; else delete ov[key];
+  };
+  num('dp', 'daily_parse_papers');
+  num('fm', 'max_file_mb');
+  num('pp', 'max_pages');
+  num('dk', 'max_disk_gb');
   try {
-    const overrides = JSON.parse($('#q-' + uid).value || '{}');
-    await api(`/api/admin/users/${uid}/quota`, {method: 'PUT', body: JSON.stringify(overrides)});
-    toast('已保存');
-  } catch (e) { toast('JSON 格式错误: ' + e.message); }
+    await api(`/api/admin/users/${uid}/quota`, {method: 'PUT', body: JSON.stringify(ov)});
+    toast('已保存限额'); renderAdminZone();
+  } catch (e) { toast('保存失败: ' + e.message); }
+};
+window.deleteUser = async (uid, uname) => {
+  const inp = await uiPrompt(`注销账号 <b>${esc(uname)}</b>？将立即禁用并匿名化用户名（其论文保留、归属不变，可恢复）。<br>输入用户名以确认：`,
+                             {placeholder: uname, okText: '确认注销'});
+  if (inp === null) return;
+  if (inp.trim() !== uname) { toast('用户名不匹配，已取消'); return; }
+  try {
+    await api(`/api/admin/users/${uid}`, {method: 'DELETE'});
+    toast('已注销'); renderAdminZone();
+  } catch (e) { toast('操作失败: ' + e.message); }
 };
 window.togglePool = async enable => {
   await api('/api/admin/pool', {method: 'POST', body: JSON.stringify({enabled: enable})});
@@ -4438,7 +4524,8 @@ async function renderCollectionsPage(preset = null) {
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${state.selected.has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
           ${esc(p.title || p.id)}
-          ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size:11px"> · ${esc(owner.name)}</span>` : ''}</td>
+          ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size:11px"> · ${esc(owner.name)}</span>` : ''}
+          ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" style="font-size:11px" title="上传者"> · ${esc(p.owner_name)}</span>` : ''}</td>
         <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="muted" style="font-size:11px">${tk ? (tk.p + tk.c).toLocaleString() + ' tok' : ''}</td>

@@ -91,10 +91,16 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/papers")
 CJ2=$(mktemp)
 curl -sf -c "$CJ2" -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
     -d "{\"username\":\"admin\",\"password\":\"$PW\"}" >/dev/null
-for ep in "/api/acquire/status" "/api/acq-tasks" "/api/syntheses" "/api/jobs/count"; do
+for ep in "/api/acquire/status" "/api/acq-tasks" "/api/syntheses" "/api/jobs/count" "/api/me/quota"; do
     CODE=$(curl -sf -b "$CJ2" -o /dev/null -w '%{http_code}' "$BASE$ep")
     [[ "$CODE" == 200 ]] && ok "GET $ep" || bad "GET $ep HTTP $CODE"
 done
+# 多用户管理字段（disabled 列缺失曾导致「启用」按钮永不渲染）
+AU=$(curl -sf -b "$CJ2" "$BASE/api/admin/users" || echo '')
+echo "$AU" | grep -q '"disabled"' && ok "admin/users 含 disabled 列" || bad "admin/users 缺 disabled 列"
+echo "$AU" | grep -q '"disk_used"' && ok "admin/users 含磁盘用量" || bad "admin/users 缺 disk_used"
+PP=$(curl -sf -b "$CJ2" "$BASE/api/papers?page_size=1" || echo '')
+echo "$PP" | grep -q '"owner_name"' && ok "papers 列表含归属 owner_name" || bad "papers 缺 owner_name"
 FIRST_SYN=$(curl -s -b "$CJ2" "$BASE/api/syntheses" | python3 -c 'import json,sys
 try: d=json.load(sys.stdin)
 except Exception: d={}
