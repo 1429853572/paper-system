@@ -422,7 +422,10 @@ def _enforce_parse_quota(u: dict) -> dict:
 
 def _get_paper_or_404(paper_id: str, u: dict):
     """取论文行 + 404 + 可见性校验（同构模式；软删行同报 404）。"""
-    _get_paper_or_404(paper_id, u)
+    p = db.one("SELECT * FROM papers WHERE id=?", (paper_id,))
+    if p is None or p["deleted_at"]:
+        raise HTTPException(404, "论文不存在")
+    _require_visible(u, p)
     return p
 
 
@@ -625,7 +628,7 @@ def _require_owner(u: dict, paper) -> None:
 @app.get("/api/papers/{paper_id}/pdf")
 def paper_pdf(paper_id: str, request: Request):
     u = require(request)
-    _get_paper_or_404(paper_id, u)
+    p = _get_paper_or_404(paper_id, u)
     import mimetypes
     path = None
     base = ingest.PAPERS_DIR / paper_id
@@ -648,7 +651,7 @@ def paper_pdf(paper_id: str, request: Request):
 @app.get("/api/papers/{paper_id}/markdown")
 def paper_markdown(paper_id: str, request: Request, run: str = ""):
     u = require(request)
-    _get_paper_or_404(paper_id, u)
+    p = _get_paper_or_404(paper_id, u)
     if not run:
         r = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
                    "ORDER BY created_at DESC LIMIT 1", (paper_id,))
@@ -671,7 +674,7 @@ def paper_markdown(paper_id: str, request: Request, run: str = ""):
 @app.get("/api/papers/{paper_id}/images/{name}")
 def paper_image(paper_id: str, name: str, request: Request):
     u = require(request)
-    _get_paper_or_404(paper_id, u)
+    p = _get_paper_or_404(paper_id, u)
     base = (ingest.PAPERS_DIR / paper_id / "parse").resolve()
     matches = sorted(base.glob(f"*/images/{name}"))
     if not matches or not str(matches[0].resolve()).startswith(str(base)):
@@ -1795,7 +1798,7 @@ def export_session(session_id: str, request: Request):
 def export_summary(paper_id: str, request: Request):
     """导读导出 Markdown（9 字段 + 证据页码）。"""
     u = require(request)
-    _get_paper_or_404(paper_id, u)
+    p = _get_paper_or_404(paper_id, u)
     s = db.one("SELECT * FROM summaries WHERE paper_id=? ORDER BY created_at DESC LIMIT 1", (paper_id,))
     if s is None:
         raise HTTPException(404, "尚未生成导读")
@@ -2520,7 +2523,7 @@ def empty_trash(request: Request):
 def download_paper(paper_id: str, fmt: str, request: Request, items: str = ""):
     """fmt: pdf(原始PDF) md(原文md) bilingual_md bilingual_pdf zh_pdf en_pdf zip(组合)"""
     u = require(request)
-    _get_paper_or_404(paper_id, u)
+    p = _get_paper_or_404(paper_id, u)
     from core.exporter import (_zip_base_name, bilingual_md, build_zip, en_md,
                                md_to_pdf, original_md, zh_md)
     base = _zip_base_name(dict(p))
@@ -2804,7 +2807,7 @@ def paper_cite(paper_id: str, request: Request):
     前端拿到后本地切换样式、即时预览，不弹窗、不逐次请求。
     """
     u = require(request)
-    _get_paper_or_404(paper_id, u)
+    p = _get_paper_or_404(paper_id, u)
     from core.cite import STYLES, DEFAULT_STYLE, all_styles, csl_json, CSL_STYLES
     return {
         "styles": all_styles(dict(p)),          # 旧内置渲染：bibtex 用；CSL 失败时兜底
@@ -2820,7 +2823,7 @@ def paper_cite(paper_id: str, request: Request):
 def paper_discover(paper_id: str, request: Request, mode: str = "rec", limit: int = 20):
     """相关文献发现：rec=相关推荐 / refs=参考文献 / cites=引证。结果带 in_library 标记。"""
     u = require(request)
-    _get_paper_or_404(paper_id, u)
+    p = _get_paper_or_404(paper_id, u)
     from core import discover as _disc
     try:
         items = _disc.discover(dict(p), mode, limit)

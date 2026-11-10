@@ -101,6 +101,16 @@ echo "$AU" | grep -q '"disabled"' && ok "admin/users 含 disabled 列" || bad "a
 echo "$AU" | grep -q '"disk_used"' && ok "admin/users 含磁盘用量" || bad "admin/users 缺 disk_used"
 PP=$(curl -sf -b "$CJ2" "$BASE/api/papers?page_size=1" || echo '')
 echo "$PP" | grep -q '"owner_name"' && ok "papers 列表含归属 owner_name" || bad "papers 缺 owner_name"
+# 论文详情四联端点（cite 曾因 helper 递归 500——详情/引用是阅读页首屏路径）
+PID1=$(echo "$PP" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["papers"][0]["id"])
+except Exception: print("")' 2>/dev/null)
+if [[ -n "${PID1:-}" ]]; then
+    for ep in "" "/cite" "/notes" "/jobstate"; do
+        CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/papers/$PID1$ep")
+        [[ "$CODE" == 200 ]] && ok "GET /api/papers/{id}$ep" || bad "GET /api/papers/{id}$ep HTTP $CODE"
+    done
+fi
 FIRST_SYN=$(curl -s -b "$CJ2" "$BASE/api/syntheses" | python3 -c 'import json,sys
 try: d=json.load(sys.stdin)
 except Exception: d={}
