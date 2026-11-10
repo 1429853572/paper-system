@@ -49,7 +49,6 @@
         <div class="tp-label">筛选</div>
         <div class="tp-item" data-f="">全部</div>
         <div class="tp-item" data-f="parsed">已解析</div>
-        <div class="tp-item" data-f="parsing">解析中</div>
         <div class="tp-item" data-f="failed">失败</div>
         <div class="tp-item" data-f="skipped">已跳过</div>
         <div class="tp-item" data-f="private">仅私人</div>
@@ -114,7 +113,7 @@
   <!-- ======= 主区 ======= -->
   <main class="main">
     <nav class="topbar">
-      <button class="btn small" id="menu-toggle" aria-label="菜单"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg></button>
+      <button class="btn small" id="menu-toggle" title="收起/展开侧栏" aria-label="菜单"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg></button>
       <span class="title" id="page-title">阅读</span>
       <div class="topnav">
         <button data-page="reader" class="on"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 4.2C6.6 3 4.2 2.8 2.6 3.6v9c1.6-.8 4-.6 5.4.6 1.4-1.2 3.8-1.4 5.4-.6v-9C11.8 2.8 9.4 3 8 4.2z"/><path d="M8 4.2v9"/></svg> 阅读</button>
@@ -130,12 +129,12 @@
         <div class="pane-left" id="pane-left">
           <div class="pdf-toolbar" id="pdf-toolbar" hidden>
             <button id="layout-btn" title="显示/隐藏版面布局框（MinerU 检测的块边界）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/></svg></button>
-            <button id="pg-prev" aria-label="上一页"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13 8H3M7 4L3 8l4 4"/></svg></button>
+            <button id="pg-prev" title="上一页" aria-label="上一页"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13 8H3M7 4L3 8l4 4"/></svg></button>
             <span id="pg-label">- / -</span>
-            <button id="pg-next" aria-label="下一页"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
-            <button id="zoom-out" aria-label="缩小"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M5.5 7h3"/></svg></button>
+            <button id="pg-next" title="下一页" aria-label="下一页"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
+            <button id="zoom-out" title="缩小" aria-label="缩小"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M5.5 7h3"/></svg></button>
             <span id="zoom-label">100%</span>
-            <button id="zoom-in" aria-label="放大"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M7 5.5v3M5.5 7h3"/></svg></button>
+            <button id="zoom-in" title="放大" aria-label="放大"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M7 5.5v3M5.5 7h3"/></svg></button>
           </div>
           <div class="pdf-host" id="pdf-host"></div>
         </div>

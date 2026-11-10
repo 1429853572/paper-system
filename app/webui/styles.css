@@ -234,20 +234,6 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
   vertical-align: baseline; font-weight: 600;
 }
 .cite[data-gid]:hover { background: var(--tint-primary-2); text-decoration: none; }
-.preset-qs { padding: 0 16px 8px; display: flex; flex-direction: column; gap: 6px; }
-.preset-qs button { text-align: left; border: 1px dashed var(--border); background: none; border-radius: var(--r-md); padding: 7px 10px; font-size: var(--fs-sm); color: var(--muted); }
-.chip-add { border: 1px dashed var(--border); background: none; color: var(--muted);
-            cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
-.chip-add:hover { border-color: var(--primary); color: var(--primary); background: var(--hover); }
-
-
-/* 推荐问题：默认收起成一行，展开才占版面 */
-.preset-qs .preset-toggle { display: flex; align-items: center; gap: 6px; border: none; border-radius: var(--r-sm); padding: 3px 2px; font-size: var(--fs-sm); color: var(--muted); }
-.preset-qs .preset-toggle:hover { background: var(--hover); color: var(--primary); }
-.preset-qs .preset-toggle .arrow { display: inline-block; transition: transform .15s; font-size: var(--fs-xs); }
-.preset-qs .preset-toggle.open .arrow { transform: rotate(180deg); }
-.preset-qs .preset-list { display: flex; flex-direction: column; gap: 6px; }
-.preset-qs .preset-list[hidden] { display: none; }
 .qa-input { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
 .qa-input textarea { resize: none; height: 44px; }
 

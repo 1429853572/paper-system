@@ -267,10 +267,16 @@ def me(request: Request):
     u = require(request)
     row = db.one("SELECT username, role, created_at FROM users WHERE id=?", (u["id"],))
     llm = auth.get_user_llm(u["id"]) or {}
+    pool = db.one("SELECT value FROM settings WHERE key='pool_enabled'")
+    pool_on = pool is not None and pool["value"] == "1"   # 公共额度池：未配 key 的成员问答走 POOL key
     return {
         "id": u["id"], "username": row["username"], "role": row["role"],
         "llm_configured": {
             "chat": bool(llm.get("chat", {}).get("key")),
+            "translate": bool(llm.get("translate", {}).get("key")),
+        },
+        "llm_usable": {
+            "chat": pool_on or bool(llm.get("chat", {}).get("key")),
             "translate": bool(llm.get("translate", {}).get("key")),
         },
     }
@@ -346,7 +352,15 @@ async def set_llm_settings(request: Request):
 async def test_llm(request: Request):
     u = require(request)
     body = await request.json()
-    ok, msg = test_connection(body.get("base_url", ""), body.get("api_key", ""),
+    api_key = body.get("api_key") or ""
+    purpose = body.get("purpose") or "chat"
+    if not api_key:
+        # key 留空 = 测试已保存的配置（base_url/model 仍取表单当前值）
+        stored = (auth.get_user_llm(u["id"]) or {}).get(purpose) or {}
+        api_key = stored.get("key", "")
+        if not api_key:
+            return {"ok": False, "message": "未保存任何 key（先在下方填写并保存，或输入 key 再测试）"}
+    ok, msg = test_connection(body.get("base_url", ""), api_key,
                               body.get("model", ""), body.get("api_type", "openai"))
     return {"ok": ok, "message": msg}
 

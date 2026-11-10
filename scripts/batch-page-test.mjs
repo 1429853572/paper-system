@@ -171,7 +171,8 @@ if (btn) {
 
 // 2) 三区结构
 ok('圈定器渲染', !!doc.querySelector('#page-batch .batch-pick'));
-ok('操作卡数量≥6', doc.querySelectorAll('#page-batch .batch-card').length >= 6,
+ok('操作卡=3（专题/采集/综述——批量操作卡已收敛到文库批量条）',
+   doc.querySelectorAll('#page-batch .batch-card').length === 3,
    `实际 ${doc.querySelectorAll('#page-batch .batch-card').length}`);
 ok('综述卡已激活', !!doc.querySelector('#page-batch .batch-card[data-act="review"]') &&
    !doc.querySelector('#page-batch .batch-card[data-act="review"]').classList.contains('soon'));

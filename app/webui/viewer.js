@@ -584,7 +584,7 @@ $('#ident-btn').onclick = async () => {
     toast(msg, 4000);
     if (q) { ta.value = ''; upPop.hidden = true; await loadCollections(); await refreshLib(); }
   } catch (e) { toast(quotaTip('导入失败: ' + e.message), 5000); }
-  btn.disabled = false; btn.textContent = '导入';
+  btn.disabled = false; btn.textContent = '导入 ID';
 };
 $('#ident-input').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) $('#ident-btn').click(); };
 /* 目录批量入库：inbox/ 下子目录 → 扫描入库（CAJ 自动转 PDF），进度见任务中心 */
@@ -717,7 +717,7 @@ async function uploadFiles(files, targetCid) {
 
 /* 多选模式与批量操作 */
 /* ---- 筛选与排序菜单（▾）---- */
-const FILTERS = [['', '全部'], ['parsed', '已解析'], ['parsing', '解析中'], ['failed', '失败'], ['private', '仅私人']];
+const FILTERS = [['', '全部'], ['parsed', '已解析'], ['parsing', '解析中'], ['skipped', '已跳过'], ['failed', '失败'], ['private', '仅私人']];
 const SORTS = [['recent', '最近更新'], ['title', '标题'], ['pages', '页数'], ['size', '文件大小']];
 function sortPapers(list) {
   const arr = [...list];
@@ -1255,6 +1255,7 @@ async function parseCtrl() {
 }
 window.parseCtrl = parseCtrl;   // 内联 onclick 在全局作用域求值，模块函数需显式挂 window
 async function startTranslate() {
+  if (!state.current?.id) { toast('先在左侧列表打开一篇论文'); return; }
   try {
     const r = await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [state.current.id]})});
     toast(r.skipped_in_flight?.length ? '该论文已有译文/已在队列，无需重复' : '翻译任务已加入队列');
@@ -1538,12 +1539,8 @@ state._batchOpen = new Set();   // 进度面板里展开的批次
 state._batchPreset = null;      // 从文库批量条带过来的圈定
 state._batchPapers = [];        // 圈定来源论文缓存（供明细显示标题）
 
-const BATCH_ACTS = {
-  summary:   {label: '批量导读', desc: '为圈定论文生成 9 字段导读；已有导读的自动跳过'},
-  translate: {label: '批量翻译', desc: '翻译圈定论文；已有完整译文的自动跳过'},
-  meta:      {label: '元数据补全', desc: '联网校准（arXiv/S2/CrossRef）+ AI 补缺失字段'},
-  parse:     {label: '批量重解析', desc: '重新提取全文；仅自己上传的论文可执行，译文对应关系作废'},
-};
+// 批量导读/翻译/元数据/重解析/BibTeX/删除卡已移除——与文库管理页批量条逐一重复（收敛到单一入口）
+const BATCH_ACTS = {};
 
 async function renderBatchPage() {
   const el = $('#page-batch');
@@ -1563,8 +1560,7 @@ async function renderBatchPage() {
               <select id="bpp-year" title="按年份筛选" style="width:auto;font-size:12px">
                 <option value="">全部年份</option>
               </select>
-              <button class="btn small" id="bpp-reload" title="重新加载论文与库结构">${icon('retry')}</button>
-            </div>
+                          </div>
             <div class="bpp-viewseg">
               <button id="bpp-v-all" class="on">📂 按库浏览</button>
               <button id="bpp-v-sel">✅ 已选定（<span id="bpp-v-n">${state.selected.size}</span>）</button>
@@ -1586,14 +1582,6 @@ async function renderBatchPage() {
               <b>${icon('inbox')} 采集文献</b><span class="muted">按关键词检索 → 勾选 → 浏览器下载入库（知网/预印本）</span></div>
             <div class="batch-card primary ${state.selected.size ? '' : 'off'}" data-act="review" title="自动分组→组内比对→跨组综合，生成可导出的综述报告">
               <b>${icon('doc')} 综述报告</b><span class="muted">多文献自动分组 · 逐组比对 · 跨组综合 · 导出 MD/CSV（2~90 篇）——批量处理的核心产出</span></div>
-            ${Object.entries(BATCH_ACTS).map(([k, v]) => `
-              <div class="batch-card ${state.selected.size ? '' : 'off'}" data-act="${k}" title="${esc(v.desc)}">
-                <b>${v.label}</b><span class="muted">${esc(v.desc)}</span>
-              </div>`).join('')}
-            <div class="batch-card ${state.selected.size ? '' : 'off'}" data-act="bibtex">
-              <b>${icon('library')} 导出 BibTeX</b><span class="muted">圈定论文合并为一个 .bib 文件直接下载</span></div>
-            <div class="batch-card ${state.selected.size ? '' : 'off'}" data-act="delete">
-              <b>${icon('trash')} 移入回收站</b><span class="muted">圈定论文整体入回收站（${state.health.trash_days || 30} 天内可恢复）</span></div>
           </div>
         </div>
       </div>
@@ -1601,7 +1589,7 @@ async function renderBatchPage() {
         <div class="bp-head"><b>我的综述</b>
           <span class="muted" style="font-size:11px">历史报告永久保存——查看 / 导出 / 删除；进行中的显示实时进度</span>
           <span class="spacer"></span>
-          <button class="btn small" id="syn-refresh">${icon('retry')} 刷新</button></div>
+          </div>
         <div id="syn-list"><p class="muted" style="padding:8px 16px">加载中…</p></div>
       </div>
     </div>`;
@@ -1611,7 +1599,6 @@ async function renderBatchPage() {
   const _bppSearch = debounce(() => { state._bpp.q = $('#bpp-search').value.trim(); renderBpPicker(); }, 250);
   $('#bpp-search').oninput = _bppSearch;
   $('#bpp-year').onchange = e => { state._bpp.year = e.target.value; renderBpPicker(); };
-  $('#bpp-reload').onclick = () => loadBpPicker();
   $('#bpp-v-all').onclick = () => { state._bpp.view = 'all'; renderBpPicker(); };
   $('#bpp-v-sel').onclick = () => { state._bpp.view = 'sel'; renderBpPicker(); };
   loadBpPicker();          // 勾选面板常驻，进页即加载
@@ -1660,7 +1647,6 @@ async function renderSynList() {
   }).join('');
 }
 $('#page-batch').addEventListener('click', async e => {
-  if (e.target.closest('#syn-refresh')) { renderSynList(); return; }
   const sv = e.target.closest('#syn-list [data-syn-view]');
   if (sv) { showSynthesisReport(sv.dataset.synView); return; }
   const sd = e.target.closest('#syn-list [data-syn-dl]');
@@ -1853,8 +1839,7 @@ async function renderTasksPage() {
           <b style="font-size:var(--fs-lg)">任务中心</b>
           <span class="muted" style="font-size:11px">解析 / 翻译 / 导读 / 元数据 / 综述——全部任务的实时状态</span>
           <span class="spacer"></span>
-          <button class="btn small" id="tk-reload">${icon('retry')} 刷新</button>
-          <button class="btn small" id="tk-pause" title="暂停批量解析队列（手动任务不受影响）">⏸ 暂停批量</button>
+                    <button class="btn small" id="tk-pause" title="暂停批量解析队列（手动任务不受影响）">⏸ 暂停批量</button>
           <button class="btn small" id="tk-resume">▶ 恢复</button></div>
         <div class="task-filters">
           <span class="muted" style="font-size:11px">类型</span>
@@ -1868,7 +1853,6 @@ async function renderTasksPage() {
       <div id="mcp-zone"></div>
       <div class="card tasks-body" id="task-body"><p class="muted" style="padding:10px">加载中…</p></div>
     </div>`;
-  $('#tk-reload').onclick = () => renderTaskPanel();
   $('#tk-pause').onclick = () => pauseQueue();
   $('#tk-resume').onclick = () => resumeQueue();
   $$('#page-tasks [data-tt]').forEach(b => b.onclick = () => { state._taskFilter.type = b.dataset.tt; renderTasksPage(); });
@@ -2201,7 +2185,7 @@ async function showTopicDetail(tid) {
         ${t.synthesis_id ? `<button class="btn small primary" id="td-syn">查看综述报告</button>`
           : `<button class="btn small primary" id="td-mksyn" ${papers.length < 2 ? 'disabled' : ''}>
               ${papers.length < 2 ? '至少需要 2 篇入库论文'
-                : parsed < papers.length ? `剔除 ${papers.length - parsed} 篇未完成后生成（${parsed} 篇）`
+                : parsed < papers.length ? `用已完成的 ${parsed} 篇生成（剔除 ${papers.length - parsed} 篇未完成）`
                 : '生成综述报告'}</button>`}
       </div>
     </div>`;
@@ -2297,7 +2281,7 @@ function renderAcquirePop() {
     <div class="acq-foot">
       <span class="muted" style="font-size:11px" id="acq-stat"></span>
       <span class="spacer"></span>
-      <button class="btn small" id="acq-all">全选</button>
+      <button class="btn small" id="acq-all">${a.items.every((it, i) => it.in_library || !it.pdf_url || a.sel.has(i)) ? '取消全选' : '全选'}</button>
       <button class="btn small primary" id="acq-import">下载并入库（<span id="acq-n">0</span>）</button>
     </div>`;
   $$('.dp-tab', pop).forEach(b => b.onclick = () => { a.site = b.dataset.as; a.items = []; renderAcquirePop(); });
@@ -2600,12 +2584,13 @@ $('#page-batch').addEventListener('click', async e => {
   if (retry) { await api(`/api/jobs/${retry.dataset.retry}/retry`, {method: 'POST'}); renderTaskPanel(); return; }
   const cancel = e.target.closest('[data-cancel]');
   if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderTaskPanel(); return; }
+  const inSynList = !!e.target.closest('#syn-list');   // 「我的综述」列表有自己的委托（上方监听器）——否则删除会弹两个确认、DELETE 两次
   const synView = e.target.closest('[data-syn-view]');
-  if (synView) { showSynthesisReport(synView.dataset.synView); return; }
+  if (synView && !inSynList) { showSynthesisReport(synView.dataset.synView); return; }
   const synDl = e.target.closest('[data-syn-dl]');
-  if (synDl) { location.href = `/api/syntheses/${encodeURIComponent(synDl.dataset.synDl)}/export?fmt=${synDl.dataset.fmt}`; return; }
+  if (synDl && !inSynList) { location.href = `/api/syntheses/${encodeURIComponent(synDl.dataset.synDl)}/export?fmt=${synDl.dataset.fmt}`; return; }
   const synDel = e.target.closest('[data-syn-del]');
-  if (synDel) {
+  if (synDel && !inSynList) {
     if (await uiConfirm('删除这篇综述？（报告与矩阵将一并删除，进行中的任务同时取消）',
                         {title: '删除综述', danger: true, anchor: synDel})) {
       try { await api('/api/syntheses/' + encodeURIComponent(synDel.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
@@ -2704,10 +2689,18 @@ function renderDiscover() {
       ${Object.entries(DISC_LABELS).map(([k, v]) =>
         `<button class="dp-tab ${k === mode ? 'on' : ''}" data-dm="${k}">${v}</button>`).join('')}
       <span class="spacer"></span>
+      <button class="btn small" id="dp-reload" title="重新检索（清缓存）">${icon('retry')}</button>
       <button class="btn small" id="dp-close" aria-label="关闭">${icon('close')}</button>
     </div>
     <div class="dp-list">${items === null ? '<p class="muted" style="padding:14px">加载失败，请稍后重试</p>'
       : items === undefined ? '<p class="muted" style="padding:14px">加载中…</p>' : body}</div>${foot}`;
+  const rl = $('#dp-reload');
+  if (rl) rl.onclick = e2 => {
+    e2.stopPropagation();
+    delete discoverCache()[state._discMode];
+    renderDiscover();
+    loadDiscover();
+  };
   $$('.dp-tab', pop).forEach(b => b.onclick = e2 => {
     e2.stopPropagation();   // 处理器内重建了浮层内容，放行冒泡会让 document 的外点关闭逻辑误判（target 已脱离 DOM）
     state._discMode = b.dataset.dm;
@@ -2841,7 +2834,7 @@ async function renderMeta() {
     <div class="meta-head card">
       ${metaBody}
       <div class="meta-line"><span id="m-stars">${[1,2,3,4,5].map(i => `<span class="star ${i <= (notes.importance||0) ? 'on' : ''}" data-i="${i}">${icon('star')}</span>`).join('')}</span>
-        ${icon('tag')} <span id="m-tags">${esc(notes.tags || '') || '<i class=muted>点击右侧添加</i>'}</span></div>
+        ${icon('tag')} <span id="m-tags">${esc(notes.tags || '') || '<i class=muted>点击编辑标签</i>'}</span></div>
       <div class="meta-actions">
         ${editing ? `<button class="btn small primary" onclick="saveMeta('${pid}')">${icon('check')} 保存</button>
         <button class="btn small" onclick="cancelMeta()">取消</button>`
@@ -3141,7 +3134,6 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       <div id="qa-sum-bubble"></div>
       <div id="qa-msg-list"></div>
     </div>
-    <div class="preset-qs" id="preset-qs"></div>
     <div class="qa-quote" id="qa-quote" hidden>
       <span class="muted" style="font-size:11px">${icon('quote', 12)} 引用</span>
       <div class="qa-quote-text" id="qa-quote-text"></div>
@@ -3155,16 +3147,6 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
   renderCmdTags($('#cmdtags'));
   renderQaScope();
   populateQaPicker();
-  api('/api/presets').then(presets => {
-    const el = $('#preset-qs');
-    if (!el) return;
-    const qs = state.qaPapers.size >= 2 ? [...(presets.compare || [])] : [...presets.questions];
-    // 预设问题默认收起成一行，不占正文版面；点标题展开，提问后自动收起
-    el.innerHTML = `<button class="preset-toggle" id="preset-toggle">${icon('bulb')} 推荐问题<span class="arrow">${icon('chevD')}</span></button>
-      <div class="preset-list" id="preset-list" hidden>${qs.map(q =>
-      `<button onclick="askPreset('${jsArg(q)}')">${esc(q)}</button>`).join('')}</div>`;
-    $('#preset-toggle').onclick = () => togglePresetList();
-  });
   const pickToggle = $('#qa-pick-toggle');           // 仅对比模式渲染（单篇无选择器）
   if (pickToggle) pickToggle.onclick = () => {
     const panel = $('#qa-pick-panel');
@@ -3439,14 +3421,6 @@ document.addEventListener('click', e => {
   const p = $('#qa-pick-panel');
   if (p && !p.hidden && !p.contains(e.target) && !e.target.closest('#qa-pick-toggle')) p.hidden = true;
 });
-/* 推荐问题：展开/收起（默认收起，避免长期占用阅读空间） */
-function togglePresetList(force) {
-  const list = $('#preset-list'), tg = $('#preset-toggle');
-  if (!list) return;
-  list.hidden = force !== undefined ? !force : !list.hidden;
-  tg?.classList.toggle('open', !list.hidden);
-}
-function collapsePresetList() { togglePresetList(false); }
 window.autoParseForQA = async (pid, p) => {
   if (p.parse_status === 'parsing' || p.parse_status === 'pending') return;   // 已在队列
   try {
@@ -3602,7 +3576,6 @@ function sendQa() {
   $('#qa-text').value = '';
   state.qaHistory = [text, ...state.qaHistory.filter(x => x !== text)].slice(0, 30);
   state._histIdx = null;
-  collapsePresetList();      // 已提问 → 收起推荐问题，把版面让给回答
   const quote = state.qaQuote || '';
   $('#qa-msg-list').insertAdjacentHTML('beforeend',
     `<div class="msg user"><div class="bubble">${quote ? '<div class="muted" style="font-size:11px;border-left:2px solid #c9d2ee;padding-left:6px;margin-bottom:4px">' + icon('quote', 12) + ' ' + esc(quote.split('\n> ')[1]?.slice(0, 80) || '') + '…</div>' : ''}${esc(text)}</div></div>
@@ -3890,10 +3863,13 @@ async function boot() {
     }
     else if (act === 'usage') { switchPage('settings'); setTimeout(() => $('#me-quota-zone')?.scrollIntoView({block: 'center'}), 300); }
   };
-  // 未配置 key 提示横幅
-  if (!state.me.llm_configured.chat) {
-    $('.main').insertAdjacentHTML('afterbegin',
-      `<div class="check-banner">${icon('warn')}️ 尚未配置 LLM key——问答/翻译不可用。前往 <a href="#" onclick="switchPage('settings');return false">设置页</a> 配置。</div>`);
+  // key 缺失提示横幅（公共池开启时问答可用不算缺失；翻译需本人 key）
+  {
+    const miss = [];
+    if (!state.me.llm_usable?.chat) miss.push('问答');
+    if (!state.me.llm_configured.translate) miss.push('翻译');
+    if (miss.length) $('.main').insertAdjacentHTML('afterbegin',
+      `<div class="check-banner">${icon('warn')}️ ${miss.join('与')}不可用——前往 <a href="#" onclick="switchPage('settings');return false">设置页</a> 配置对应 LLM key。</div>`);
   }
   await initPdfJs();
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
@@ -3995,7 +3971,7 @@ window.jumpEvidence = page => { switchPage('reader'); if (state.pdfDoc) { state.
 /* ---- 回收站 ---- */
 async function renderTrash() {
   const d = await api('/api/papers?trash=1');
-  $('#page-trash').innerHTML = `<div class="card"><h2 style="display:flex;gap:10px;align-items:center">回收站（30 天后自动清理）
+  $('#page-trash').innerHTML = `<div class="card"><h2 style="display:flex;gap:10px;align-items:center">回收站（${state.health.trash_days || 30} 天后自动清理）
     <button class="btn small danger" style="margin-left:auto" onclick="emptyTrash()">${icon('trash')} 清空回收站</button></h2>
     <table class="list"><tr><th>标题</th><th>删除时间</th><th></th></tr>
     ${d.papers.map(p => `<tr><td>${esc(p.title)}</td><td class="muted">${fmtTime(p.deleted_at)}</td>
@@ -4014,7 +3990,7 @@ async function renderSettings() {
       <form id="f-${purpose}">
         <label>API 地址 <input name="base_url" value="${esc(conf.base_url)}" placeholder="https://open.bigmodel.cn/api/anthropic"></label>
         <label>模型 <input name="model" value="${esc(conf.model)}" placeholder="glm-4.7"></label>
-        <label>协议 <select name="api_type"><option value="anthropic" ${conf.base_url.includes('anthropic') ? 'selected' : ''}>anthropic</option><option value="openai" ${!conf.base_url.includes('anthropic') ? 'selected' : ''}>openai</option></select></label>
+        <label>协议 <select name="api_type"><option value="anthropic" ${(conf.api_type || (conf.base_url.includes('anthropic') ? 'anthropic' : 'openai')) === 'anthropic' ? 'selected' : ''}>anthropic</option><option value="openai" ${(conf.api_type || (conf.base_url.includes('anthropic') ? 'anthropic' : 'openai')) !== 'anthropic' ? 'selected' : ''}>openai</option></select></label>
         <label>API Key ${conf.configured ? '<span class="muted" style="font-size:11px">已保存（留空不变）</span>' : ''} <input name="api_key" type="password" placeholder="${conf.configured ? '••••••（输入可更换）' : '粘贴 API Key'}"></label>
         <div class="set-actions">
           <button class="btn" type="button" onclick="testLlm('f-${purpose}')">${icon('bolt')} 测试</button>
@@ -4049,10 +4025,10 @@ async function renderSettings() {
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <input id="gl-term" placeholder="术语" style="flex:2;min-width:120px">
           <select id="gl-target" style="flex:1;min-width:100px">
-            <option value="keep_en">保留英文</option><option value="trans">固定译法</option><option value="first_both">首次并列</option>
+            <option value="keep_en">保留英文</option><option value="trans">固定译法</option><option value="first_both">首次中英并列</option>
           </select>
           <input id="gl-value" placeholder="译法" style="flex:2;min-width:100px">
-          <button class="btn small primary" id="gl-add">${icon('plus')}</button>
+          <button class="btn small primary" id="gl-add" title="添加术语">${icon('plus')}</button>
         </div>
         ${isAdmin ? '<div id="admin-zone" style="margin-top:22px"></div>' : ''}
       </div>
@@ -4193,7 +4169,7 @@ window.createInvite = async () => {
 window.logoutAll = async () => {
   if (!(await uiConfirm('登出所有设备？其他已登录的会话将全部失效。', {title: '登出所有设备'}))) return;
   await api('/api/logout-all', {method: 'POST'});
-  toast('已登出所有设备');
+  toast('其他设备已登出（本设备保持登录）');
 };
 window.toggleUser = async (uid, uname, disable) => {
   const act = disable ? '禁用' : '重新启用';
@@ -4244,10 +4220,10 @@ window.togglePool = async enable => {
 };
 window.testLlm = async fid => {
   const f = new FormData($('#' + fid));
-  if (!f.get('api_key')) { toast('请先输入 key'); return; }
+  // key 留空 = 测试已保存配置（表单里的 base_url/模型仍生效）
   const r = await api('/api/settings/llm/test', {method: 'POST', body: JSON.stringify({
     base_url: f.get('base_url'), api_key: f.get('api_key'),
-    model: f.get('model'), api_type: f.get('api_type')})});
+    model: f.get('model'), api_type: f.get('api_type'), purpose: fid.replace('f-', '')})});
   toast(r.ok ? '✅ ' + r.message : '❌ ' + r.message);
 };
 async function loadGlossary() {
@@ -4261,8 +4237,10 @@ async function loadGlossary() {
   $('#gl-add').onclick = async () => {
     const term = $('#gl-term').value.trim();
     if (!term) { toast('请输入术语'); return; }
+    const target = $('#gl-target').value, value = $('#gl-value').value.trim();
+    if (target !== 'keep_en' && !value) { toast('该模式需要填写译法（否则该术语不会生效）'); return; }
     await api('/api/glossary', {method: 'POST', body: JSON.stringify({
-      term, target: $('#gl-target').value, value: $('#gl-value').value.trim()})});
+      term, target, value})});
     $('#gl-term').value = ''; $('#gl-value').value = '';
     toast('已添加，下次翻译生效'); loadGlossary();
   };
@@ -4325,7 +4303,7 @@ async function renderAssets() {
     }
     const t = it.t;
     return `<div class="asset">
-      ${t.label ? `<span class="asset-badge" onclick="jumpEvidence(${t.page_index})">${esc(t.label)}</span>` : ''}
+      ${t.label ? `<span class="asset-badge" title="跳到 PDF 该页" onclick="jumpEvidence(${t.page_index})">${esc(t.label)}</span>` : ''}
       ${t.bbox ? `<figure class="fig-crop" data-page="${t.page_index}" data-ub='${JSON.stringify(t.bbox)}'>
         <div class="fig-holder">${t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : ''}</div>
       </figure>` : (t.html ? `<div class="tbl">${sanitizeTbl(t.html)}</div>` : '')}
@@ -4543,7 +4521,7 @@ async function renderCollectionsPage(preset = null) {
           ${esc(p.title || p.id)}
           ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size:11px"> · ${esc(owner.name)}</span>` : ''}
           ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" style="font-size:11px" title="上传者"> · ${esc(p.owner_name)}</span>` : ''}</td>
-        <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
+        <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="muted" style="font-size:11px">${tk ? (tk.p + tk.c).toLocaleString() + ' tok' : ''}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
@@ -4574,8 +4552,8 @@ async function renderCollectionsPage(preset = null) {
             <span class="muted" style="font-size:12px">${papers.length} 篇${scopeIds.length > 1 ? '（含子库）' : ''} · 译${doneTr}/${papers.length} · ${totTok.toLocaleString()}tok</span></h2>
           ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">${icon('upload')} 上传</button>
           <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>${icon('plus')}子库</button>
-          <button class="btn small" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
-          <button class="btn small danger" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
+          <button class="btn small" title="重命名" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
+          <button class="btn small danger" title="删除库（整棵子树进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
         </div>
         ${subLibs.length ? `<div class="lib-subbar">
           <span class="muted" style="font-size:12px">子库：</span>
@@ -4592,7 +4570,7 @@ async function renderCollectionsPage(preset = null) {
           <select style="width:auto;font-size:12px" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
           <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">${icon('trash')} 删除</button>
           <span class="lib-batch-sep"></span>
-          <button class="btn small primary" onclick="libToBatchCenter('${scopeKey}')" title="带勾选进批量中心（批次进度/综述报告视图）">批量中心 »</button>
+          <button class="btn small primary" onclick="libToBatchCenter('${scopeKey}')" title="切换到批量中心（勾选全局共享，自动可见）">去批量中心</button>
           <button class="btn small" onclick="libClearSel('${scopeKey}')">清空</button>
         </div>
         <div class="lib-list">
@@ -4716,8 +4694,12 @@ window.libCkAll = (cid, on) => {
 };
 window.libBatchTranslate = async cid => {
   const ids = libSelected(cid);
-  await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
-  toast(`已加入翻译队列 ${ids.length} 篇`); await refreshLib();
+  if (!ids.length) { toast('先勾选论文'); return; }
+  try {
+    const d = await api('/api/batch/translate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
+    toast(`已入队 ${d.queued?.length ?? ids.length} 篇${d.skipped?.length ? `，跳过 ${d.skipped.length} 篇` : ''}——批次进度见任务中心`);
+  } catch (e) { toast('批量翻译失败: ' + e.message); }
+  await refreshLib();
 };
 /* 文库页批量条 → 与批量中心同一批次机制（batch_id 进度面板跟踪） */
 window.libBatchAct = async (cid, act) => {
@@ -4767,7 +4749,7 @@ window.libBatchDelete = async cid => {
 };
 window.libUpload = cid => {
   const inp = document.createElement('input');
-  inp.type = 'file'; inp.multiple = true; inp.accept = '.pdf';
+  inp.type = 'file'; inp.multiple = true;   // 不设 accept：与侧栏上传一致（PDF/图片/Office），由 uploadFiles 统一过滤
   inp.onchange = () => uploadFiles(inp.files, cid);
   inp.click();
 };
@@ -4805,6 +4787,8 @@ window.movePaper = async (pid, v, sel) => {
   toast('已移动'); await refreshLib();
 };
 window.delPaperFromLib = async pid => {
+  const p = (state.papers || []).find(x => x.id === pid) || (state._libScopePapers || []).find(x => x.id === pid);
+  if (p?.visibility === 'shared' && state.me?.role !== 'admin') { toast('共享论文仅管理员可删除'); return; }
   if (!(await uiConfirm(`删除这篇论文？（进回收站，${state.health.trash_days || 30} 天内可恢复）`, {title: '移入回收站'}))) return;
   await api('/api/papers/' + pid, {method: 'DELETE'});
   toast('已移入回收站'); await refreshLib();
@@ -5535,6 +5519,7 @@ function libLevel1Html(d) {
               <td class="row-actions" onclick="event.stopPropagation()">
                 <button class="btn small" onclick="libUpload('${c.id}')">${icon('upload')}</button>
                 <button class="btn small" onclick="renameLib('${c.id}', '${jsArg(c.name)}')">${icon('edit')}</button>
+                <button class="btn small danger" title="删除库" onclick="delLib('${c.id}', '${jsArg(c.name)}')">${icon('trash')}</button>
               </td></tr>`).join('');
           })()}
         </table></div>`}`;
@@ -5575,6 +5560,7 @@ window.setLibView = v => { state.libView = v; renderCollectionsPage(); };
     const fmt = it.dataset.dl;
     const pid = state.current?.id;
     if (!pid) { toast('请先打开一篇论文'); return; }
+    if (it.classList.contains('disabled')) { toast(it.title || '该格式暂不可用（需先完成翻译/解析）'); return; }
     location.href = `/api/papers/${pid}/download/${fmt}`;
     pop.hidden = true;
   }));
@@ -5607,6 +5593,13 @@ async function loadDlOptions() {
 }
 
 
+// 调试功能默认隐藏：版面框（解析质检）与 JSON 视图——地址栏加 ?debug=1 显示
+if (!new URLSearchParams(location.search).has('debug')) {
+  $('#layout-btn')?.setAttribute('hidden', '');
+  const jb = document.querySelector('.view-tabs [data-v="json"]');
+  if (jb) jb.hidden = true;
+}
+
 /* ================= 命令面板（Ctrl+K）+ 全局快捷键 + 帮助层 =================
    功能多了之后入口藏得深——面板把 页面/动作/论文/设置 变成一键可达。 */
 const CMD_PAGES = [
@@ -5621,7 +5614,7 @@ const CMD_ACTIONS = [
   {label: '上传文献', hint: '动作', kw: 'upload 上传 pdf', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); }},
   {label: '粘贴 DOI / arXiv / BibTeX 导入', hint: '动作', kw: 'doi arxiv bibtex 导入 identifier', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); setTimeout(() => $('#ident-input')?.focus(), 200); }},
   {label: '目录批量导入', hint: '动作', kw: '目录 导入 inbox dir', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); }},
-  {label: '新建专题采集', hint: '动作', kw: 'topic 专题 采集 关键词', run: () => { switchPage('batch'); setTimeout(() => showTopicsView(), 250); }},
+  {label: '新建专题采集', hint: '动作', kw: 'topic 专题 采集 关键词', run: () => { switchPage('batch'); setTimeout(() => { showTopicsView(); newTopicDialog(); }, 250); }},
   {label: '采集文献（检索入库）', hint: '动作', kw: 'acquire 采集 检索 知网 chinaxiv', run: () => { switchPage('batch'); setTimeout(() => openAcquirePop(), 250); }},
   {label: '发起综述', hint: '动作', kw: 'synthesis 综述 survey 报告', run: () => { switchPage('batch'); setTimeout(() => runSynthesis(null), 250); }},
   {label: '我的综述报告列表', hint: '跳转', kw: '综述 报告 syntheses 历史', run: () => { switchPage('batch'); setTimeout(() => $('#syn-list')?.scrollIntoView({behavior: 'smooth'}), 400); }},
@@ -5638,7 +5631,6 @@ const CMD_ACTIONS = [
   {label: '文献信息 / 元数据校准', hint: '动作', kw: 'meta 元数据 校准 校验', run: () => { switchPage('reader'); setTimeout(() => switchView('meta'), 250); }},
   {label: '导出引用（BibTeX/CSL）', hint: '动作', kw: 'cite 引用 bibtex csl 导出', run: () => { switchPage('reader'); setTimeout(() => { switchView('meta'); $('#cite-preview')?.scrollIntoView({block: 'center'}); }, 250); }},
   {label: '下载中心（PDF/对照/ZIP）', hint: '动作', kw: 'download 下载 zip pdf', run: () => { switchPage('reader'); setTimeout(() => $('#download-btn')?.click(), 250); }},
-  {label: '回收站 / 恢复删除', hint: '页面', kw: 'trash 回收站 恢复', run: () => switchPage('trash')},
 ];
 
 function cmdPapers() {
@@ -5713,7 +5705,9 @@ window.openCmdPalette = openCmdPalette;
 const SHORTCUTS = [
   ['Ctrl + K', '命令面板（功能/论文/设置一键搜索）'],
   ['?', '本帮助'],
-  ['↑ / ↓ + Enter', '文库列表切换论文（列表聚焦时）'],
+  ['↑ / ↓', '文库列表切换选中论文（非输入状态生效）'],
+  ['← / →', 'PDF 翻页'],
+  ['+ / -', 'PDF 缩放'],
   ['Ctrl + /', '聚焦文库搜索框'],
   ['Ctrl + Q', '打开/关闭论文问答'],
   ['Ctrl + Enter', '问答输入框发送'],
@@ -5728,7 +5722,6 @@ function showShortcutHelp() {
     <div class="ui-pop-title">键盘快捷键</div>
     <div class="cmd-help">${SHORTCUTS.map(([k, d]) =>
       `<div class="cmd-help-row"><code>${esc(k)}</code><span>${esc(d)}</span></div>`).join('')}
-      <div class="cmd-help-row"><code>Ctrl + K</code><span>随时可用——找不到功能入口时先按它</span></div>
     </div>
     <div class="ui-pop-foot"><button class="btn small primary" data-ok>知道了</button></div>`;
   backdrop.appendChild(pop);
@@ -5776,18 +5769,20 @@ function showOnboardingOnce() {
   pop.innerHTML = `
     <div class="ui-pop-title">欢迎使用 paper-system</div>
     <div class="onboard-steps">
-      <div class="onboard-step"><b>① 上传文献</b><span>侧栏底部「上传」拖 PDF；或粘贴 DOI / arXiv / 目录导入</span></div>
+      <div class="onboard-step"><b>① 上传文献</b><span>拖 PDF 到左侧论文列表，或点「上传」弹层选文件 / 粘贴 DOI、arXiv、BibTeX / 目录导入</span></div>
       <div class="onboard-step"><b>② 等待解析</b><span>GPU 提取全文（列表显示进度），完成后可阅读/翻译/图表</span></div>
-      <div class="onboard-step"><b>③ 提问与导读</b><span>右栏「✍️ 提问」对着论文问答（引用可点回原文）；「AI 补全」生成 9 字段导读</span></div>
+      <div class="onboard-step"><b>③ 提问与导读</b><span>右栏「✍️ 提问」对着论文问答（引用可点回原文）；问答右栏「生成导读」产出 9 字段导读；「文献信息」页的「AI 补全」补元数据</span></div>
       <div class="onboard-step"><b>④ 批量与综述</b><span>「批量」页圈定论文批量处理、建专题采集中文文献、一键生成带引用校验的综述</span></div>
       <div class="onboard-step"><b>找不到入口？</b><span>随时 <code>Ctrl + K</code> 命令面板搜索一切；<code>?</code> 看快捷键</span></div>
     </div>
-    <div class="ui-pop-foot"><span class="muted" style="font-size:11px;flex:1">先去「设置」配置你的 LLM key 才能用问答/翻译</span>
+    <div class="ui-pop-foot"><span class="muted" style="font-size:11px;flex:1">问答/翻译需要 LLM key（「设置」页配置）；管理员开启公共额度池时可直接使用</span>
+      <button class="btn small" data-settings>去设置</button>
       <button class="btn small primary" data-ok>开始使用</button></div>`;
   backdrop.appendChild(pop);
   document.body.appendChild(backdrop);
   const close = () => { pop.remove(); backdrop.remove(); };
   backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-ok]').onclick = close;
+  pop.querySelector('[data-settings]').onclick = () => { close(); switchPage('settings'); };
 }
 window.showOnboardingOnce = showOnboardingOnce;
