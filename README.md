@@ -69,7 +69,7 @@
 
 ## 前端回归
 
-`node scripts/ui-regression.mjs`（总）｜ `batch-page-test.mjs`（批量+综述+任务中心+勾选面板）｜ `topic-acquire-test.mjs`（采集弹层+专题流）｜ `discover-test.mjs`（找相关）｜ `qa-ux-test.mjs`（命令标签/选中浮条/历史/标识符导入）｜ `cite-jump-test.mjs`｜ `trash-btn-test.mjs`｜ `cite-csl-test.mjs`｜ `user-test.mjs`（多用户：用量页/归属标识/限额编辑/禁用启用）｜ `backend-test.py`（后端：容器内 `docker exec paper-system-app python3 /app/scripts/backend-test.py`）
+`node scripts/ui-regression.mjs`（总）｜ `batch-page-test.mjs`（批量+综述+任务中心+勾选面板）｜ `topic-acquire-test.mjs`（采集弹层+专题流）｜ `discover-test.mjs`（找相关）｜ `qa-ux-test.mjs`（命令标签/选中浮条/历史/标识符导入）｜ `cite-jump-test.mjs`｜ `trash-btn-test.mjs`｜ `cite-csl-test.mjs`｜ `user-test.mjs`（多用户：用量页/归属标识/限额编辑/禁用启用）｜ `permission-test.sh`（权限边界 35 项：未认证/member 越权/属主/配额 429/邀请码/会话吊销，需 docker 做造数与清理）｜ `backend-test.py`（后端：容器内 `docker exec paper-system-app python3 /app/scripts/backend-test.py`）
 
 ## 技术栈
 
