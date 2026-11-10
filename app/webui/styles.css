@@ -1091,3 +1091,16 @@ details.q-edit > summary { list-style: none; cursor: pointer; display: inline-fl
 details.q-edit > summary::-webkit-details-marker { display: none; }
 details.q-edit[open] > summary { outline: 1.5px solid var(--primary); }
 details.q-edit[open] { display: block; width: 100%; }
+
+/* 设计收敛批：批量条更多▾ / 导读气泡收起 / 任务 toggle 警示态 */
+.more-pop { position: relative; display: inline-block; }
+.more-pop > summary { list-style: none; cursor: pointer; }
+.more-pop > summary::-webkit-details-marker { display: none; }
+.more-pop[open] > summary { outline: 1.5px solid var(--primary); }
+.more-pop .more-menu { display: block; position: absolute; top: calc(100% + 4px); left: 0; z-index: 60; min-width: 150px; }
+#qa-sum-bubble .sum-toggle { cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+#qa-sum-bubble .sum-arrow { display: inline-block; transition: transform .15s; font-size: 10px; }
+#qa-sum-bubble.sum-fold .summary-sec { display: none; }
+#qa-sum-bubble.sum-fold .sum-arrow { transform: rotate(-90deg); }
+.batch-right-full { width: 100%; }
+.btn.warn { background: var(--tint-warn); color: var(--warn-ink); border-color: var(--tint-warn-2); }

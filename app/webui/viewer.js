@@ -767,32 +767,6 @@ $('#filter-pop').onclick = e => {
   markFilterMenu();
   loadPapers();
 };
-/* 排序独立弹层（原 #filter-arrow2 死按钮：HTML 有、接线无——排序一直埋在筛选弹层里） */
-const sortPop = $('#sort-pop');
-$('#filter-arrow2')?.addEventListener('click', e => {
-  e.stopPropagation();
-  sortPop.hidden = !sortPop.hidden;
-  if (!sortPop.hidden) {
-    markFilterMenu();
-    const r = e.currentTarget.getBoundingClientRect();
-    sortPop.style.position = 'fixed';
-    sortPop.style.top = (r.bottom + 6) + 'px';
-    sortPop.style.right = Math.max(8, innerWidth - r.right) + 'px';
-    sortPop.style.left = 'auto';
-  }
-});
-sortPop.onclick = e => {
-  const item = e.target.closest('.tp-item');
-  if (!item) return;
-  state.sortBy = item.dataset.s;
-  localStorage.setItem('ps-sort', state.sortBy);
-  sortPop.hidden = true;
-  markFilterMenu();
-  loadPapers();
-};
-document.addEventListener('click', e => {
-  if (!sortPop.hidden && !sortPop.contains(e.target) && e.target.id !== 'filter-arrow2') sortPop.hidden = true;
-});
 document.addEventListener('click', e => {
   const pop = $('#filter-pop');
   if (pop && !pop.hidden && !e.target.closest('#filter-pop') && !e.target.closest('#filter-arrow')) pop.hidden = true;
@@ -1527,8 +1501,6 @@ window.mcpConfirm = async (id, approve) => {
   renderTaskPanel();
   refreshQueueBadge();
 };
-window.pauseQueue = async () => { await api('/api/queue/parse/pause', {method: 'POST'}); toast('批量已暂停（手动任务不受影响）'); renderTaskPanel(); };
-window.resumeQueue = async () => { await api('/api/queue/parse/resume', {method: 'POST'}); toast('批量已恢复'); renderTaskPanel(); };
 // 顶栏「任务」角标：有活跃任务才显示；点击 = 页签本来的切页行为
 setInterval(refreshQueueBadge, 8000);
 
@@ -1547,41 +1519,16 @@ async function renderBatchPage() {
   const cols = state.collections || [];
   el.innerHTML = `
     <div class="batch-wrap">
-      <div class="batch-intro">${icon('bulb', 12)} 先在左侧圈定论文（勾选实时计入），再点右侧操作卡；任务进度与综述历史见下方区块。</div>
-      <div class="batch-grid">
-        <div class="card batch-pick" id="batch-pick">
-          <div class="bp-head"><b>① 圈定论文</b>
-            <span class="badge ok" id="bp-count">${state.selected.size} 篇</span>
-            <span class="spacer"></span>
-            <button class="btn small" id="bp-clear" ${state.selected.size ? '' : 'hidden'}>清空</button></div>
-          <div class="bp-picker" id="bp-picker">
-            <div class="bpp-tools">
-              <input id="bpp-search" placeholder="搜索标题 / 作者…" style="flex:1;min-width:130px">
-              <select id="bpp-year" title="按年份筛选" style="width:auto;font-size:12px">
-                <option value="">全部年份</option>
-              </select>
-                          </div>
-            <div class="bpp-viewseg">
-              <button id="bpp-v-all" class="on">📂 按库浏览</button>
-              <button id="bpp-v-sel">✅ 已选定（<span id="bpp-v-n">${state.selected.size}</span>）</button>
-            </div>
-            <div class="bpp-list" id="bpp-list"><p class="muted" style="padding:10px">加载中…</p></div>
-            <div class="bpp-foot">
-              <span class="muted" id="bpp-stat" style="font-size:11px"></span>
-              <span class="spacer"></span>
-              <span class="muted" id="bpp-selcount" style="font-size:11px"></span>
-            </div>
-          </div>
-        </div>
+      <div class="batch-intro">${icon('bulb', 12)} 综述：在「文库管理」勾选论文 → 批量条点「综述」；专题/采集在此发起；综述历史与批次进度见下方。
         <div class="batch-right">
-          <div class="bp-head2">② 选择操作 <span class="muted" style="font-weight:400;font-size:11px">未圈定时操作卡置灰</span></div>
+          <div class="bp-head2">选择操作 <span class="muted" style="font-weight:400;font-size:11px">未圈定时综述卡置灰——勾选在「文库管理」进行</span></div>
           <div class="batch-ops">
             <div class="batch-card" data-act="topics" title="专题采集任务：关键词 → 检索 → 勾选下载入库 → 一键综述（可中断可恢复）">
               <b>${icon('stack')} 专题采集</b><span class="muted">关键词建专题 → 检索 → 勾选下载入库 → 自动生成综述</span></div>
             <div class="batch-card" data-act="acquire" id="acq-btn" title="按关键词检索中文文献（知网/中国科学院预印本），勾选后批量下载入库">
               <b>${icon('inbox')} 采集文献</b><span class="muted">按关键词检索 → 勾选 → 浏览器下载入库（知网/预印本）</span></div>
-            <div class="batch-card primary ${state.selected.size ? '' : 'off'}" data-act="review" title="自动分组→组内比对→跨组综合，生成可导出的综述报告">
-              <b>${icon('doc')} 综述报告</b><span class="muted">多文献自动分组 · 逐组比对 · 跨组综合 · 导出 MD/CSV（2~90 篇）——批量处理的核心产出</span></div>
+            <div class="batch-card primary ${state.selected.size ? '' : 'off'}" data-act="review" title="在文库管理勾选论文后点此卡发起；或直接用文库批量条的「综述」">
+              <b>${icon('doc')} 综述报告</b><span class="muted">文库管理勾选 2~90 篇 → 批量条「综述」发起 · 自动分组比对 · 导出 MD/CSV</span></div>
           </div>
         </div>
       </div>
@@ -1593,15 +1540,6 @@ async function renderBatchPage() {
         <div id="syn-list"><p class="muted" style="padding:8px 16px">加载中…</p></div>
       </div>
     </div>`;
-  $('#bp-clear').onclick = () => { state.selected.clear(); renderBpPicker(); syncBpCount(); };
-  /* 勾选面板：库树形分组浏览（搜索/年份筛选/已选定视图/整组全选） */
-  state._bpp = {q: '', year: '', view: 'all', papers: [], fold: new Set()};
-  const _bppSearch = debounce(() => { state._bpp.q = $('#bpp-search').value.trim(); renderBpPicker(); }, 250);
-  $('#bpp-search').oninput = _bppSearch;
-  $('#bpp-year').onchange = e => { state._bpp.year = e.target.value; renderBpPicker(); };
-  $('#bpp-v-all').onclick = () => { state._bpp.view = 'all'; renderBpPicker(); };
-  $('#bpp-v-sel').onclick = () => { state._bpp.view = 'sel'; renderBpPicker(); };
-  loadBpPicker();          // 勾选面板常驻，进页即加载
   renderSynList();
   updateBatchOpsState();
 }
@@ -1662,155 +1600,6 @@ $('#page-batch').addEventListener('click', async e => {
   }
 });
 
-async function loadBpPicker() {
-  const el = $('#bpp-list');
-  if (!el) return;
-  try {
-    const out = [];
-    for (let page = 1; page <= 40; page++) {
-      const d = await api('/api/papers?page=' + page + '&page_size=500');
-      out.push(...d.papers);
-      if (!d.has_more) break;
-    }
-    state._bpp.papers = out;
-    state._batchPapers = out;
-  } catch (e) {
-    el.innerHTML = `<p class="muted" style="padding:10px">加载失败: ${esc(e.message)}</p>`;
-    return;
-  }
-  renderBpPicker();
-}
-
-/* 勾选面板：按库树形分组浏览 + 已选定视图 */
-function bppFiltered() {
-  const bp = state._bpp;
-  const q = bp.q.toLowerCase();
-  return bp.papers.filter(p =>
-    (!q || (p.title || '').toLowerCase().includes(q) || (p.authors || '').toLowerCase().includes(q)) &&
-    (!bp.year || (p.year || '') === bp.year));
-}
-
-function renderBpPicker() {
-  const bp = state._bpp;
-  const list = $('#bpp-list');
-  if (!list) return;
-  // 年份筛选选项（随数据变化重建；保住当前选择）
-  const years = [...new Set(bp.papers.map(p => (p.year || '').trim()).filter(Boolean))].sort().reverse();
-  const ysel = $('#bpp-year');
-  if (ysel && ysel.dataset.years !== String(years.length)) {
-    ysel.dataset.years = String(years.length);
-    ysel.innerHTML = '<option value="">全部年份</option>' +
-      years.map(y => `<option value="${esc(y)}">${esc(y)}</option>`).join('');
-    ysel.value = bp.year;
-  }
-  const vAll = $('#bpp-v-all'), vSel = $('#bpp-v-sel'), vN = $('#bpp-v-n');
-  if (vAll) { vAll.classList.toggle('on', bp.view === 'all'); vSel.classList.toggle('on', bp.view === 'sel'); }
-  if (vN) vN.textContent = state.selected.size;
-
-  if (bp.view === 'sel') {
-    // 已选定视图：只看勾选的（含库名），取消勾选即移出
-    const byId = new Map(bp.papers.map(p => [p.id, p]));
-    const colName = cid => (state.collections || []).find(c => c.id === cid)?.name || '未分库';
-    const rows = [...state.selected].map(id => {
-      const p = byId.get(id);
-      return `<label class="bpp-row on" data-id="${esc(id)}">
-        <input type="checkbox" checked>
-        <span class="bpp-main">
-          <span class="bpp-title">${esc(p ? (p.title || id) : id)}</span>
-          <span class="bpp-meta"><span class="bp-lib">${icon('folder', 11)} ${esc(colName(p?.collection_id))}</span>
-            ${p?.year ? `<span>${esc(p.year)}</span>` : ''}</span>
-        </span>
-      </label>`;
-    }).join('');
-    list.innerHTML = rows || '<p class="muted" style="padding:10px">还没有勾选——切回「按库浏览」勾选论文</p>';
-  } else {
-    // 按库树形分组：库 → 子库 → 文件；整组全选/取消；未分库兜底组
-    const papers = bppFiltered();
-    const byCol = new Map();
-    for (const p of papers) {
-      const k = p.collection_id || '__none__';
-      (byCol.get(k) || byCol.set(k, []).get(k)).push(p);
-    }
-    const cols = state.collections || [];
-    // DFS：父库在前、子库缩进随后；孤儿库（父已删）挂顶层
-    const ordered = [];
-    const seen = new Set();
-    const walk = (parent, depth) => {
-      for (const c of cols.filter(c => (c.parent_id || null) === parent)) {
-        seen.add(c.id);
-        ordered.push({ c, depth });
-        walk(c.id, depth + 1);
-      }
-    };
-    walk(null, 0);
-    for (const c of cols) if (!seen.has(c.id)) ordered.push({ c, depth: 0 });
-    const groups = ordered.map(({ c, depth }) => ({
-      id: c.id, name: c.name, depth,
-      papers: byCol.get(c.id) || [],
-    })).filter(g => g.papers.length || !bp.q);   // 搜索时空组隐藏（无筛选时保留结构全貌）
-    const none = byCol.get('__none__') || [];
-    if (none.length || !bp.q) groups.push({ id: '__none__', name: '未分库', depth: 0, papers: none });
-
-    list.innerHTML = (groups.map(g => {
-      const folded = bp.fold.has(g.id);
-      const allOn = g.papers.length && g.papers.every(p => state.selected.has(p.id));
-      return `<div class="bpp-group">
-        <div class="bpp-group-head" data-gid="${esc(g.id)}" style="padding-left:${8 + g.depth * 16}px">
-          <span class="bpp-caret">${folded ? icon('chevR', 11) : icon('chevD', 11)}</span>
-          ${icon('folder', 12)} <b>${esc(g.name)}</b>
-          <span class="muted" style="font-size:11px">${g.papers.length} 篇</span>
-          <span class="spacer"></span>
-          ${g.papers.length ? `<button class="btn small bpp-gsel" data-gid="${esc(g.id)}" data-on="${allOn ? '' : '1'}">${allOn ? '取消本库' : '全选本库'}</button>` : ''}
-        </div>
-        ${folded ? '' : g.papers.map(p => `
-          <label class="bpp-row ${state.selected.has(p.id) ? 'on' : ''}" data-id="${esc(p.id)}" style="margin-left:${16 + g.depth * 16}px">
-            <input type="checkbox" ${state.selected.has(p.id) ? 'checked' : ''}>
-            <span class="bpp-main">
-              <span class="bpp-title">${esc(p.title || p.id)}</span>
-              <span class="bpp-meta">${p.year ? `<span>${esc(p.year)}</span>` : ''}${p.page_count ? `<span>${p.page_count} 页</span>` : ''}</span>
-            </span>
-            ${statusBadge(p)}
-          </label>`).join('') || '<p class="muted" style="padding:2px 16px 6px;font-size:11px">（空库）</p>'}
-      </div>`;
-    }).join('') || `<p class="muted" style="padding:10px">${bp.q || bp.year ? '没有匹配的论文' : '库中还没有论文'}</p>`);
-
-    // 事件：组折叠 / 整组全选（勾选事件在函数尾部对两个视图统一绑定）
-    $$('.bpp-group-head', list).forEach(h => h.onclick = e => {
-      if (e.target.closest('.bpp-gsel')) return;
-      const gid = h.dataset.gid;
-      bp.fold.has(gid) ? bp.fold.delete(gid) : bp.fold.add(gid);
-      renderBpPicker();
-    });
-    $$('.bpp-gsel', list).forEach(b => b.onclick = e => {
-      e.stopPropagation();
-      const g = groups.find(x => x.id === b.dataset.gid);
-      const on = b.dataset.on === '1';
-      for (const p of g.papers) on ? state.selected.add(p.id) : state.selected.delete(p.id);
-      renderBpPicker();
-      syncBpCount();
-    });
-  }
-  // 统计脚
-  const stat = $('#bpp-stat');
-  if (stat) stat.textContent = `库 ${new Set((state.collections || []).map(c => c.id)).size} 个 · 论文 ${bp.papers.length} 篇`;
-  const sc = $('#bpp-selcount');
-  if (sc) sc.textContent = state.selected.size ? `已圈定 ${state.selected.size} 篇` : '';
-  // 勾选事件：两个视图统一绑定（sel 视图取消勾选后行即移出）
-  $$('input[type=checkbox]', list).forEach(cb => cb.onchange = e => {
-    const row = e.target.closest('.bpp-row');
-    if (!row) return;
-    const id = row.dataset.id;
-    if (e.target.checked) state.selected.add(id);
-    else {
-      state.selected.delete(id);
-      syncBpCount();
-      if (state._bpp.view === 'sel') renderBpPicker();   // 已选定视图：行即移出
-      return;
-    }
-    row.classList.toggle('on', e.target.checked);
-    syncBpCount();
-  });
-}
 
 /* ================= 任务中心（独立页） =================
    全部任务的唯一视图：批次任务按组展开、单篇任务平铺；
@@ -1839,8 +1628,7 @@ async function renderTasksPage() {
           <b style="font-size:var(--fs-lg)">任务中心</b>
           <span class="muted" style="font-size:11px">解析 / 翻译 / 导读 / 元数据 / 综述——全部任务的实时状态</span>
           <span class="spacer"></span>
-                    <button class="btn small" id="tk-pause" title="暂停批量解析队列（手动任务不受影响）">⏸ 暂停批量</button>
-          <button class="btn small" id="tk-resume">▶ 恢复</button></div>
+          <button class="btn small" id="tk-pause-toggle" title="暂停/恢复批量解析队列（手动任务不受影响）">…</button></div>
         <div class="task-filters">
           <span class="muted" style="font-size:11px">类型</span>
           ${chips('tt', f.type, [['', '全部'], ['parse', '解析'], ['translate', '翻译'],
@@ -1853,8 +1641,21 @@ async function renderTasksPage() {
       <div id="mcp-zone"></div>
       <div class="card tasks-body" id="task-body"><p class="muted" style="padding:10px">加载中…</p></div>
     </div>`;
-  $('#tk-pause').onclick = () => pauseQueue();
-  $('#tk-resume').onclick = () => resumeQueue();
+  // 暂停/恢复单 toggle（原双钮常驻：未暂停点「恢复」静默成功，无状态指示）
+  {
+    const tb = $('#tk-pause-toggle');
+    if (tb) {
+      const q = await api('/api/queue/parse').catch(() => null);
+      const paused = !!q?.paused;
+      tb.textContent = paused ? '▶ 恢复批量（已暂停）' : '⏸ 暂停批量';
+      tb.classList.toggle('warn', paused);
+      tb.onclick = async () => {
+        await api(`/api/queue/parse/${paused ? 'resume' : 'pause'}`, {method: 'POST'});
+        toast(paused ? '批量解析已恢复' : '批量解析已暂停（手动任务不受影响）');
+        renderTasksPage();
+      };
+    }
+  }
   $$('#page-tasks [data-tt]').forEach(b => b.onclick = () => { state._taskFilter.type = b.dataset.tt; renderTasksPage(); });
   $$('#page-tasks [data-ts]').forEach(b => b.onclick = () => { state._taskFilter.status = b.dataset.ts; renderTasksPage(); });
   await renderTaskPanel();
@@ -1998,11 +1799,6 @@ $('#page-tasks').addEventListener('click', async e => {
 
 /* 勾选变化后同步全部计数（卡头/已选定视图/操作卡置灰）——单一数据源，无滞后 */
 function syncBpCount() {
-  const cnt = $('#bp-count');
-  if (cnt) cnt.textContent = `${state.selected.size} 篇`;
-  const vn = $('#bpp-v-n');
-  if (vn) vn.textContent = state.selected.size;
-  $('#bp-clear').hidden = !state.selected.size;
   updateBatchOpsState();
 }
 
@@ -2020,7 +1816,11 @@ async function runBatchAction(act, anchor) {
     if (act === 'acquire') openAcquirePop(anchor); else showTopicsView();
     return;
   }
-  if (!state.selected.size) { toast('请先在上方圈定论文'); return; }
+  if (!state.selected.size) {
+    toast('综述需先圈定：去「文库管理」勾选论文，再点批量条「综述」');
+    switchPage('collections');
+    return;
+  }
   const ids = [...state.selected];
   if (act === 'review') { await runSynthesis(anchor, ids); return; }
   if (act === 'bibtex') { downloadBibtex(ids); return; }
@@ -3638,10 +3438,13 @@ $('#qa-open').onclick = () => {
 };
 
 /* ---------------- 命令标签（zotero-gpt 式：短按执行 / 长按编辑） ---------------- */
+/* 划词浮条专用 prompt（浮条与命令标签原是同一功能两入口——b2/b3 已从标签排移除） */
+const SEL_TAGS = {
+  explain: {id: 'sel-explain', label: '解读', prompt: '解释这段文字的含义与上下文（涉及的概念、方法、为什么重要）：\n「{选中文字}」'},
+  ask: {id: 'sel-ask', label: '提问', prompt: '', prefill: '关于这段文字：「{选中文字}」\n我的问题：'},
+};
 const BUILTIN_TAGS = [
-  {id: 'b1', label: '📝 总结本篇', prompt: '总结本篇论文：核心问题、方法要点、主要结果与局限，5 句以内。'},
-  {id: 'b2', label: '🔍 解读选中', prompt: '解释这段文字的含义与上下文（涉及的概念、方法、为什么重要）：\n「{选中文字}」'},
-  {id: 'b3', label: '❓ 就选中提问', prompt: '', prefill: '关于这段文字：「{选中文字}」\n我的问题：'},
+  {id: 'b1', label: '📝 快速总结', prompt: '总结本篇论文：核心问题、方法要点、主要结果与局限，5 句以内。（需要 9 字段结构化导读请点「生成导读」）'},
   {id: 'b4', label: '🔎 检索相似', prompt: '在当前文献范围内检索与下面内容最相关的段落，逐条说明它们与这段内容的关联：\n「{选中文字}」'},
 ];
 state._lastSelection = '';
@@ -3768,7 +3571,7 @@ function showSelBar(sel, text) {
       if (!state.qaOpen) openQaDock();
       setQuote(text, state.pageNum - 1);
     }
-    else executeTag(BUILTIN_TAGS[b.dataset.a === 'explain' ? 1 : 2]);
+    else executeTag(SEL_TAGS[b.dataset.a === 'explain' ? 'explain' : 'ask']);
   });
 }
 
@@ -4030,9 +3833,9 @@ async function renderSettings() {
           <input id="gl-value" placeholder="译法" style="flex:2;min-width:100px">
           <button class="btn small primary" id="gl-add" title="添加术语">${icon('plus')}</button>
         </div>
-        ${isAdmin ? '<div id="admin-zone" style="margin-top:22px"></div>' : ''}
       </div>
-    </div>`;
+    </div>
+    ${isAdmin ? '<div id="admin-zone" style="margin-top:22px"></div>' : ''}`;
   const bind = (fid, purpose) => $(`#${fid}`).onsubmit = async e => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -4132,12 +3935,17 @@ async function renderAdminZone() {
         </td></tr>`;}).join('')}</table>
       <div class="set-head" style="margin-top:14px">${icon('clock')} 审计日志 <span class="muted" style="font-weight:400">最近操作</span></div>
       <div id="audit-list" style="max-height:220px;overflow-y:auto;font-size:var(--fs-xs)">
-        ${audit.rows.length ? audit.rows.map(r =>
+        ${(() => {
+          const rows = audit.rows.filter(r => r.action !== 'login');   // 登录噪音不进敏感操作流
+          if (!rows.length) return '<p class="muted">暂无记录——删除/重置密码/禁用等敏感操作会记录在此（登录不计）</p>';
+          return `<div class="muted" style="font-size:10px;margin-bottom:2px">已略去 ${audit.rows.length - rows.length} 条登录记录</div>` +
+            rows.map(r =>
           `<div style="padding:3px 0;border-bottom:1px solid var(--line-soft)">
              <span class="muted">${fmtTime(r.created_at)}</span>
              <b>${esc(r.username || '系统')}</b> ${esc(r.action)}
              <span class="muted">${esc(r.detail || '').slice(0, 40)}</span>
-           </div>`).join('') : '<p class="muted">暂无记录——尚无敏感操作（删除/重置密码等会记录在此）</p>'}
+           </div>`).join('');
+        })()}
       </div>
     </div>
     <div class="set-card">
@@ -4373,10 +4181,14 @@ function drawSummary(s, pid, target = '#content-view', asBubble = false) {
     return `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><p>${html}</p></div>`;
   }).join('');
   t.innerHTML = (asBubble ? (state._sumHead || '') + '<div class="msg assistant"><div class="bubble" style="width:100%">' : '<div class="card">') +
-    (asBubble ? `<b title="${esc(state._sumTip || '')}">${icon('copy')} 导读</b>` : '<h2>科研导读</h2>') +
+    (asBubble ? `<b class="sum-toggle" data-sum-toggle title="点击展开/收起导读">${icon('copy')} 导读（9 字段）<span class="sum-arrow">▾</span></b>` : '<h2>科研导读</h2>') +
     (sec.length ? secHtml : '<p class="muted">导读内容为空，请重新生成。</p>') +
     `</div>${asBubble ? '</div>' : ''}<button class="btn small" onclick="genSumBubble('${pid}')">${icon('retry')} 重新生成</button>`;
-  if (asBubble) t.insertAdjacentHTML('beforeend', followupButtons(s.sections));
+  if (asBubble) {
+    t.insertAdjacentHTML('beforeend', followupButtons(s.sections));
+    t.classList.add('sum-fold');   // 导读气泡默认收起——9 字段全文占问答区半屏
+    t.querySelector('[data-sum-toggle]')?.addEventListener('click', () => t.classList.toggle('sum-fold'));
+  }
   $$('.cite[data-gid]', t).forEach(el => {
     const ev = evById.get(String(el.dataset.gid));
     if (ev) { el._ev = ev; el.onclick = () => jumpToEvidence(ev); }
@@ -4525,10 +4337,7 @@ async function renderCollectionsPage(preset = null) {
         <td>${trBadge}</td>
         <td class="muted" style="font-size:11px">${tk ? (tk.p + tk.c).toLocaleString() + ' tok' : ''}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
-          <button class="btn small" onclick="viewPaper('${p.id}')">阅读</button>
-          <select style="width:auto;font-size:11px;padding:2px 4px" onchange="movePaper('${p.id}', this.value, this)">
-            <option value="">移入…</option>${moveOpts(p.collection_id)}</select>
-          <button class="btn small danger" onclick="delPaperFromLib('${p.id}')">删</button>
+          <button class="btn small danger" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">删</button>
         </td></tr>`;}).join('');
 
   // ---- 组装 ----
@@ -4562,16 +4371,21 @@ async function renderCollectionsPage(preset = null) {
         <div class="lib-batch" id="lb-${scopeKey}" hidden>
           <b id="lb-count-${scopeKey}">0</b>&nbsp;篇选中
           <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 翻译</button>
-          <button class="btn small" onclick="libBatchAct('${scopeKey}','summary')" title="批量生成 9 字段导读">导读</button>
-          <button class="btn small" onclick="libBatchAct('${scopeKey}','meta')" title="联网校准 + AI 补缺失字段">元数据</button>
-          <button class="btn small" onclick="libBatchAct('${scopeKey}','parse')" title="重新提取全文（仅自己上传的可执行）">重解析</button>
+          <button class="btn small" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 翻译</button>
           <button class="btn small" onclick="libBatchSynth('${scopeKey}')" title="自动分组比对生成综述报告">综述</button>
-          <button class="btn small" onclick="libBatchBibtex('${scopeKey}')" title="合并导出一个 .bib">⬇ BibTeX</button>
           <select style="width:auto;font-size:12px" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
           <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">${icon('trash')} 删除</button>
           <span class="lib-batch-sep"></span>
           <button class="btn small primary" onclick="libToBatchCenter('${scopeKey}')" title="切换到批量中心（勾选全局共享，自动可见）">去批量中心</button>
           <button class="btn small" onclick="libClearSel('${scopeKey}')">清空</button>
+          <details class="more-pop"><summary class="btn small">更多 ▾</summary>
+            <div class="tool-pop more-menu">
+              <div class="tp-item" onclick="libBatchAct('${scopeKey}','summary');this.closest('details').removeAttribute('open')">批量导读（9 字段）</div>
+              <div class="tp-item" onclick="libBatchAct('${scopeKey}','meta');this.closest('details').removeAttribute('open')">元数据补全</div>
+              <div class="tp-item" onclick="libBatchAct('${scopeKey}','parse');this.closest('details').removeAttribute('open')">批量重解析</div>
+              <div class="tp-item" onclick="libBatchBibtex('${scopeKey}');this.closest('details').removeAttribute('open')">导出 BibTeX</div>
+            </div>
+          </details>
         </div>
         <div class="lib-list">
           <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th title="解析状态">解析</th><th title="翻译状态">翻译</th><th>用量</th><th></th></tr>

@@ -169,24 +169,14 @@ if (btn) {
   ok('页面标题', doc.querySelector('#page-title').textContent === '批量中心');
 }
 
-// 2) 三区结构
-ok('圈定器渲染', !!doc.querySelector('#page-batch .batch-pick'));
+// 2) 结构（圈定面板已移除——综述圈定唯一入口在文库管理勾选）
+ok('圈定器已移除（避免与文库勾选双 UI）', !doc.querySelector('#page-batch .batch-pick'));
 ok('操作卡=3（专题/采集/综述——批量操作卡已收敛到文库批量条）',
    doc.querySelectorAll('#page-batch .batch-card').length === 3,
    `实际 ${doc.querySelectorAll('#page-batch .batch-card').length}`);
 ok('综述卡已激活', !!doc.querySelector('#page-batch .batch-card[data-act="review"]') &&
    !doc.querySelector('#page-batch .batch-card[data-act="review"]').classList.contains('soon'));
 ok('任务中心页签存在', !!doc.querySelector('.topnav button[data-page="tasks"]'));
-
-// 3) 圈定：勾选即全站共享（文库页/批量页同一集合），已选定视图实时计数
-window.__T.state.selected.add('p1');
-doc.querySelector('#bpp-v-sel').click();
-await new Promise((r) => setTimeout(r, 100));
-ok('已选定视图实时计数', doc.querySelector('#bpp-v-n').textContent === '1' &&
-   doc.querySelectorAll('.bpp-row').length === 1);
-doc.querySelector('#bpp-v-all').click();
-await new Promise((r) => setTimeout(r, 80));
-window.__T.state.selected.clear();
 
 // 5) 任务中心：独立页 + 类型徽章 + 分区
 window.__T.switchPage('tasks');
@@ -236,8 +226,7 @@ if (libCk) {
   window.libToBatchCenter();
   await new Promise((r) => setTimeout(r, 400));
   ok('批量中心按钮切页', doc.querySelector('#page-batch').style.display !== 'none');
-  const cnt = doc.querySelector('#bp-count')?.textContent || '';
-  ok('勾选全站共享（文库页勾选批量页可见）', /1 篇/.test(cnt), cnt);
+  ok('勾选全站共享（文库页勾选批量中心可见）', window.__T.state.selected.size === 1);
   window.__T.state.selected.clear();
 }
 
@@ -256,70 +245,6 @@ ok('批量卡含 采集/专题/综述入口', acts.includes('acquire') && acts.i
    acts.join(','));
 ok('综述卡主色高亮', [...doc.querySelectorAll('.batch-card')].find(c => c.dataset.act === 'review')
    ?.classList.contains('primary'));
-const groups = [...doc.querySelectorAll('.bpp-group-head')];
-ok('库树形分组渲染（默认文献库/test/未分库）',
-   groups.length === 3 &&
-   groups.some(g => g.textContent.includes('默认文献库')) &&
-   groups.some(g => g.textContent.includes('test')) &&
-   groups.some(g => g.textContent.includes('未分库')), `实际组数 ${groups.length}`);
-ok('全部论文 45 行', doc.querySelectorAll('.bpp-row').length === 45,
-   `实际 ${doc.querySelectorAll('.bpp-row').length}`);
-// 整组全选（默认文献库 2 篇）
-const gsel = [...doc.querySelectorAll('.bpp-gsel')].find(b => b.dataset.gid === 'c1');
-gsel.click();
-await new Promise((r) => setTimeout(r, 80));
-ok('全选本库 → 2 篇', doc.querySelector('#bp-count').textContent.includes('2 篇'),
-   doc.querySelector('#bp-count').textContent);
-ok('按钮翻转为「取消本库」', gsel.textContent.includes('取消本库') ||
-   [...doc.querySelectorAll('.bpp-gsel')].find(b => b.dataset.gid === 'c1').textContent.includes('取消本库'));
-// 搜索
-doc.querySelector('#bpp-search').value = '独特针';
-doc.querySelector('#bpp-search').dispatchEvent(new window.Event('input'));
-await new Promise((r) => setTimeout(r, 400));
-ok('搜索命中 1 行（空组隐藏）', doc.querySelectorAll('.bpp-row').length === 1 &&
-   doc.body.textContent.includes('独特针'));
-doc.querySelector('#bpp-search').value = '';
-doc.querySelector('#bpp-search').dispatchEvent(new window.Event('input'));
-await new Promise((r) => setTimeout(r, 350));
-// 年份筛选（mock 全部 2024 → 45 行）
-doc.querySelector('#bpp-year').value = '2024';
-doc.querySelector('#bpp-year').dispatchEvent(new window.Event('change'));
-await new Promise((r) => setTimeout(r, 100));
-ok('年份筛选命中 7 行（2024）', doc.querySelectorAll('.bpp-row').length === 7,
-   `实际 ${doc.querySelectorAll('.bpp-row').length}`);
-doc.querySelector('#bpp-year').value = '';
-doc.querySelector('#bpp-year').dispatchEvent(new window.Event('change'));
-await new Promise((r) => setTimeout(r, 100));
-// 组折叠
-const ghead = doc.querySelector('.bpp-group-head[data-gid="c1"]');
-ghead.click();
-await new Promise((r) => setTimeout(r, 80));
-ok('组折叠隐藏行', doc.querySelectorAll('[data-gid="c1"] ~ * .bpp-row, [data-gid="c1"] ~ .bpp-row').length === 0 ||
-   ![...doc.querySelectorAll('.bpp-row')].some(r => r.textContent.includes('Batch Pool Paper 0')));
-ghead.click();
-await new Promise((r) => setTimeout(r, 80));
-// 已选定视图
-doc.querySelector('#bpp-v-sel').click();
-await new Promise((r) => setTimeout(r, 80));
-ok('已选定视图 2 行', doc.querySelectorAll('.bpp-row').length === 2,
-   `实际 ${doc.querySelectorAll('.bpp-row').length}`);
-doc.querySelector('#bpp-v-sel + #bpp-v-all, #bpp-v-all').click();
-await new Promise((r) => setTimeout(r, 80));
-// 已选定视图里取消一个
-doc.querySelector('#bpp-v-all').click();
-await new Promise((r) => setTimeout(r, 80));
-doc.querySelector('#bpp-v-sel').click();
-await new Promise((r) => setTimeout(r, 80));
-const firstSel = doc.querySelector('.bpp-row input[type=checkbox]');
-if (!firstSel) console.log('DEBUG sel view html:', doc.querySelector('#bpp-list').innerHTML.slice(0, 200),
-  '| view:', window.__T.state._bpp.view, '| selected:', window.__T.state.selected.size);
-firstSel.click();
-await new Promise((r) => setTimeout(r, 80));
-ok('已选定视图取消勾选 → 1 篇', doc.querySelector('#bp-count').textContent.includes('1 篇'));
-if (!doc.querySelector('#bp-clear')) console.log('DEBUG page-batch:', doc.querySelector('#page-batch').innerHTML.slice(0, 300));
-doc.querySelector('#bp-clear')?.click();
-await new Promise((r) => setTimeout(r, 100));
-ok('清空圈定 → 0 篇', doc.querySelector('#bp-count')?.textContent.includes('0 篇'));
 
 // 7) 综述流：卡片激活 → 预估确认 → 批次面板综述行 → 报告视图
 const reviewCard = doc.querySelector('.batch-card[data-act="review"]');

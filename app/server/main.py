@@ -786,6 +786,12 @@ def retry_job(job_id: int, request: Request):
     return {"ok": True}
 
 
+@app.get("/api/queue/{job_type}")
+def queue_state(job_type: str, request: Request):
+    require(request)
+    return {"paused": job_type in scheduler._paused_types}
+
+
 @app.post("/api/queue/{job_type}/pause")
 def queue_pause(job_type: str, request: Request):
     require_admin(request)

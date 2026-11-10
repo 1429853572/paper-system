@@ -114,36 +114,19 @@ window.__T.state.qaAllPapers = [{ id: 'p1', parse_status: 'parsed' }];
 
 // 1) 命令标签渲染
 const tags = [...doc.querySelectorAll('#cmdtags .cmdtag')];
-ok('命令标签 4 内置+1 自定义+＋', tags.length === 6, `实际 ${tags.length}`);
+ok('命令标签 2 内置+1 自定义+＋（b2/b3 与划词浮条重复已砍）', tags.length === 4, `实际 ${tags.length}`);
 ok('自定义标签渲染', tags.some(t => t.textContent.includes('分析公式')));
 
-// 2) 总结本篇（短按执行 → 发送）
-tags.find(t => t.textContent.includes('总结本篇')).dispatchEvent(new window.Event('mousedown'));
-tags.find(t => t.textContent.includes('总结本篇')).dispatchEvent(new window.Event('mouseup'));
+// 2) 快速总结（短按执行 → 发送）
+tags.find(t => t.textContent.includes('快速总结')).dispatchEvent(new window.Event('mousedown'));
+tags.find(t => t.textContent.includes('快速总结')).dispatchEvent(new window.Event('mouseup'));
 await new Promise((r) => setTimeout(r, 150));
-ok('总结本篇触发发送', chatCalls.length === 1 && chatCalls[0].question.includes('核心问题'),
+ok('快速总结触发发送', chatCalls.length === 1 && chatCalls[0].question.includes('核心问题'),
    chatCalls[0]?.question?.slice(0, 40));
 
-// 3) 解读选中：无选中 → 不发送
-window.__T.state._lastSelection = '';
-tags.find(t => t.textContent.includes('解读选中')).dispatchEvent(new window.Event('mousedown'));
-tags.find(t => t.textContent.includes('解读选中')).dispatchEvent(new window.Event('mouseup'));
-await new Promise((r) => setTimeout(r, 100));
-ok('无选中时解读不发送', chatCalls.length === 1);
-// 有选中 → 占位符替换后发送
-window.__T.state._lastSelection = 'the loss function converges';
-tags.find(t => t.textContent.includes('解读选中')).dispatchEvent(new window.Event('mousedown'));
-tags.find(t => t.textContent.includes('解读选中')).dispatchEvent(new window.Event('mouseup'));
-await new Promise((r) => setTimeout(r, 100));
-ok('解读选中占位符替换并发送', chatCalls.length === 2 &&
-   chatCalls[1].question.includes('the loss function converges'));
+// 3/4) 解读选中/就选中提问已移至划词浮条（SEL_TAGS）——标签排不再重复
+ok('解读/提问标签已从标签排移除', !tags.some(t => t.textContent.includes('解读选中') || t.textContent.includes('就选中提问')));
 
-// 4) 就选中提问 = 只预填
-tags.find(t => t.textContent.includes('就选中提问')).dispatchEvent(new window.Event('mousedown'));
-tags.find(t => t.textContent.includes('就选中提问')).dispatchEvent(new window.Event('mouseup'));
-await new Promise((r) => setTimeout(r, 100));
-ok('就选中提问只预填不发送', chatCalls.length === 2 &&
-   doc.querySelector('#qa-text').value.includes('我的问题：'));
 
 // 5) ↑↓ 历史
 doc.querySelector('#qa-text').value = '';
