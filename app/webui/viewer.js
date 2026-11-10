@@ -80,7 +80,7 @@ window.copyText = async text => {
 const _uiStack = [];
 function _uiDialog({title, message = '', input = false, value = '', placeholder = '',
                     okText = '确定', cancelText = '取消', danger = false, anchor = null,
-                    copyText = '', hideCancel = false, multiline = false}) {
+                    copyText = '', hideCancel = false, multiline = false, html = false}) {
   return new Promise(resolve => {
     const backdrop = anchor ? null : Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
     const pop = Object.assign(document.createElement('div'), {className: 'ui-pop' + (danger ? ' danger' : '')});
@@ -88,8 +88,8 @@ function _uiDialog({title, message = '', input = false, value = '', placeholder 
       ? `<textarea class="ui-pop-input" rows="9" placeholder="${esc(placeholder || '')}">${esc(value)}</textarea>`
       : `<input class="ui-pop-input" value="${esc(value)}" placeholder="${esc(placeholder || '')}">`;
     pop.innerHTML = `
-      <div class="ui-pop-title">${esc(title)}${copyText ? `<button class="btn small" data-copy>${icon('copy')} 复制</button>` : ''}</div>
-      ${message ? `<div class="ui-pop-msg">${esc(message)}</div>` : ''}
+      <div class="ui-pop-title">${html ? title : esc(title)}${copyText ? `<button class="btn small" data-copy>${icon('copy')} 复制</button>` : ''}</div>
+      ${message ? `<div class="ui-pop-msg">${html ? message : esc(message)}</div>` : ''}
       ${inputHtml}
       <div class="ui-pop-foot">${hideCancel ? '' : `<button class="btn small" data-cancel>${esc(cancelText)}</button>`}
         <button class="btn small ${danger ? 'danger' : 'primary'}" data-ok>${esc(okText)}</button></div>`;
@@ -168,6 +168,11 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+/* 内联 onclick 的 JS 字符串参数转义（先 JS 层再属性层；esc() 的 &#39; 会被
+   HTML 解码回 ' 再进 JS 解析，两者叠加=互相抵消——含引号文本会让按钮语法错误）。
+   顺序：反斜杠→单引号（JS 层）→ & → "（属性层，解码后还原为字面量）。 */
+const jsArg = s => String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+  .replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 
 /* ---- SVG 图标库（v1.2 起 UI 图标全 SVG 化；toast 消息文本中的 emoji 保留）----
    线条风格：16 viewBox / stroke 1.5 / 圆角端点 / currentColor 跟随文字色。 */
@@ -618,7 +623,7 @@ $('#dir-btn').onclick = async () => {
     if (sk) {
       const reasons = d.skipped.slice(0, 3).map(x => `${x.file}: ${x.reason}`).join('；');
       await uiConfirm(`以下文件未能入库：<br>${esc(reasons)}${sk > 3 ? `<br>…共 ${sk} 个` : ''}`,
-                      {title: '跳过明细', okText: '知道了', hideCancel: true});
+                      {title: '跳过明细', okText: '知道了', hideCancel: true, html: true});
     }
     upPop.hidden = true;
     await loadImportDirs();
@@ -1990,6 +1995,20 @@ $('#page-tasks').addEventListener('click', async e => {
   if (retry) { await api(`/api/jobs/${retry.dataset.retry}/retry`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); return; }
   const cancel = e.target.closest('[data-cancel]');
   if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); return; }
+  // 综述批次的 查看报告/MD/CSV/删除（renderSynJob 的按钮渲染在任务页；分支曾只挂在批量页容器上）
+  const synView = e.target.closest('[data-syn-view]');
+  if (synView) { showSynthesisReport(synView.dataset.synView); return; }
+  const synDl = e.target.closest('[data-syn-dl]');
+  if (synDl) { location.href = `/api/syntheses/${encodeURIComponent(synDl.dataset.synDl)}/export?fmt=${synDl.dataset.fmt}`; return; }
+  const synDel = e.target.closest('[data-syn-del]');
+  if (synDel) {
+    if (await uiConfirm('删除这篇综述？（报告与矩阵将一并删除，进行中的任务同时取消）',
+                        {title: '删除综述', danger: true, anchor: synDel})) {
+      try { await api('/api/syntheses/' + encodeURIComponent(synDel.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
+      renderTaskPanel();
+    }
+    return;
+  }
   const head = e.target.closest('.bpanel-row.head[data-tb]');
   if (head) {
     const bid = head.dataset.tb;
@@ -3147,7 +3166,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     // 预设问题默认收起成一行，不占正文版面；点标题展开，提问后自动收起
     el.innerHTML = `<button class="preset-toggle" id="preset-toggle">${icon('bulb')} 推荐问题<span class="arrow">${icon('chevD')}</span></button>
       <div class="preset-list" id="preset-list" hidden>${qs.map(q =>
-      `<button onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('')}</div>`;
+      `<button onclick="askPreset('${jsArg(q)}')">${esc(q)}</button>`).join('')}</div>`;
     $('#preset-toggle').onclick = () => togglePresetList();
   });
   const pickToggle = $('#qa-pick-toggle');           // 仅对比模式渲染（单篇无选择器）
@@ -3360,7 +3379,7 @@ async function renderSessList() {
         <div class="qa-sess-title">${esc(x.title || '未命名会话')}</div>
         <div class="muted" style="font-size:var(--fs-xs)">${fmtTime(x.updated_at)}</div>
       </div>
-      <button class="btn small" onclick="event.stopPropagation();renameSess('${x.id}', '${esc((x.title || '').replace(/'/g, "\'"))}')" title="重命名">${icon('edit', 12)}</button>
+      <button class="btn small" onclick="event.stopPropagation();renameSess('${x.id}', '${jsArg(x.title || '')}')" title="重命名">${icon('edit', 12)}</button>
       <button class="btn small danger" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>
     </div>`).join('') : '<p class="muted" style="padding:8px">当前范围还没有会话</p>';
 }
@@ -4214,7 +4233,7 @@ window.saveQuota = async uid => {
 };
 window.deleteUser = async (uid, uname) => {
   const inp = await uiPrompt(`注销账号 <b>${esc(uname)}</b>？将立即禁用并匿名化用户名（其论文保留、归属不变，可恢复）。<br>输入用户名以确认：`,
-                             {placeholder: uname, okText: '确认注销'});
+                             {placeholder: uname, okText: '确认注销', html: true});
   if (inp === null) return;
   if (inp.trim() !== uname) { toast('用户名不匹配，已取消'); return; }
   try {
@@ -4241,7 +4260,7 @@ async function loadGlossary() {
   if (!el) return;
   el.innerHTML = d.terms.map(t =>
     `<span class="chip">${esc(t.term)}${t.target === 'trans' ? ' → ' + esc(t.value) : t.target === 'first_both' ? ' ⇄ ' + esc(t.value) : ' (EN)'}
-     <button onclick="delGlossary('${esc(t.term).replace(/'/g, "\\'")}')">${icon('close')}</button></span>`).join('') ||
+     <button onclick="delGlossary('${jsArg(t.term)}')">${icon('close')}</button></span>`).join('') ||
     '<span class="muted" style="font-size:12px">暂无术语——按需添加以保证全文译名一致</span>';
   $('#gl-add').onclick = async () => {
     const term = $('#gl-term').value.trim();
@@ -4540,24 +4559,6 @@ async function renderCollectionsPage(preset = null) {
   const selName = sel ? (d.collections.find(c => c.id === sel)?.name || '') : '';
   const selNameArg = selName.replace(/'/g, "\\'");   // 塞进内联 onclick 的单引号参数
   el.innerHTML = libMgrToolbarHtml(d) + `
-      <div class="tool-pop export-pop" id="export-pop" hidden>
-        <div class="tp-label">范围</div>
-        <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
-          <input type="radio" name="exp-scope" value="scope" style="width:auto" checked> 当前范围（<span id="exp-scope-n">0</span> 篇，含子库）</label>
-        <label class="tp-item" id="exp-sel-item" style="display:flex;gap:8px;align-items:center;cursor:pointer" hidden>
-          <input type="radio" name="exp-scope" value="sel" style="width:auto"> 勾选的 <span id="exp-sel-n">0</span> 篇</label>
-        <div class="tp-sep"></div>
-        <div class="tp-label">内容</div>
-        <div class="dl-checks">
-          <label><input type="checkbox" data-fmt="pdf" checked> 原始 PDF</label>
-          <label><input type="checkbox" data-fmt="md" checked> 原文 MD</label>
-          <label><input type="checkbox" data-fmt="bilingual_md"> 中英对照 MD</label>
-          <label><input type="checkbox" data-fmt="bilingual_pdf"> 对照 PDF（逐篇渲染较慢）</label>
-          <label><input type="checkbox" data-fmt="bibtex"> BibTeX</label>
-        </div>
-        <button class="btn small primary" id="export-zip-btn" style="margin:8px 0 4px">⬇ 导出 ZIP</button>
-      </div>
-    </div>
     <div class="lib-crumb">
       ${state.libLevel === 2 ? `<a href="#" onclick="libGoL1();return false">← 全部库</a> <span class="muted">›</span> ` : '<span class="muted">位置：</span>'}
       ${(() => {
@@ -4868,7 +4869,7 @@ function followupButtons(sections) {
   const qs = Object.keys(sections || {}).map(k => FOLLOWUP_QS[k]).filter(Boolean).slice(0, 5);
   if (!qs.length) return '';
   return `<div class="followups"><span class="muted" style="font-size:12px">${icon('chat')} 可以接着问：</span>` +
-    qs.map(q => `<button class="chip chip-q" onclick="askPreset('${esc(q).replace(/'/g, "\\'")}')">${esc(q)}</button>`).join('') +
+    qs.map(q => `<button class="chip chip-q" onclick="askPreset('${jsArg(q)}')">${esc(q)}</button>`).join('') +
     `</div>`;
 }
 
@@ -5508,8 +5509,8 @@ function libLevel1Html(d) {
       <div class="lc1-ops" onclick="event.stopPropagation()">
         <button class="btn small" onclick="libUpload('${c.id}')" title="上传到此库">${icon('upload')}</button>
         <button class="btn small" onclick="addSubLib('${c.id}')" ${depth >= 2 ? 'disabled title="最多三级"' : ''} title="新建子库">${icon('plus')}</button>
-        <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')" title="重命名">${icon('edit')}</button>
-        <button class="btn small danger" onclick="delLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')" title="删除库">${icon('trash')}</button>
+        <button class="btn small" onclick="renameLib('${c.id}', '${jsArg(c.name)}')" title="重命名">${icon('edit')}</button>
+        <button class="btn small danger" onclick="delLib('${c.id}', '${jsArg(c.name)}')" title="删除库">${icon('trash')}</button>
       </div>
     </div>`;
   };
@@ -5540,7 +5541,7 @@ function libLevel1Html(d) {
               <td>${c.papers ?? 0}</td><td>${(children[c.id] || []).length}</td>
               <td class="row-actions" onclick="event.stopPropagation()">
                 <button class="btn small" onclick="libUpload('${c.id}')">${icon('upload')}</button>
-                <button class="btn small" onclick="renameLib('${c.id}', '${esc(c.name).replace(/'/g, "\\'")}')">${icon('edit')}</button>
+                <button class="btn small" onclick="renameLib('${c.id}', '${jsArg(c.name)}')">${icon('edit')}</button>
               </td></tr>`).join('');
           })()}
         </table></div>`}`;
@@ -5632,10 +5633,17 @@ const CMD_ACTIONS = [
   {label: '发起综述', hint: '动作', kw: 'synthesis 综述 survey 报告', run: () => { switchPage('batch'); setTimeout(() => runSynthesis(null), 250); }},
   {label: '我的综述报告列表', hint: '跳转', kw: '综述 报告 syntheses 历史', run: () => { switchPage('batch'); setTimeout(() => $('#syn-list')?.scrollIntoView({behavior: 'smooth'}), 400); }},
   {label: '翻译当前论文', hint: '动作', kw: 'translate 翻译', run: () => { switchPage('reader'); setTimeout(() => startTranslate?.(), 250); }},
-  {label: '生成/查看导读', hint: '动作', kw: 'summary 导读', run: () => { switchPage('reader'); setTimeout(() => genSum?.(), 250); }},
+  {label: '生成/查看导读', hint: '动作', kw: 'summary 导读', run: () => {
+    switchPage('reader');
+    setTimeout(() => {   // 导读气泡在问答 dock 内：先开 dock，再对当前论文触发
+      openQaDock();
+      if (state.current?.id) genSumBubble(state.current.id);
+      else toast('先在左侧列表打开一篇论文');
+    }, 250);
+  }},
   {label: '找相关文献', hint: '动作', kw: 'discover 相关 推荐 引用', run: () => { switchPage('reader'); setTimeout(() => openDiscover(), 300); }},
   {label: '文献信息 / 元数据校准', hint: '动作', kw: 'meta 元数据 校准 校验', run: () => { switchPage('reader'); setTimeout(() => switchView('meta'), 250); }},
-  {label: '导出引用（BibTeX/CSL）', hint: '动作', kw: 'cite 引用 bibtex csl 导出', run: () => { switchPage('reader'); setTimeout(() => switchView('meta'), 250); }},
+  {label: '导出引用（BibTeX/CSL）', hint: '动作', kw: 'cite 引用 bibtex csl 导出', run: () => { switchPage('reader'); setTimeout(() => { switchView('meta'); $('#cite-preview')?.scrollIntoView({block: 'center'}); }, 250); }},
   {label: '下载中心（PDF/对照/ZIP）', hint: '动作', kw: 'download 下载 zip pdf', run: () => { switchPage('reader'); setTimeout(() => $('#download-btn')?.click(), 250); }},
   {label: '回收站 / 恢复删除', hint: '页面', kw: 'trash 回收站 恢复', run: () => switchPage('trash')},
 ];
@@ -5748,7 +5756,10 @@ document.addEventListener('keydown', e => {
     e.preventDefault(); openCmdPalette(); return;
   }
   if ((e.ctrlKey || e.metaKey) && (e.key === '/' || e.key === '?')) {
-    e.preventDefault(); $('#lib-search')?.focus(); e.target.select?.(); return;
+    e.preventDefault();
+    const inp = $('#lib-search');
+    inp?.focus(); inp?.select?.();   // 全选已有搜索词，输入直接覆盖
+    return;
   }
   if (inField || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === '?') { e.preventDefault(); showShortcutHelp(); return; }
@@ -5757,7 +5768,7 @@ document.addEventListener('keydown', e => {
     const items = $$('#paper-list .paper-item[data-id]');
     if (!items.length) return;
     const cur = items.findIndex(x => x.classList.contains('sel'));
-    if (e.key === 'ArrowDown') { e.preventDefault(); const n = items[Math.min(cur + 1, items.length - 1)]; n?.scrollIntoView({block: 'nearest'}); state.current ? null : null; openPaper(n.dataset.id); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); const n = items[Math.min(cur + 1, items.length - 1)]; n?.scrollIntoView({block: 'nearest'}); openPaper(n.dataset.id); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); const n = items[Math.max(cur - 1, 0)]; n?.scrollIntoView({block: 'nearest'}); openPaper(n.dataset.id); }
     else if (e.key === 'Enter' && cur < 0) { e.preventDefault(); openPaper(items[0].dataset.id); }
   }
