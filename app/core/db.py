@@ -392,6 +392,17 @@ class Database:
             c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at DESC)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_llm_calls_paper "
                       "ON llm_calls(paper_id)")
+            # 用量/配额高频聚合（体检批二）：llm_calls 按用户+时间（/api/me/quota、/api/usage、
+            # admin/users）、jobs 活跃状态（调度 _next_job / badge / 每日配额 COUNT）、
+            # chat_messages 按会话取消息、papers 按属主（部分索引，/api/me/quota 磁盘 SUM）
+            c.execute("CREATE INDEX IF NOT EXISTS idx_llm_calls_user_time "
+                      "ON llm_calls(user_id, created_at)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_active "
+                      "ON jobs(job_type, status, created_at)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_session "
+                      "ON chat_messages(session_id, id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_papers_owner "
+                      "ON papers(owner_id) WHERE deleted_at IS NULL")
             # WAL 常开
             c.execute("PRAGMA journal_mode=WAL")
 

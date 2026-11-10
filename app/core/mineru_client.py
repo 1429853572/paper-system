@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import io
 import zipfile
 from dataclasses import dataclass
@@ -44,14 +45,21 @@ class MinerUClient:
     def __init__(self, base_url: str = MINERU_BASE_URL, timeout: float = 60.0):
         self.base = base_url.rstrip("/")
         self._client = httpx.Client(timeout=timeout)
+        self._health_at = -1e9   # 探活结果缓存（调度器每 10s 唤醒探一次，宕机时阻塞至 10s 超时）
+        self._health_ok = False
 
     # ---- health gate ----
     def healthy(self) -> bool:
+        now = time.monotonic()
+        if now - self._health_at < 30:
+            return self._health_ok
         try:
             r = self._client.get(f"{self.base}/v1/health", timeout=10)
-            return r.status_code == 200
+            self._health_ok = r.status_code == 200
         except httpx.HTTPError:
-            return False
+            self._health_ok = False
+        self._health_at = now
+        return self._health_ok
 
     # ---- 创建任务（单文件） ----
     def create_task(self, file_name: str, file_bytes: bytes | None, tier: str = "standard",

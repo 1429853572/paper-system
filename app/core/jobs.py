@@ -94,6 +94,8 @@ class Scheduler:
         self._last_user: dict[str, int] = {}  # job_type -> 上次服务的 user_id（轮转指针）
         self._paused_types: set[str] = set()  # 暂停的批量类型（parse/translate）
         self._translate_slots: dict[int, int] = {}  # user_id -> 在跑翻译数
+        # 全局翻译并发上限（scheduler.translate_workers；per-user 上限另由 translate_concurrency 控制）
+        self._translate_sem = threading.Semaphore(int(config.get("scheduler", "translate_workers")))
 
     # ---- 启动 ----
     def start(self) -> None:
@@ -225,11 +227,12 @@ class Scheduler:
                         )
                     time.sleep(15)
                     continue
-                # gate 恢复：pending_gate 回 queued
-                with db.write() as c:
-                    c.execute(
-                        "UPDATE jobs SET status='queued' WHERE job_type='parse' AND status='pending_gate'"
-                    )
+                # gate 恢复：pending_gate 回 queued（有行才写——空闲时省一次空写事务/fsync）
+                if db.one("SELECT 1 FROM jobs WHERE job_type='parse' AND status='pending_gate' LIMIT 1"):
+                    with db.write() as c:
+                        c.execute(
+                            "UPDATE jobs SET status='queued' WHERE job_type='parse' AND status='pending_gate'"
+                        )
                 job = self._next_job("parse")
                 if job is None:
                     continue
@@ -462,7 +465,11 @@ class Scheduler:
                 if self._translate_slots.get(job["user_id"], 0) >= per_user_limit:
                     time.sleep(3)
                     continue
+                if not self._translate_sem.acquire(blocking=False):
+                    time.sleep(3)
+                    continue
                 if not self._claim(job["id"]):
+                    self._translate_sem.release()
                     continue
                 self._translate_slots[job["user_id"]] = self._translate_slots.get(job["user_id"], 0) + 1
                 t = threading.Thread(target=self._run_translate, args=(job,), daemon=True)
@@ -482,6 +489,7 @@ class Scheduler:
             self._translate_slots[job["user_id"]] = max(
                 0, self._translate_slots.get(job["user_id"], 1) - 1
             )
+            self._translate_sem.release()
             self._wake.set()
 
     # ================= 导读 worker（LLM 同步调用，单并发） =================

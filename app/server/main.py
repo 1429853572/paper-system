@@ -106,7 +106,12 @@ def require_admin(request: Request) -> dict:
 
 
 @app.on_event("startup")
-def _startup() -> None:
+async def _startup() -> None:
+    # SSE 长连接与全部同步端点共用 AnyIO 线程池（默认 40）：每条 SSE 常驻占 1 token，
+    # 20 人 × 1-2 标签页即贴顶 → 所有端点排队（表现为整站卡顿而 DB 查询都是亚毫秒）。
+    # 调大给常驻 SSE 留余量（SSE 每条只占 1 线程、其余端点毫秒级归还）。
+    from anyio import to_thread
+    to_thread.current_default_thread_limiter().total_tokens = 120
     auth.ensure_admin()
 
     # 翻译任务处理器
@@ -1136,9 +1141,11 @@ def admin_users(request: Request):
         "SELECT u.id, u.username, u.role, u.disabled, u.created_at, q.overrides, "
         "(SELECT COUNT(*) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS papers, "
         "(SELECT COALESCE(SUM(p.file_size),0) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS disk_used, "
-        "(SELECT COALESCE(SUM(lc.prompt_tokens+lc.completion_tokens),0) FROM llm_calls lc "
-        "WHERE lc.user_id=u.id AND lc.created_at>=date('now','-30 day')) AS tokens_30d "
-        "FROM users u LEFT JOIN user_quotas q ON q.user_id=u.id ORDER BY u.id")
+        "COALESCE(t.t, 0) AS tokens_30d "
+        "FROM users u LEFT JOIN user_quotas q ON q.user_id=u.id "
+        "LEFT JOIN (SELECT user_id, SUM(prompt_tokens+completion_tokens) AS t FROM llm_calls "
+        "WHERE created_at>=date('now','-30 day') GROUP BY user_id) t ON t.user_id=u.id "
+        "ORDER BY u.id")   # 30d token 一次性 GROUP BY（原相关子查询 O(用户数×llm_calls 全表)）
     return {"users": [dict(r) for r in rows]}
 
 
@@ -2402,9 +2409,12 @@ def papers_statuses(request: Request, paper_ids: str = "", limit: int = 0):
     papers = db.all(f"SELECT id, parse_status FROM papers WHERE deleted_at IS NULL{vis}", args)
     # 每篇最新 parse/translate 任务
     latest: dict[str, dict] = {}
+    # 覆盖扫描 idx_jobs_paper(paper_id,job_type,status) 求 MAX(id)（无 temp b-tree、不回表），
+    # JOIN 取行时显式列——payload（综述任务可达数 KB）不进 statuses 响应
     for j in db.all(
-        "SELECT j.* FROM jobs j WHERE j.job_type IN ('parse','translate') "
-        "AND j.id IN (SELECT MAX(id) FROM jobs WHERE job_type IN ('parse','translate') GROUP BY paper_id, job_type)"
+        "SELECT j.id, j.paper_id, j.job_type, j.status, j.error, j.progress_done, j.progress_total "
+        "FROM jobs j JOIN (SELECT paper_id, job_type, MAX(id) AS mid FROM jobs "
+        "WHERE job_type IN ('parse','translate') GROUP BY paper_id, job_type) m ON m.mid=j.id"
     ):
         latest.setdefault(j["paper_id"], {})[j["job_type"]] = j
     tokens = {r["paper_id"]: r for r in db.all(

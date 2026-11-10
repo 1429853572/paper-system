@@ -1284,6 +1284,7 @@ function watchTranslation() {
   clearInterval(watching);
   watchingPid = state.current?.id ?? null;
   watching = setInterval(async () => {
+    if (document.hidden) return;   // 后台标签页暂停轮询（badge/health 同款守卫）
     if (!state.current || state.current.id !== watchingPid) {   // 已切到别的论文 → 停止轮询
       clearInterval(watching); watchingPid = null; return;
     }
@@ -2755,6 +2756,7 @@ document.addEventListener('click', e => {
 
 /* SSE 实时进度 */
 let _sseCollectionsAt = 0;   // 批量任务事件风暴节流（3s 内只重建一次文库页）
+let _qaPapersAt = 0;         // parse done/failed → qaAllPapers 重拉节流
 async function watchJobs() {
   const es = new EventSource('/api/jobs/stream');
   es.onmessage = e => {
@@ -2776,7 +2778,9 @@ async function watchJobs() {
         _sidebarAt = Date.now();
         loadCollections().catch(() => {});
       }
-      api('/api/papers').then(d => {
+      if (Date.now() - _qaPapersAt > 3000) {   // 逐篇事件风暴节流（批量导入 90 篇=90 次全量拉）
+        _qaPapersAt = Date.now();
+        api('/api/papers').then(d => {
         state.qaAllPapers = d.papers;
         if (state.view === 'qa') {
           renderPickList($('#qa-pick-filter')?.value.toLowerCase() || '');
@@ -2784,6 +2788,7 @@ async function watchJobs() {
           if (ev.status === 'done') toast(`《${(d.papers.find(x => x.id === ev.paper_id) || {}).title || ''}》解析完成，可以提问了`);
         }
       });
+      }
     }
     refreshQueueBadge();
     // 批量中心打开时，批次事件实时刷新进度面板（2s 节流，避免逐篇事件风暴全量重建）
@@ -4492,10 +4497,12 @@ function bindLibMgrToolbar() {
 }
 
 async function renderCollectionsPage(preset = null) {
-  const d = preset || await api('/api/collections');
+  // collections（或 preset）与 statuses 并行——文库页首屏少等一个串行往返
+  const [d, st0] = await Promise.all([
+    preset ? Promise.resolve(preset) : api('/api/collections'), api('/api/statuses')]);
   state.collections = d.collections;
   state.totalPapers = d.total;
-  state._statuses = (await api('/api/statuses')).statuses;
+  state._statuses = st0.statuses;
   const el = $('#page-collections');
   if (state.libLevel === 1) {           // 第一层：库列表（顶部工具条与第二层同一套，含新建库/搜索/导出）
     el.innerHTML = libMgrToolbarHtml(d) + libLevel1Html(d);
