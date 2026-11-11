@@ -352,6 +352,9 @@ class Scheduler:
     def _fail_or_retry(self, job: Any, error: str) -> None:
         retry_max = int(config.get("scheduler", "retry_max"))
         retries = job["retry_count"]
+        if "预算已用尽" in error:      # 预算闸：重试无意义（等到下月只会继续失败）
+            self._update(job["id"], status="failed", error=error)
+            return
         if retries < retry_max and job["status"] != "failed":
             delay = min(2 ** retries * 5, 120)
             self._update(job["id"], status="queued", retry_count=retries + 1, error=error)

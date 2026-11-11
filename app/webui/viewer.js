@@ -3891,33 +3891,55 @@ async function renderSettings(tab) {
   if (cur === 'usage') renderMeQuota();
   if (cur === 'admin' && isAdmin) renderAdminZone();
 }
-/* 我的用量：所有用户可见（/api/me/quota + /api/usage 对 member 自动只返回自己的数据） */
+/* 我的用量：真额度（解析/磁盘）+ 本月花费与预算闸。
+   token 数字不展示——余额是上游商家的事，上游额度不足会原样报错；这里只给"花了多少/还能花多少"。 */
 async function renderMeQuota() {
   const el = $('#me-quota-zone');
   if (!el) return;
-  const [q, usage] = await Promise.all([
-    api('/api/me/quota').catch(() => null),
-    api('/api/usage').catch(() => null),
-  ]);
+  const q = await api('/api/me/quota').catch(() => null);
   if (!q) return;
   const pPct = q.parse_limit ? Math.round(q.parse_used / q.parse_limit * 100) : 0;
   const usedGb = fmtGB(q.disk_used_bytes);
   const dPct = q.disk_limit_gb ? Math.round(usedGb / q.disk_limit_gb * 100) : 0;
   const bar = (pct, warn) => `<div style="height:6px;background:var(--line-soft);border-radius:3px;overflow:hidden;margin-top:4px">
     <i style="display:block;height:100%;width:${Math.min(100, pct)}%;background:${pct >= warn ? 'var(--warn)' : 'var(--primary)'}"></i></div>`;
-  const days = (usage?.by_day || []).slice(0, 7).map(r =>
-    `<tr><td>${esc(String(r.day).slice(5))}</td><td style="text-align:right;font-size:11px">${((r.p || 0) + (r.c || 0)).toLocaleString()} tok</td></tr>`).join('');
+  const purposeName = {chat: '问答/导读', translate: '翻译', summary: '导读', embed: '向量化', synthesis: '综述'};
+  const costRows = Object.entries(q.cost_by_purpose || {})
+    .filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<tr><td>${esc(purposeName[k] || k)}</td>
+      <td style="text-align:right;font-size:11px">¥${Number(v).toFixed(2)}</td>
+      <td style="text-align:right;font-size:11px;width:34%">
+        <div style="height:5px;background:var(--line-soft);border-radius:3px;overflow:hidden">
+          <i style="display:block;height:100%;width:${q.month_cost ? Math.min(100, v / q.month_cost * 100) : 0}%;background:var(--primary)"></i>
+        </div></td></tr>`).join('');
+  const delta = q.prev_month_cost ? Math.round((q.month_cost - q.prev_month_cost) / q.prev_month_cost * 100) : 0;
+  const hasBudget = q.budget > 0;
   el.innerHTML = `
     <h2 class="page-h">${icon('chart')} 我的用量</h2>
     <div class="set-card">
+      <div class="set-head">本月花费
+        <span class="muted" style="font-weight:400;font-size:11px">按模型单价估算${q.cost_priced ? '' : '（当前模型未收录单价，估为 0——可在下方填你的实际单价）'}</span></div>
+      <div style="font-size:26px;font-weight:600">¥${Number(q.month_cost || 0).toFixed(2)}
+        ${q.prev_month_cost ? `<span class="muted" style="font-size:12px;font-weight:400">（上月 ¥${Number(q.prev_month_cost).toFixed(2)} ${delta >= 0 ? '↑' : '↓'}${Math.abs(delta)}%）</span>` : ''}</div>
+      ${hasBudget ? `<div style="font-size:12px;margin-top:8px">月预算 ¥${q.budget} · 已用 <b>${q.budget_pct}%</b>
+          ${q.budget_pct >= 100 ? '<span class="badge err">已用尽，将拦截调用</span>' : q.budget_pct >= 80 ? '<span class="badge run">接近上限</span>' : ''}</div>
+        ${bar(q.budget_pct, 100)}`
+        : `<div class="muted" style="font-size:12px;margin-top:6px">未设预算——不拦截调用；上游余额不足时由上游报错</div>`}
+      ${costRows ? `<table class="list" style="margin-top:10px">${costRows}</table>` : ''}
+      <div class="set-actions">
+        <button class="btn small" onclick="openBudgetDialog()">设置预算 / 单价</button>
+      </div>
+    </div>
+    <div class="set-card">
+      <div class="set-head">额度上限</div>
       <div style="font-size:12px">今日解析 <b>${q.parse_used}</b> / ${q.parse_limit} 篇${pPct >= 80 ? ' <span class="badge err">接近上限</span>' : ''}</div>
       ${bar(pPct, 80)}
       <div style="font-size:12px;margin-top:12px">磁盘已用 <b>${usedGb.toFixed(2)}</b> / ${q.disk_limit_gb} GB${dPct >= 90 ? ' <span class="badge err">空间紧张</span>' : ''}</div>
       ${bar(dPct, 90)}
-      <div style="font-size:12px;margin-top:12px">近 30 天 token：<b>${(q.tokens_30d || 0).toLocaleString()}</b>${days ? '<span class="muted">（近 7 天 ↓）</span>' : ''}</div>
-      ${days ? `<table class="list" style="margin-top:4px">${days}</table>` : ''}
+      <div class="muted" style="font-size:11px;margin-top:10px">${q.month_calls || 0} 次调用（本月）</div>
     </div>`;
 }
+
 async function renderAdminZone() {
   const el = $('#admin-zone');
   if (!el) return;
@@ -3956,6 +3978,7 @@ async function renderAdminZone() {
               <label>单文件MB <input id="q-${u.id}-fm" type="number" min="1" style="width:58px;font-size:12px" value="${ov.max_file_mb ?? ''}" placeholder="100"></label>
               <label>页数 <input id="q-${u.id}-pp" type="number" min="1" style="width:58px;font-size:12px" value="${ov.max_pages ?? ''}" placeholder="∞"></label>
               <label>磁盘GB <input id="q-${u.id}-dk" type="number" min="1" style="width:58px;font-size:12px" value="${ov.max_disk_gb ?? ''}" placeholder="20"></label>
+              <label>月预算¥ <input id="q-${u.id}-bg" type="number" min="0" step="1" style="width:66px;font-size:12px" value="${ov.monthly_budget_cny ?? ''}" placeholder="不限"></label>
               <button class="btn small primary" onclick="saveQuota(${u.id})">${icon('save')} 保存</button>
             </div>
           </details>
@@ -3980,17 +4003,12 @@ async function renderAdminZone() {
       </div>
     </div>
     <div class="set-card">
-      <div class="set-head">${icon('chart')} Token 用量 <span class="muted" style="font-weight:400">按用户（chat+translate）</span></div>
+      <div class="set-head">${icon('chart')} 本月花费 <span class="muted" style="font-weight:400">按用户估算（元）</span></div>
       <table class="list">${(() => {
-        const byName = {};
-        (usage.by_user || []).forEach(r => {
-          const k = r.username || 'CLI';
-          byName[k] = byName[k] || {chat: 0, translate: 0};
-          if (r.purpose === 'chat') byName[k].chat += r.p + r.c;
-          else if (r.purpose === 'translate') byName[k].translate += r.p + r.c;
-        });
-        return Object.entries(byName).map(([name, t]) =>
-          `<tr><td>${esc(name)}</td><td class="muted" style="font-size:11px">问答 ${(t.chat).toLocaleString()} tok · 翻译 ${(t.translate).toLocaleString()} tok</td></tr>`).join('') || '<tr><td class="muted">暂无用量——问答/翻译/导读产生 token 后按日统计在此</td></tr>';
+        const rows = (users.users || []).map(u => ({name: u.username, cost: u.month_cost || 0}));
+        return rows.sort((a, b) => b.cost - a.cost).map(r =>
+          `<tr><td>${esc(r.name)}</td><td class="muted" style="font-size:11px">¥${Number(r.cost).toFixed(2)}</td></tr>`).join('')
+          || '<tr><td class="muted">暂无花费——问答/翻译/导读产生调用后在此估算</td></tr>';
       })()}</table>
     </div>
     <div class="set-card">
@@ -4037,6 +4055,7 @@ window.saveQuota = async uid => {
   num('fm', 'max_file_mb');
   num('pp', 'max_pages');
   num('dk', 'max_disk_gb');
+  num('bg', 'monthly_budget_cny');
   try {
     await api(`/api/admin/users/${uid}/quota`, {method: 'PUT', body: JSON.stringify(ov)});
     toast('已保存限额'); renderAdminZone();
@@ -4051,6 +4070,22 @@ window.deleteUser = async (uid, uname) => {
     await api(`/api/admin/users/${uid}`, {method: 'DELETE'});
     toast('已注销'); renderAdminZone();
   } catch (e) { toast('操作失败: ' + e.message); }
+};
+/* 预算与单价设置：预算=0 表示不设闸（默认不拦）；单价覆盖按你的实际定价填 */
+window.openBudgetDialog = async () => {
+  const q = await api('/api/me/quota').catch(() => null);
+  if (!q) { toast('无法读取当前用量'); return; }
+  const cur = q.budget || 0;
+  const v = await uiPrompt(`月预算（元）——超过后拦截问答/翻译/导读/综述调用；填 0 表示不设闸。<br>
+    当前本月已花 ¥${Number(q.month_cost || 0).toFixed(2)}`,
+    {value: cur ? String(cur) : '', placeholder: '如 50（不设=留空）', okText: '保存'});
+  if (v === null) return;
+  const budget = parseFloat(v) || 0;
+  try {
+    await api('/api/me/budget', {method: 'PUT', body: JSON.stringify({budget})});
+    toast(budget ? `月预算已设为 ¥${budget}` : '已取消预算（不再拦截）');
+    renderMeQuota();
+  } catch (e) { toast('保存失败: ' + e.message); }
 };
 window.togglePool = async enable => {
   await api('/api/admin/pool', {method: 'POST', body: JSON.stringify({enabled: enable})});

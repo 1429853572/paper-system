@@ -1154,11 +1154,54 @@ def me_quota(request: Request):
     """
     u = require(request)
     overrides = _quota_overrides(u["id"])
+    from core import costing
+    cost = costing.month_cost(u["id"], overrides)
+    prev = costing.prev_month_cost(u["id"], overrides)
+    budget = costing.budget_of(overrides, u["id"])
     return {"parse_used": _parse_used_today(u["id"]),
             "parse_limit": _daily_parse_limit(u["role"] == "admin", overrides),
             "disk_used_bytes": _disk_used(u["id"]),
             "disk_limit_gb": overrides.get("max_disk_gb") or config.get("limits", "disk_quota_gb"),
-            "tokens_30d": _tokens_30d(u["id"])}
+            # 花费（按 model×purpose 折算；未收录模型的调用不计费）
+            "month_cost": cost["total"], "prev_month_cost": prev,
+            "cost_by_purpose": cost["by_purpose"], "cost_priced": cost["priced"],
+            "month_calls": cost["calls"],
+            "budget": budget,
+            "budget_pct": round(min(100, cost["total"] / budget * 100), 1) if budget else None}
+
+
+@app.put("/api/me/budget")
+async def set_my_budget(request: Request):
+    """设置月预算（元）与自定义单价覆盖（各家 OpenAI 兼容厂商定价不同）。
+    budget=0 表示不设闸（默认）。"""
+    u = require(request)
+    body = await request.json()
+    ov = _quota_overrides(u["id"])
+    try:
+        budget = float(body.get("budget") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "预算金额格式错误")
+    if budget < 0:
+        raise HTTPException(400, "预算不能为负")
+    # 成员自设预算存 settings（admin 的硬上限另存 overrides，生效时取更严者）
+    with db.write() as c:
+        if budget:
+            c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=?", (f"budget:{u['id']}", str(budget), str(budget)))
+        else:
+            c.execute("DELETE FROM settings WHERE key=?", (f"budget:{u['id']}",))
+    pricing = body.get("pricing")
+    if isinstance(pricing, dict) and pricing:
+        ov["pricing"] = {k: {"prompt": float(v.get("prompt") or 0),
+                             "completion": float(v.get("completion") or 0)}
+                         for k, v in pricing.items() if isinstance(v, dict)}
+    elif pricing is not None:
+        ov.pop("pricing", None)
+    with db.write() as c:
+        c.execute("INSERT INTO user_quotas(user_id,overrides) VALUES(?,?) "
+                  "ON CONFLICT(user_id) DO UPDATE SET overrides=?",
+                  (u["id"], json.dumps(ov), json.dumps(ov)))
+    return {"ok": True, "budget": budget, "pricing": ov.get("pricing", {})}
 
 
 # ---------------- 管理 ----------------
@@ -1178,13 +1221,17 @@ def admin_users(request: Request):
     rows = db.all(
         "SELECT u.id, u.username, u.role, u.disabled, u.created_at, q.overrides, "
         "(SELECT COUNT(*) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS papers, "
-        "(SELECT COALESCE(SUM(p.file_size),0) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS disk_used, "
-        "COALESCE(t.t, 0) AS tokens_30d "
-        "FROM users u LEFT JOIN user_quotas q ON q.user_id=u.id "
-        "LEFT JOIN (SELECT user_id, SUM(prompt_tokens+completion_tokens) AS t FROM llm_calls "
-        "WHERE created_at>=date('now','-30 day') GROUP BY user_id) t ON t.user_id=u.id "
-        "ORDER BY u.id")   # 30d token 一次性 GROUP BY（原相关子查询 O(用户数×llm_calls 全表)）
-    return {"users": [dict(r) for r in rows]}
+        "(SELECT COALESCE(SUM(p.file_size),0) FROM papers p WHERE p.owner_id=u.id AND p.deleted_at IS NULL) AS disk_used "
+        "FROM users u LEFT JOIN user_quotas q ON q.user_id=u.id ORDER BY u.id")
+    # 本月花费按模型单价在 Python 层折算（SQL 无法按 pricing 表加权）
+    from core import costing
+    site = costing.site_cost()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["month_cost"] = site.get(d["id"], 0.0)
+        out.append(d)
+    return {"users": out}
 
 
 @app.post("/api/admin/users/{user_id}/reset-password")

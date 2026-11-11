@@ -135,7 +135,8 @@ await new Promise(r => setTimeout(r, 500));
 const qz = doc.querySelector('#me-quota-zone');
 check('「我的用量」区渲染', !!qz && qz.textContent.includes('今日解析'));
 check('用量区含磁盘已用', (qz?.textContent || '').includes('磁盘已用'));
-check('用量区含 30 天 token', (qz?.textContent || '').includes('近 30 天 token'));
+check('用量区含本月花费（token 展示已按需求移除）',
+   (qz?.textContent || '').includes('本月花费') && !(qz?.textContent || '').includes('近 30 天 token'));
 
 await window.__T.renderSettings('admin');
 await new Promise(r => setTimeout(r, 500));
@@ -150,7 +151,7 @@ check('邀请码有效期下拉存在', !!az?.querySelector('#invite-days'));
 check('邀请码下拉含 30 天选项', [...(az?.querySelectorAll('#invite-days option') || [])].some(o => o.value === '30'));
 const qd = az?.querySelector('details.q-edit');
 check('结构化限额编辑器存在（替代裸 JSON 框）', !!qd);
-check('限额编辑器含 4 个数字字段', (qd?.querySelectorAll('input[type="number"]').length || 0) === 4);
+check('限额编辑器含 5 个数字字段（含月预算）', (qd?.querySelectorAll('input[type="number"]').length || 0) === 5);
 check('已有 override 值回填（max_pages=500）', qd?.querySelector('input[id$="-pp"]')?.value === '500');
 check('删除用户按钮存在且仅对启用中的非 admin', [...(az?.querySelectorAll('button[title^="注销账号"]') || [])].length === 1);
 

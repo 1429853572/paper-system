@@ -12,6 +12,23 @@ DATA_DIR = Path(os.environ.get("PAPERSYS_DATA", "/app/data"))
 DB_PATH = DATA_DIR / "papersys.db"
 
 _DEFAULTS: dict[str, dict[str, Any]] = {
+    # LLM 单价（元/百万 token，公开定价参考值——各家 OpenAI 兼容厂商不同，
+    # 用户可在设置页按自己的实际单价覆盖）。未收录的模型不计费。
+    "pricing": {
+        "gpt-4o":           {"prompt": 18.0, "completion": 72.0},
+        "gpt-4o-mini":      {"prompt": 1.1,  "completion": 4.3},
+        "gpt-4.1":          {"prompt": 14.0, "completion": 56.0},
+        "gpt-4.1-mini":     {"prompt": 3.0,  "completion": 12.0},
+        "deepseek-chat":    {"prompt": 0.55, "completion": 2.2},
+        "deepseek-reasoner": {"prompt": 2.2, "completion": 8.8},
+        "glm-4-flash":      {"prompt": 0.5,  "completion": 0.5},
+        "glm-4-plus":       {"prompt": 50.0, "completion": 50.0},
+        "glm-5.3-flash":    {"prompt": 0.5,  "completion": 1.5},
+        "kimi-k2":          {"prompt": 4.0,  "completion": 16.0},
+        "moonshot-v1":      {"prompt": 12.0, "completion": 12.0},
+        "qwen-plus":        {"prompt": 4.0,  "completion": 12.0},
+        "qwen-turbo":       {"prompt": 1.0,  "completion": 4.0},
+    },
     "limits": {
         "max_file_mb": 100,
         "max_pages": 500,

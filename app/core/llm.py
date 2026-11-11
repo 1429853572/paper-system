@@ -130,6 +130,10 @@ class LLMClient:
 
     def complete(self, messages: list[dict], max_tokens: int = 4096) -> str:
         """非流式调用；429/5xx 指数退避重试 3 次。"""
+        # 月预算闸：烧穿之前拦下（额度本身是上游的事——上游余额不足会原样报错）
+        if self.user_id:
+            from . import costing
+            costing.check_budget(self.user_id)
         last_err = ""
         for attempt in range(4):
             req = self._request(messages, max_tokens, stream=False)
@@ -141,6 +145,7 @@ class LLMClient:
                 import time; time.sleep(time_sleep)
                 continue
             if r.status_code == 429 or r.status_code >= 500:
+                last_err = f"LLM API {r.status_code}: {r.text[:300]}"
                 import time; time.sleep(self._retry(attempt))
                 continue
             if r.status_code != 200:
@@ -164,14 +169,22 @@ class LLMClient:
 
     def stream(self, messages: list[dict], max_tokens: int = 4096) -> Iterator[str]:
         """流式（SSE）； yielded 为文本增量。"""
+        if self.user_id:
+            from . import costing
+            costing.check_budget(self.user_id)
         req = self._request(messages, max_tokens, stream=True)
         usage: dict = {}
         r = _SHARED_HTTP.send(req, stream=True)
         try:
-            if r.status_code == 429 or r.status_code >= 500:
-                raise RuntimeError(f"LLM API {r.status_code}")
             if r.status_code != 200:
-                raise RuntimeError(f"LLM API {r.status_code}: {r.read()[:300]}")
+                # 错误体原样透传——上游「余额不足/额度耗尽」等提示只在响应体里，
+                # 丢了用户就只看到干巴巴的状态码（余额是上游的事，系统不该替它猜）
+                body = ""
+                try:
+                    body = r.read()[:300].decode("utf-8", "replace")
+                except Exception:  # noqa: BLE001
+                    pass
+                raise RuntimeError(f"LLM API {r.status_code}: {body}")
             for line in r.iter_lines():
                 if not line.startswith("data:"):
                     continue
