@@ -356,7 +356,7 @@ async function renderSessList() {
     <div class="qa-sess-item ${x.id === state.qaSession ? 'on' : ''}" onclick="switchSess('${x.id}')">
       <div style="flex:1;min-width:0">
         <div class="qa-sess-title">${esc(x.title || '未命名会话')}</div>
-        <div class="muted" style="font-size:var(--fs-xs)">${fmtTime(x.updated_at)}</div>
+        <div class="muted" style="font-size:var(--fs-xs)">${relTime(x.updated_at)}</div>
       </div>
       <button class="btn small" onclick="event.stopPropagation();renameSess('${x.id}', '${jsArg(x.title || '')}')" title="重命名">${icon('edit', 12)}</button>
       <button class="btn small danger" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>

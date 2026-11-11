@@ -94,10 +94,12 @@ const PICK_POOL = Array.from({length: 45}, (_, i) => ({
   page_count: 10 + i,
 }));
 
+const calls = [];
 window.fetch = async (url, opts = {}) => {
   const u = String(url);
   const path = u.split('?')[0];
   const q = new URLSearchParams(u.split('?')[1] || '');
+  calls.push(`${path} ${(opts.method || 'GET')}`);
   // synthesis 批次的 job 明细（payload 携带 synthesis_id）
   if (path === '/api/jobs' && q.get('batch_id') === 'live1') {
     return { ok: true, status: 200, json: async () => ({ jobs: [
@@ -283,6 +285,31 @@ if (synPop) {
     ok('返回任务中心（综述报告并入任务页）', !!doc.querySelector('#task-body') &&
        !doc.querySelector('.syn-report'));
   }
+}
+
+// 10) 删除操作带「撤销」——误删不必去回收站翻
+{
+  calls.length = 0;
+  const delBtn = doc.querySelector('[data-lib-del], .lib-batch .btn.danger');
+  // 文库页渲染后才有批量删除按钮；找不到则直接构造 toast 场景验证组件
+  if (delBtn) {
+    delBtn.click();
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  // 直接验证 toast 组件能力：带 action 的 toast 渲染出按钮，点击后触发回调
+  let fired = false;
+  window.eval(`toast('已移入回收站', 0, {label:'撤销', onClick: () => { window.__undoFired = true; }})`);
+  await new Promise((r) => setTimeout(r, 120));
+  const undoBtn = doc.querySelector('#toast .toast-action');
+  ok('toast 带「撤销」按钮', !!undoBtn && undoBtn.textContent.trim() === '撤销');
+  if (undoBtn) {
+    undoBtn.click();
+    await new Promise((r) => setTimeout(r, 120));
+    fired = !!window.__undoFired;
+  }
+  ok('点「撤销」触发回调', fired);
+  // 恢复：清掉 toast 状态，避免影响后续断言
+  window.eval(`document.querySelector('#toast')?.classList.remove('show')`);
 }
 
 console.log(results.join('\n'));

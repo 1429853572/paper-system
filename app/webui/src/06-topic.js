@@ -25,7 +25,7 @@ async function showTopicsView(container, onBack, hideBack) {
             <span class="badge ${t.status === 'done' ? 'ok' : t.status === 'failed' ? 'err' : 'run'}">${TASK_STATUS[t.status] || t.status}</span>
             <span class="tp-main">
               <b>${esc(t.title)}</b>
-              <span class="muted" style="font-size:11px">${esc(t.query)} · ${esc(t.site)} · 候选 ${t.cand_selected}/${t.cand_total} · 已下载 ${t.cand_done} · 入库 ${t.papers} 篇 · ${esc(fmtTime(t.updated_at))}</span>
+              <span class="muted" style="font-size:11px">${esc(t.query)} · ${esc(t.site)} · 候选 ${t.cand_selected}/${t.cand_total} · 已下载 ${t.cand_done} · 入库 ${t.papers} 篇 · ${esc(relTime(t.updated_at))}</span>
               ${t.error ? `<span class="bpanel-err" style="padding:0">${esc(t.error.slice(0, 120))}</span>` : ''}
             </span>
             <button class="btn small primary" data-tp-open="${esc(t.id)}">打开</button>
@@ -295,9 +295,19 @@ async function runSynthesis(anchor, ids = null) {
   const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
   const pop = Object.assign(document.createElement('div'), {className: 'ui-pop syn-launch'});
   const extra = {quick: 0, standard: 8, deep: 14};
+  // 费用预估：按历史均摊单价 × 调用数（priced=false 表示没有历史样本，不编造数字）
+  const cost = est.cost || {};
+  // 金额显示：<1 元保留 3 位（0.08 元不该显示成 0.08 元以外的四位小数），≥1 元两位
+  const yuan = n => (n >= 1 ? n.toFixed(2) : String(Number(n.toFixed(3)))) + ' 元';
+  const costLine = (calls) => cost.priced
+    ? `预计费用 <b id="syn-cost">${yuan(cost.per_call * calls)}</b>（按你的历史单价 ¥${yuan(cost.per_call)}/次 × ${calls} 次调用）`
+    : '预计调用次数如下；费用按你的历史用量估算（暂无可用样本）';
   const updCalls = () => {
     const tier = pop.querySelector('input[name=syn-tier]:checked')?.value || 'quick';
-    pop.querySelector('#syn-calls').textContent = est.calls + extra[tier];
+    const calls = est.calls + extra[tier];
+    pop.querySelector('#syn-calls').textContent = calls;
+    const ce = pop.querySelector('#syn-cost');
+    if (ce) ce.textContent = yuan(cost.per_call * calls);
   };
   pop.innerHTML = `
     <div class="ui-pop-title">发起综述（${est.valid} 篇 · ${est.groups} 组${est.missing_summaries ? ` · 补导读 ${est.missing_summaries}` : ''}）</div>
@@ -314,7 +324,7 @@ async function runSynthesis(anchor, ids = null) {
       <select id="syn-purpose"><option value="note">个人笔记（方法细节）</option>
         <option value="proposal">开题/学位（研究空白）</option>
         <option value="submit">投稿初稿（贡献分类）</option></select></div>
-    <div class="muted" style="font-size:11px;margin:4px 0">预计 <b id="syn-calls">${est.calls}</b> 次 LLM 调用；引用键表自动核验，机器校验通过才交付</div>
+    <div class="muted" style="font-size:11px;margin:4px 0">预计 <b id="syn-calls">${est.calls}</b> 次 LLM 调用；${costLine(est.calls)}；引用键表自动核验，机器校验通过才交付</div>
     <div class="ui-pop-foot"><button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>开始综述</button></div>`;
   backdrop.appendChild(pop);
@@ -336,7 +346,8 @@ async function runSynthesis(anchor, ids = null) {
     try {
       const d = await api('/api/synthesize', {method: 'POST',
         body: JSON.stringify({paper_ids: ids, params})});
-      toast(`综述已启动（${params.tier} 档，预计 ${d.estimate.calls} 次调用）——进度见「任务中心」`);
+      const n = d.estimate.calls;
+      toast(`综述已启动（${params.tier} 档，预计 ${n} 次调用）——进度见「任务中心」`);
       state._batchOpen = new Set([d.batch_id]);
       await renderTaskPanel();
       switchPage('tasks');
@@ -423,7 +434,7 @@ async function showSynthesisReport(sid) {
       <div class="card syn-head">
         <button class="btn small" id="syn-back">← 返回任务</button>
         <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title)}</b>
-        <span class="muted" style="font-size:11px">${esc(s.model || '')} · ${esc((s.updated_at || '').slice(0, 16))}</span>
+        <span class="muted" style="font-size:11px">${esc(s.model || '')} · ${esc(relTime(s.updated_at))}</span>
         ${ver ? `<span class="badge ${ver.pass ? 'ok' : 'err'}" title="引用双向校验">${ver.pass ? '✓ 引用校验 PASS' : '引用校验需修复'}（${ver.table_n - ver.missing.length}/${ver.table_n}）</span>` : ''}
         <button class="btn small" id="syn-dl-md">⬇ MD</button>
         <button class="btn small" id="syn-dl-csv">⬇ CSV</button>

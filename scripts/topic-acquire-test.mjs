@@ -60,6 +60,9 @@ const DATA = {
     { title: '检索结果一', authors: '王五', year: '2026', venue: '预印本', summary: '摘要一',
       pdf_url: 'https://chinaxiv.org/user/download.htm?uuid=b1', abs_url: '', doi: '',
       in_library: false }] },
+  // 综述预估：含费用（priced=true → 前端显示金额；priced=false → 只显示调用数）
+  '/api/synthesize/estimate': { valid: 3, missing_summaries: 1, groups: 2, calls: 4,
+    no_parse: [], cost: { cost: 0.08, per_call: 0.02, samples: 12, priced: true } },
 };
 
 const calls = [];
@@ -92,7 +95,7 @@ process.on('unhandledRejection', (r) => {
 });
 
 try {
-  window.eval(js + '\n;window.__T = { state, switchPage };');
+  window.eval(js + '\n;window.__T = { state, switchPage, runSynthesis };');
 } catch (e) {
   errors.push('eval: ' + e.stack.split('\n').slice(0, 3).join(' | '));
 }
@@ -175,6 +178,31 @@ if (dlBtn) {
 // 7) 综述按钮（论文未解析完成时应禁用）
 ok('综述按钮存在（未解析完时禁用）',
    !!doc.querySelector('#td-mksyn') && doc.querySelector('#td-mksyn').disabled);
+
+// 8) 综述发起弹层：显示预计调用数 + 费用预估（用户真正关心花多少钱）
+{
+  window.__T.state.selected = new Set(['p1', 'p2']);
+  await window.__T.runSynthesis(null);
+  await new Promise((r) => setTimeout(r, 300));
+  const pop = doc.querySelector('.syn-launch');
+  ok('综述发起弹层打开', !!pop);
+  const callsTxt = (doc.querySelector('#syn-calls') || {}).textContent || '';
+  ok('弹层显示预计调用数', callsTxt.trim() === '4', 'calls=' + callsTxt);
+  const costTxt = (doc.querySelector('#syn-cost') || {}).textContent || '';
+  ok('弹层显示费用预估金额', /0\.08\s*元/.test(costTxt), 'cost=' + costTxt);
+  // 切档位 → 调用数与费用同步更新
+  const std = [...doc.querySelectorAll('input[name=syn-tier]')].find(x => x.value === 'standard');
+  if (std) {
+    std.checked = true;
+    std.dispatchEvent(new window.Event('change'));
+    await new Promise((r) => setTimeout(r, 120));
+    const c2 = (doc.querySelector('#syn-calls') || {}).textContent || '';
+    const m2 = (doc.querySelector('#syn-cost') || {}).textContent || '';
+    ok('切篇幅档 → 调用数同步更新（4→12）', c2.trim() === '12', 'calls=' + c2);
+    ok('切篇幅档 → 费用同步更新', /0\.24\s*元/.test(m2), 'cost=' + m2);
+  }
+  doc.querySelector('.syn-launch [data-cancel]')?.click();
+}
 
 console.log(results.join('\n'));
 if (errors.length) {

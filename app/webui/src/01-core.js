@@ -62,12 +62,27 @@ function debounce(fn, ms = 300) {
 }
 
 let _toastTimer = 0;
-function toast(msg, ms = 0) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(_toastTimer);   // 连续触发时旧 timer 会让后一条提前消失
+function toast(msg, ms = 0, action = null) {
+  const t = $('#toast');
+  // action = {label:'撤销', onClick:fn} —— 破坏性操作后给一条反悔路
   const text = String(msg || '');
-  const dur = ms || (text.length > 80 ? 8000 : text.length > 30 ? 5000 : 2500);  // 长文案给足阅读时间
-  _toastTimer = setTimeout(() => t.classList.remove('show'), dur);
+  t.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = text;
+  t.appendChild(span);
+  if (action && action.label) {
+    const btn = document.createElement('button');
+    btn.className = 'toast-action';
+    btn.textContent = action.label;
+    btn.onclick = () => { hide(); try { action.onClick?.(); } catch (e) { console.error(e); } };
+    t.appendChild(btn);
+  }
+  t.classList.add('show');
+  clearTimeout(_toastTimer);   // 连续触发时旧 timer 会让后一条提前消失
+  const dur = ms || (action ? Math.max(text.length > 30 ? 5000 : 2500, 6000)
+                            : text.length > 80 ? 8000 : text.length > 30 ? 5000 : 2500);
+  _toastTimer = setTimeout(hide, dur);
+  function hide() { t.classList.remove('show'); }
 }
 
 /* 写操作统一包装：期间禁用按钮（防连点/重复提交）+ 捕获异常并给友好提示 */

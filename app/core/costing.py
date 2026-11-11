@@ -137,6 +137,39 @@ def check_budget(user_id: int, overrides: dict | None = None) -> None:
         raise BudgetExceeded(spent, budget)
 
 
+def synth_cost_estimate(user_id: int, calls: int, overrides: dict | None = None) -> dict:
+    """综述费用预估：按用户历史实际均摊成本 × 预计调用数。
+
+    比「按 token 猜」准：直接取该用户（或全站）purpose='synthesis' 的历史
+    调用平均单价，乘以预计调用数。历史不足时退回全站均值，仍不足则给 0
+    （宁可不显示，也不显示编造的数字）。
+    返回 {cost: 元, per_call: 元, samples: n, priced: bool}
+    """
+    if overrides is None:
+        overrides = overrides_of(user_id)
+    table = _pricing_table(overrides)
+
+    def avg(scope_sql: str, args: tuple) -> tuple[float, int]:
+        rows = db.all(
+            "SELECT model, SUM(prompt_tokens) AS p, SUM(completion_tokens) AS c, "
+            "COUNT(*) AS n FROM llm_calls " + scope_sql + " GROUP BY model", args)
+        tot = 0.0
+        n = 0
+        for r in rows:
+            pp, cp = _unit_price(table, r["model"] or "")
+            tot += (pp * (r["p"] or 0) + cp * (r["c"] or 0)) / 1_000_000
+            n += r["n"] or 0
+        return (tot / n if n else 0.0), n
+
+    per_call, samples = avg("WHERE user_id=? AND purpose='synthesis'", (user_id,))
+    if not samples:                      # 本人没跑过综述 → 用全站均值
+        per_call, samples = avg("WHERE purpose='synthesis'", ())
+    if not samples:                      # 全站也没有 → 用该用户全部调用的均值
+        per_call, samples = avg("WHERE user_id=?", (user_id,))
+    return {"cost": round(per_call * calls, 4), "per_call": round(per_call, 6),
+            "samples": samples, "priced": bool(samples)}
+
+
 def site_cost(overrides: dict | None = None) -> dict:
     """全站本月花费（admin 视角）。"""
     table = _pricing_table(overrides)

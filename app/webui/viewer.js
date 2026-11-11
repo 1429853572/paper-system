@@ -67,12 +67,27 @@ function debounce(fn, ms = 300) {
 }
 
 let _toastTimer = 0;
-function toast(msg, ms = 0) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(_toastTimer);   // 连续触发时旧 timer 会让后一条提前消失
+function toast(msg, ms = 0, action = null) {
+  const t = $('#toast');
+  // action = {label:'撤销', onClick:fn} —— 破坏性操作后给一条反悔路
   const text = String(msg || '');
-  const dur = ms || (text.length > 80 ? 8000 : text.length > 30 ? 5000 : 2500);  // 长文案给足阅读时间
-  _toastTimer = setTimeout(() => t.classList.remove('show'), dur);
+  t.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = text;
+  t.appendChild(span);
+  if (action && action.label) {
+    const btn = document.createElement('button');
+    btn.className = 'toast-action';
+    btn.textContent = action.label;
+    btn.onclick = () => { hide(); try { action.onClick?.(); } catch (e) { console.error(e); } };
+    t.appendChild(btn);
+  }
+  t.classList.add('show');
+  clearTimeout(_toastTimer);   // 连续触发时旧 timer 会让后一条提前消失
+  const dur = ms || (action ? Math.max(text.length > 30 ? 5000 : 2500, 6000)
+                            : text.length > 80 ? 8000 : text.length > 30 ? 5000 : 2500);
+  _toastTimer = setTimeout(hide, dur);
+  function hide() { t.classList.remove('show'); }
 }
 
 /* 写操作统一包装：期间禁用按钮（防连点/重复提交）+ 捕获异常并给友好提示 */
@@ -2060,7 +2075,7 @@ async function showTopicsView(container, onBack, hideBack) {
             <span class="badge ${t.status === 'done' ? 'ok' : t.status === 'failed' ? 'err' : 'run'}">${TASK_STATUS[t.status] || t.status}</span>
             <span class="tp-main">
               <b>${esc(t.title)}</b>
-              <span class="muted" style="font-size:11px">${esc(t.query)} · ${esc(t.site)} · 候选 ${t.cand_selected}/${t.cand_total} · 已下载 ${t.cand_done} · 入库 ${t.papers} 篇 · ${esc(fmtTime(t.updated_at))}</span>
+              <span class="muted" style="font-size:11px">${esc(t.query)} · ${esc(t.site)} · 候选 ${t.cand_selected}/${t.cand_total} · 已下载 ${t.cand_done} · 入库 ${t.papers} 篇 · ${esc(relTime(t.updated_at))}</span>
               ${t.error ? `<span class="bpanel-err" style="padding:0">${esc(t.error.slice(0, 120))}</span>` : ''}
             </span>
             <button class="btn small primary" data-tp-open="${esc(t.id)}">打开</button>
@@ -2330,9 +2345,19 @@ async function runSynthesis(anchor, ids = null) {
   const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
   const pop = Object.assign(document.createElement('div'), {className: 'ui-pop syn-launch'});
   const extra = {quick: 0, standard: 8, deep: 14};
+  // 费用预估：按历史均摊单价 × 调用数（priced=false 表示没有历史样本，不编造数字）
+  const cost = est.cost || {};
+  // 金额显示：<1 元保留 3 位（0.08 元不该显示成 0.08 元以外的四位小数），≥1 元两位
+  const yuan = n => (n >= 1 ? n.toFixed(2) : String(Number(n.toFixed(3)))) + ' 元';
+  const costLine = (calls) => cost.priced
+    ? `预计费用 <b id="syn-cost">${yuan(cost.per_call * calls)}</b>（按你的历史单价 ¥${yuan(cost.per_call)}/次 × ${calls} 次调用）`
+    : '预计调用次数如下；费用按你的历史用量估算（暂无可用样本）';
   const updCalls = () => {
     const tier = pop.querySelector('input[name=syn-tier]:checked')?.value || 'quick';
-    pop.querySelector('#syn-calls').textContent = est.calls + extra[tier];
+    const calls = est.calls + extra[tier];
+    pop.querySelector('#syn-calls').textContent = calls;
+    const ce = pop.querySelector('#syn-cost');
+    if (ce) ce.textContent = yuan(cost.per_call * calls);
   };
   pop.innerHTML = `
     <div class="ui-pop-title">发起综述（${est.valid} 篇 · ${est.groups} 组${est.missing_summaries ? ` · 补导读 ${est.missing_summaries}` : ''}）</div>
@@ -2349,7 +2374,7 @@ async function runSynthesis(anchor, ids = null) {
       <select id="syn-purpose"><option value="note">个人笔记（方法细节）</option>
         <option value="proposal">开题/学位（研究空白）</option>
         <option value="submit">投稿初稿（贡献分类）</option></select></div>
-    <div class="muted" style="font-size:11px;margin:4px 0">预计 <b id="syn-calls">${est.calls}</b> 次 LLM 调用；引用键表自动核验，机器校验通过才交付</div>
+    <div class="muted" style="font-size:11px;margin:4px 0">预计 <b id="syn-calls">${est.calls}</b> 次 LLM 调用；${costLine(est.calls)}；引用键表自动核验，机器校验通过才交付</div>
     <div class="ui-pop-foot"><button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>开始综述</button></div>`;
   backdrop.appendChild(pop);
@@ -2371,7 +2396,8 @@ async function runSynthesis(anchor, ids = null) {
     try {
       const d = await api('/api/synthesize', {method: 'POST',
         body: JSON.stringify({paper_ids: ids, params})});
-      toast(`综述已启动（${params.tier} 档，预计 ${d.estimate.calls} 次调用）——进度见「任务中心」`);
+      const n = d.estimate.calls;
+      toast(`综述已启动（${params.tier} 档，预计 ${n} 次调用）——进度见「任务中心」`);
       state._batchOpen = new Set([d.batch_id]);
       await renderTaskPanel();
       switchPage('tasks');
@@ -2458,7 +2484,7 @@ async function showSynthesisReport(sid) {
       <div class="card syn-head">
         <button class="btn small" id="syn-back">← 返回任务</button>
         <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title)}</b>
-        <span class="muted" style="font-size:11px">${esc(s.model || '')} · ${esc((s.updated_at || '').slice(0, 16))}</span>
+        <span class="muted" style="font-size:11px">${esc(s.model || '')} · ${esc(relTime(s.updated_at))}</span>
         ${ver ? `<span class="badge ${ver.pass ? 'ok' : 'err'}" title="引用双向校验">${ver.pass ? '✓ 引用校验 PASS' : '引用校验需修复'}（${ver.table_n - ver.missing.length}/${ver.table_n}）</span>` : ''}
         <button class="btn small" id="syn-dl-md">⬇ MD</button>
         <button class="btn small" id="syn-dl-csv">⬇ CSV</button>
@@ -3445,7 +3471,7 @@ async function renderSessList() {
     <div class="qa-sess-item ${x.id === state.qaSession ? 'on' : ''}" onclick="switchSess('${x.id}')">
       <div style="flex:1;min-width:0">
         <div class="qa-sess-title">${esc(x.title || '未命名会话')}</div>
-        <div class="muted" style="font-size:var(--fs-xs)">${fmtTime(x.updated_at)}</div>
+        <div class="muted" style="font-size:var(--fs-xs)">${relTime(x.updated_at)}</div>
       </div>
       <button class="btn small" onclick="event.stopPropagation();renameSess('${x.id}', '${jsArg(x.title || '')}')" title="重命名">${icon('edit', 12)}</button>
       <button class="btn small danger" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>
@@ -5176,7 +5202,16 @@ window.libBatchDelete = async cid => {
   try {
     await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
     ids.forEach(pid => state.selected.delete(pid));
-    toast(`已移入回收站 ${ids.length} 篇（${state.health.trash_days || 30} 天内可在回收站恢复）`);
+    // 删除是软删除（回收站），给一条「撤销」——误删不必去回收站翻
+    toast(`已移入回收站 ${ids.length} 篇`, 0, {
+      label: '撤销',
+      onClick: async () => {
+        await Promise.all(ids.map(pid => api(`/api/papers/${pid}/restore`, {method: 'POST'})
+          .catch(() => {})));
+        toast('已撤销，恢复 ' + ids.length + ' 篇');
+        await refreshLib();
+      },
+    });
   } catch (e) { toast(friendlyError(e, '批量删除失败')); }
   await refreshLib();
 };
@@ -5233,7 +5268,15 @@ window.delPaperFromLib = async pid => {
                         {title: '移入回收站'}))) return;
   try {
     await api('/api/papers/' + pid, {method: 'DELETE'});
-    toast('已移入回收站'); await refreshLib();
+    toast('已移入回收站', 0, {
+      label: '撤销',
+      onClick: async () => {
+        await api(`/api/papers/${pid}/restore`, {method: 'POST'}).catch(() => {});
+        toast('已撤销');
+        await refreshLib();
+      },
+    });
+    await refreshLib();
   } catch (e) { toast(friendlyError(e, '删除失败，请重试')); }
 };
 window.viewPaper = pid => { switchPage('reader'); openPaper(pid); };
@@ -5271,7 +5314,14 @@ window.quickDelete = async (pid, anchor) => {
                          {title: '移入回收站', anchor}))) return;
   try {
     await api('/api/papers/' + pid, {method: 'DELETE'});
-    toast('已移入回收站');
+    toast('已移入回收站', 0, {
+      label: '撤销',
+      onClick: async () => {
+        await api(`/api/papers/${pid}/restore`, {method: 'POST'}).catch(() => {});
+        toast('已撤销');
+        await refreshLib();
+      },
+    });
     if (state.current?.id === pid) { state.current = null; state.blocks = []; renderContentView(); }
     state.qaPapers.delete(pid);
     await refreshLib();

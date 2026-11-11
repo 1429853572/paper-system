@@ -433,7 +433,16 @@ window.libBatchDelete = async cid => {
   try {
     await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
     ids.forEach(pid => state.selected.delete(pid));
-    toast(`已移入回收站 ${ids.length} 篇（${state.health.trash_days || 30} 天内可在回收站恢复）`);
+    // 删除是软删除（回收站），给一条「撤销」——误删不必去回收站翻
+    toast(`已移入回收站 ${ids.length} 篇`, 0, {
+      label: '撤销',
+      onClick: async () => {
+        await Promise.all(ids.map(pid => api(`/api/papers/${pid}/restore`, {method: 'POST'})
+          .catch(() => {})));
+        toast('已撤销，恢复 ' + ids.length + ' 篇');
+        await refreshLib();
+      },
+    });
   } catch (e) { toast(friendlyError(e, '批量删除失败')); }
   await refreshLib();
 };
@@ -490,7 +499,15 @@ window.delPaperFromLib = async pid => {
                         {title: '移入回收站'}))) return;
   try {
     await api('/api/papers/' + pid, {method: 'DELETE'});
-    toast('已移入回收站'); await refreshLib();
+    toast('已移入回收站', 0, {
+      label: '撤销',
+      onClick: async () => {
+        await api(`/api/papers/${pid}/restore`, {method: 'POST'}).catch(() => {});
+        toast('已撤销');
+        await refreshLib();
+      },
+    });
+    await refreshLib();
   } catch (e) { toast(friendlyError(e, '删除失败，请重试')); }
 };
 window.viewPaper = pid => { switchPage('reader'); openPaper(pid); };
@@ -528,7 +545,14 @@ window.quickDelete = async (pid, anchor) => {
                          {title: '移入回收站', anchor}))) return;
   try {
     await api('/api/papers/' + pid, {method: 'DELETE'});
-    toast('已移入回收站');
+    toast('已移入回收站', 0, {
+      label: '撤销',
+      onClick: async () => {
+        await api(`/api/papers/${pid}/restore`, {method: 'POST'}).catch(() => {});
+        toast('已撤销');
+        await refreshLib();
+      },
+    });
     if (state.current?.id === pid) { state.current = null; state.blocks = []; renderContentView(); }
     state.qaPapers.delete(pid);
     await refreshLib();

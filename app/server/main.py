@@ -925,7 +925,8 @@ def list_batches(request: Request, limit: int = 20):
 
 @app.post("/api/synthesize/estimate")
 async def synthesize_estimate(request: Request):
-    """综述成本预估：预计 LLM 调用数（缺导读逐篇补齐 + 组内比对 + 跨组综合）。"""
+    """综述成本预估：预计 LLM 调用数（缺导读逐篇补齐 + 组内比对 + 跨组综合）
+    + 费用预估（按用户历史实际均摊单价 × 调用数——用户真正关心的是花多少钱）。"""
     u = require(request)
     body = await request.json()
     ids = [x for x in (body.get("paper_ids") or []) if x]
@@ -936,9 +937,11 @@ async def synthesize_estimate(request: Request):
         raise HTTPException(400, "有效论文不足 2 篇（未解析完成的已剔除）")
     if len(est["valid"]) > synthesis.MAX_PAPERS:
         raise HTTPException(400, f"一次综述最多 {synthesis.MAX_PAPERS} 篇，请分卷进行")
+    from core import costing
+    cost = costing.synth_cost_estimate(u["id"], est["calls"])
     return {"valid": len(est["valid"]), "missing_summaries": est["missing_summaries"],
             "groups": est["groups"], "calls": est["calls"],
-            "no_parse": est["no_parse"]}
+            "no_parse": est["no_parse"], "cost": cost}
 
 
 @app.post("/api/synthesize")
