@@ -1401,6 +1401,20 @@ def list_collections(request: Request):
         (u["id"], u["id"]),
     )
     nodes = [dict(r) for r in rows]
+    # 未分库：collection_id 为空或指向已删除库的论文（悬挂引用）——此前侧栏无归属，
+    # 出现「总数 90 但各库相加只有 88」的对不上
+    unassigned = db.one(
+        f"SELECT COUNT(*) AS n FROM papers p WHERE p.deleted_at IS NULL "
+        f"AND (p.collection_id IS NULL OR p.collection_id NOT IN (SELECT id FROM collections)){vis}",
+        args)["n"]
+    # 他人库中的共享论文（我的库列表不含他人库 → 同样会造成数字差额）
+    shared_rows = db.all(
+        "SELECT c.id, c.name, c.owner_id, COUNT(*) AS n FROM papers p "
+        "JOIN collections c ON c.id = p.collection_id "
+        "WHERE p.deleted_at IS NULL AND c.owner_id<>? AND (p.visibility='shared' OR p.owner_id=?) "
+        "GROUP BY c.id", (u["id"], u["id"]))
+    shared_libs = [{"id": r["id"], "name": r["name"], "owner_id": r["owner_id"], "papers": r["n"],
+                    "shared": True} for r in shared_rows]
     # 汇总：父库计数含全部子孙
     children = {}
     for n in nodes:
@@ -1414,7 +1428,8 @@ def list_collections(request: Request):
     rollup(None)
     for n in nodes:
         n.setdefault("papers_total", n["papers"])
-    return {"total": total, "collections": nodes}
+    return {"total": total, "collections": nodes,
+            "unassigned": unassigned, "shared_libs": shared_libs}
 
 
 @app.post("/api/collections")

@@ -275,6 +275,8 @@ async function loadCollections(preset = null) {
   const d = preset || await api('/api/collections');
   state.collections = d.collections;
   state.totalPapers = d.total;
+  state.unassignedCount = d.unassigned || 0;   // 未分库（含失效引用）——侧栏数字自洽
+  state.sharedLibs = d.shared_libs || [];     // 他人库中的共享论文
   renderCollections();
 }
 function colDescendants(cid) {
@@ -308,12 +310,21 @@ function renderCollections() {
   };
   const roots = children['root'] || [];
   const allOpen = roots.some(r => colState[r.id] === true);
+  const unassigned = state.unassignedCount ?? 0;
+  const sharedLibs = state.sharedLibs || [];
   el.innerHTML =
     `<div class="col-item ${state.currentCollection === '' ? 'on' : ''}" data-id="">
       <span class="col-arrow-none"></span><span class="col-name">${icon('library')} 全部文献</span>
       <span class="col-count">${state.totalPapers ?? 0}</span>
     </div>` +
     roots.map(r => row(r, 0)).join('') +
+    // 未分库 / 他人共享库：让「总数 = 各行相加」自洽（否则读者以为论文丢了）
+    (unassigned ? `<div class="col-item ${state.currentCollection === 'none' ? 'on' : ''}" data-id="none">
+      <span class="col-arrow-none"></span><span class="col-name">${icon('inbox')} 未分库</span>
+      <span class="col-count">${unassigned}</span></div>` : '') +
+    sharedLibs.map(l => `<div class="col-item ${state.currentCollection === l.id ? 'on' : ''}" data-id="${l.id}">
+      <span class="col-arrow-none"></span><span class="col-name">${icon('folder')} ${esc(l.name)} <span class="muted" style="font-size:10px">共享</span></span>
+      <span class="col-count">${l.papers}</span></div>`).join('') +
     `<button class="col-new" id="col-new">${icon('plus')} 新建文献库</button>
      <div class="col-new-form" id="col-new-form" hidden>
        <input id="col-new-name" placeholder="文献库名称，回车创建" maxlength="50">
@@ -1360,7 +1371,7 @@ function pairRowsHtml(p) {
   if (!p.zh) return [];   // 未翻译段：不渲染空壳
   const isTitle = p.type === 'title';
   return [`<div class="pair en blk ${isTitle ? 'blk-title' : ''}" ${attrs}>${editBtnHtml(p.block_id, p.type)}${enHtml}</div>`,
-    `<div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" ${attrs}>${katexify(esc(p.zh))}</div>`];
+    `<div class="pair zh blk ${isTitle ? 'blk-title-zh' : ''}" ${attrs}>${mdLite(p.zh)}</div>`];
 }
 
 function loadHintHtml(txt) {
@@ -3860,12 +3871,19 @@ function mdLite(text) {
   let h = esc(raw);
   // 表格先抽出（占位保护，避免逐行处理把表格拆散）
   const tables = [];
-  h = h.replace(/(^|\n)((?:\|[^\n]+\|\n)+)/g, (m3, pre, block) => {
+  // 表格：每行以 | 结尾，行间可有换行；末行允许直接到文末（表格在段落末尾时无换行）
+  h = h.replace(/(^|\n)((?:\|[^\n]+\|[ \t]*(?:\n|$))+)/g, (m3, pre, block) => {
     const rows = block.trim().split('\n').filter(r => !/^\|[\s:|-]+\|$/.test(r));
     const cells = rows.map(r => r.split('|').slice(1, -1).map(c => c.trim()));
     if (cells.length < 2) return m3;
-    const html = '<table class="tbl-md"><tr>' + cells[0].map(c => `<th>${c}</th>`).join('') + '</tr>' +
-      cells.slice(1).map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('') + '</table>';
+    // 数字列右对齐 + 等宽数字（消融表这类「标签+数值」表才读得下去）
+    const isNum = c => /^[+\-−]?\d[\d,.]*\s*(?:%|dB|×|fps|ms|s|m|h|K|M|G|T|B)?$/.test(c.trim());
+    const numCols = cells[0].map((_, i) => cells.slice(1).every(r => isNum(r[i] ?? '')));
+    const th = cells[0].map((c, i) => `<th class="${numCols[i] ? 'num' : ''}">${c}</th>`).join('');
+    const tb = cells.slice(1).map(r => '<tr>' + r.map((c, i) =>
+      `<td class="${numCols[i] ? 'num' : ''}">${c}</td>`).join('') + '</tr>').join('');
+    const html = '<div class="tbl-wrap"><table class="tbl-md"><thead><tr>' + th + '</tr></thead>' +
+      '<tbody>' + tb + '</tbody></table></div>';
     tables.push(html);
     return pre + `\u0000TBL${tables.length - 1}\u0000`;
   });
@@ -3911,7 +3929,7 @@ function mdLite(text) {
   flushPara(); flushList();
   let res = out.join('');
   tables.forEach((t, i) => { res = res.replace(`\u0000TBL${i}\u0000`, t); });
-  return katexify(res);
+  return linkifyRefs(katexify(res));
 }
 function renderCites(text, evidence) {
   return mdLite(text).replace(/\[(\d{1,3})\]/g, (m, n) => {
@@ -5131,7 +5149,7 @@ const renderBlockBody = b => {
       ${ta && ta.caption ? `<figcaption class="muted" style="font-size:11.5px;line-height:1.5">${esc(ta.caption.slice(0, 200))}</figcaption>` : ''}
     </figure>`;
   }
-  return katexify(linkifyRefs(esc(b.en !== undefined ? b.en : b.text)));
+  return mdLite(b.en !== undefined ? b.en : b.text);   // mdLite 已含 esc+katexify+linkifyRefs，并解析 markdown 表格
 };
 
 /* 悬停 .blk → PDF 临时对应框 */
@@ -5613,8 +5631,9 @@ function libLevel1Html(d) {
   };
   const cards = (children['root'] || []).map(c => cardOf(c, false)).join('');
   const total = d.total;
+  const myPapers = (d.collections || []).reduce((n, c) => n + (c.papers_total ?? c.papers ?? 0), 0);
   return `<div class="card lib-l1-head">
-      <h2 style="margin:0;flex:1">📚 全部文献库 <span class="muted" style="font-size:12px">${d.collections.length} 个库 · ${total} 篇论文</span></h2>
+      <h2 style="margin:0;flex:1">📚 全部文献库 <span class="muted" style="font-size:12px">${d.collections.length} 个库 · 在库 ${myPapers} 篇${(d.unassigned || 0) ? ` + 未分库 ${d.unassigned} 篇` : ''} = 共 ${total} 篇</span></h2>
       <div class="seg">
         <button class="seg-btn ${state.libView === 'card' ? 'on' : ''}" onclick="setLibView('card')">卡片</button>
         <button class="seg-btn ${state.libView === 'list' ? 'on' : ''}" onclick="setLibView('list')">列表</button>

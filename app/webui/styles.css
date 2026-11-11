@@ -466,9 +466,22 @@ table.list th { color: var(--muted); font-weight: 500; }
 .qa-dock-head { font-size: var(--fs-sm); }
 
 /* 跨文献讨论 */
-.tbl-md { border-collapse: collapse; margin: 8px 0; font-size: var(--fs-sm); width: 100%; }
-.tbl-md th, .tbl-md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
-.tbl-md th { background: var(--hover); }
+/* 表格排版：宽表横向滚动（不再挤压列宽）、数字列右对齐+等宽、表头固定、斑马纹 */
+.tbl-wrap { overflow-x: auto; margin: 10px 0; border: 1px solid var(--border);
+             border-radius: var(--r-md); background: var(--panel); max-width: 100%; }
+.tbl-md { border-collapse: collapse; font-size: var(--fs-sm); width: 100%; min-width: max-content; }
+.tbl-md th, .tbl-md td { padding: 6px 10px; text-align: left; white-space: nowrap;
+                        border-bottom: 1px solid var(--line-soft); border-right: 1px solid var(--line-soft); }
+.tbl-md th:last-child, .tbl-md td:last-child { border-right: none; }
+.tbl-md thead th { background: var(--hover); font-weight: 600; position: sticky; top: 0; z-index: 2; }
+.tbl-md td.num, .tbl-md th.num { text-align: right; font-variant-numeric: tabular-nums;
+                                 font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.tbl-md tbody tr:nth-child(even) { background: var(--bg-soft); }
+.tbl-md tbody tr:hover { background: var(--tint-primary); }
+.tbl-md tbody tr:last-child td { border-bottom: none; }
+/* 首列固定：横向滚动时仍能看到行标签 */
+.tbl-md tbody td:first-child, .tbl-md thead th:first-child { position: sticky; left: 0; background: var(--panel); z-index: 1; }
+.tbl-md thead th:first-child { z-index: 3; }
 .evo-line { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border);
             font-size: var(--fs-xs); color: var(--muted); }
 .bubble h4 { margin: 8px 0 4px; font-size: var(--fs-base); }
