@@ -110,7 +110,8 @@ def _build_batches(blocks: list[dict]) -> list[list[dict]]:
     return batches
 
 
-def _translate_batch(cfg, blocks: list[dict], glossary_txt: str) -> dict[str, str]:
+def _translate_batch(cfg, blocks: list[dict], glossary_txt: str,
+                     user_id: int | None = None, paper_id: str | None = None) -> dict[str, str]:
     """一次请求翻译多个块；返回 {block_id: 中文}。缺段由调用方重试。"""
     protected = []
     stores: list[dict[str, str]] = []
@@ -132,7 +133,9 @@ def _translate_batch(cfg, blocks: list[dict], glossary_txt: str) -> dict[str, st
         + (f"术语表：\n{glossary_txt}\n" if glossary_txt else "")
     )
     from .llm import LLMClient
-    client = LLMClient(cfg)
+    # 必须带 user_id/paper_id：不带则用量记为匿名（llm_calls.user_id 为 NULL），
+    # 用户的用量/预算统计会漏掉这部分消耗
+    client = LLMClient(cfg, user_id=user_id, paper_id=paper_id)
     raw = client.complete(
         [{"role": "system", "content": sys_prompt},
          {"role": "user", "content": src}],
@@ -179,12 +182,12 @@ def translate_paper(user_id: int, paper_id: str, run_id: str,
     for bi, batch in enumerate(batches):
         if cancel_check and cancel_check():
             break  # 外部取消：保留已完成段落，退出
-        got = _translate_batch(cfg, batch, gl_block)
+        got = _translate_batch(cfg, batch, gl_block, user_id=user_id, paper_id=paper_id)
         # 缺段重试（单段单独请求）
         missing = [b for b in batch if b["block_id"] not in got]
         for b in missing:
             try:
-                got.update(_translate_batch(cfg, [b], gl_block))
+                got.update(_translate_batch(cfg, [b], gl_block, user_id=user_id, paper_id=paper_id))
             except Exception as e:  # noqa: BLE001
                 import logging
                 logging.getLogger("translator").warning(

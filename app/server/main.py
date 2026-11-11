@@ -798,6 +798,29 @@ def retry_job(job_id: int, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/jobs/clear-finished")
+def clear_finished_jobs(request: Request):
+    """清理已结束任务（done/failed/canceled）。
+
+    任务记录是纯日志（进度与结果另有表），但会无限堆积——本项目 342 条 done
+    + 11 条 failed 已占满列表且失败记录多来自早已修复的外部源问题，
+    留着只是噪音。清理后不影响任何论文/综述数据。
+    scope=failed 只清失败与取消（保留成功记录，便于回看做过什么）。
+    """
+    u = require(request)
+    scope = (request.query_params.get("scope") or "all").lower()
+    conds = ["status IN ('done','failed','canceled')"] if scope == "all" else \
+             ["status IN ('failed','canceled')"]
+    args: list = []
+    if u["role"] != "admin":
+        conds.append("user_id=?")
+        args.append(u["id"])
+    with db.write() as c:
+        n = c.execute("DELETE FROM jobs WHERE " + " AND ".join(conds), tuple(args)).rowcount
+    audit(u["id"], "clear-jobs", f"{scope}:{n}")
+    return {"ok": True, "cleared": n}
+
+
 @app.get("/api/queue/{job_type}")
 def queue_state(job_type: str, request: Request):
     require(request)

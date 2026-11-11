@@ -168,7 +168,11 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
     // 已结束默认折叠（历史任务量大，默认铺开会淹没进行中的）
     const doneInner = (settledBatches.map(batchCard).join('') || '') +
       (looseDone.length ? `<div class="bpanel-batch">${groupByPaper(looseDone).map(paperRow).join('')}</div>` : '');
-    const doneBlock = (doneInner || `<p class="muted" style="padding:2px 0 8px">暂无已结束任务</p>`);
+    // 任务记录是纯日志，会无限堆积（本项目已积累 350+ 条，其中失败多是早已
+    // 修复的外部源问题）——给一条清理出路，否则历史噪音只增不减。
+    const clearBtn = `<button class="btn small" data-jobs-clear="all" title="删除全部已结束任务记录（不影响论文与综述）">清理记录</button>`;
+    const doneBlock = (doneInner || `<p class="muted" style="padding:2px 0 8px">暂无已结束任务</p>`) +
+      (doneN ? `<div style="padding:6px 0 2px">${clearBtn}</div>` : '');
     html += f.status
       ? sec(`已结束${doneN ? `（${doneN}）` : ''}`, doneBlock, '')
       : `<details class="task-done-fold"><summary class="bp-sec-title">已结束${doneN ? `（${doneN}）` : ''} —— 点击展开</summary>${doneBlock}</details>`;
@@ -226,6 +230,20 @@ async function renderTaskPanel() {
 
 // 任务页事件委托：批次展开/收起 + 单篇任务重试/取消
 $('#page-tasks').addEventListener('click', async e => {
+  // 清理已结束任务记录（任务日志可清，论文/综述不受影响）
+  const jclear = e.target.closest('[data-jobs-clear]');
+  if (jclear) {
+    const scope = jclear.dataset.jobsClear || 'all';
+    const what = scope === 'all' ? '全部已结束任务记录' : '失败与取消的任务记录';
+    if (!(await uiConfirm(`清理${what}？（仅删日志，不影响论文、译文与综述）`,
+                          {title: '清理任务记录', danger: true, anchor: jclear}))) return;
+    try {
+      const d = await api('/api/jobs/clear-finished?scope=' + scope, {method: 'POST'});
+      toast(`已清理 ${d.cleared} 条任务记录`);
+    } catch (e) { toast(friendlyError(e, '清理失败')); }
+    await renderTaskPanel(); refreshQueueBadge();
+    return;
+  }
   const retry = e.target.closest('[data-retry]');
   if (retry) { await api(`/api/jobs/${retry.dataset.retry}/retry`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); return; }
   const cancel = e.target.closest('[data-cancel]');

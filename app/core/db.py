@@ -19,6 +19,27 @@ from .config import DB_PATH
 
 SCHEMA_VERSION = 18
 
+# 重建表时会连带删除其上的索引（DROP TABLE 会删索引）——这些表重建后需逐个恢复。
+# 索引定义与 _SCHEMA / _init_schema 中的保持一致。
+_INDEXES_ON = {
+    "jobs": (
+        "CREATE INDEX IF NOT EXISTS idx_jobs_queue "
+        "ON jobs(job_type, priority, status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_paper "
+        "ON jobs(paper_id, job_type, status)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_batch "
+        "ON jobs(batch_id) WHERE batch_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_active "
+        "ON jobs(job_type, status, created_at)",
+    ),
+    "llm_calls": (
+        "CREATE INDEX IF NOT EXISTS idx_llm_calls_paper ON llm_calls(paper_id)",
+        "CREATE INDEX IF NOT EXISTS idx_llm_calls_user_time "
+        "ON llm_calls(user_id, created_at)",
+    ),
+}
+
 
 def cjk_space(s: str) -> str:
     """CJK 字符两两加空格（latin 边界也断开）——FTS5 unicode61 不分词中文，
@@ -197,7 +218,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id         INTEGER PRIMARY KEY,
     user_id    INTEGER NOT NULL REFERENCES users(id),
     job_type   TEXT NOT NULL,                        -- parse|translate|embed_backfill|summary|meta
-    paper_id   TEXT,
+    paper_id   TEXT REFERENCES papers(id) ON DELETE CASCADE,
     payload    TEXT NOT NULL DEFAULT '{}',           -- JSON
     batch_id   TEXT,                                 -- 批量中心批次号（单篇任务为 NULL）
     priority   TEXT NOT NULL DEFAULT 'interactive',  -- interactive | background
@@ -230,7 +251,7 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     model      TEXT NOT NULL DEFAULT '',
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
-    paper_id   TEXT,
+    paper_id   TEXT REFERENCES papers(id) ON DELETE SET NULL,  -- 删论文不删用量（费用仍计入）
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -363,6 +384,7 @@ class Database:
         with self.write() as c:
             c.executescript(_SCHEMA)
             self._fix_invite_fk(c)
+            self._fix_paper_fk(c)
             row = c.execute("SELECT version FROM schema_version").fetchone()
             if row is None:
                 c.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
@@ -447,6 +469,69 @@ class Database:
                 c.execute("PRAGMA foreign_keys=ON")
             except sqlite3.OperationalError:
                 pass
+
+    @staticmethod
+    def _fix_paper_fk(c: sqlite3.Connection) -> None:
+        """jobs.paper_id / llm_calls.paper_id 补外键（幂等）。
+
+        根因：这两张表的 paper_id 原先无外键约束，早期删除论文的路径没清理
+        → 留下 27 条 job + 17 条 llm_call 悬挂引用（论文已不存在但记录还在），
+        污染用量与任务统计。
+
+        行为差异：
+          jobs      → ON DELETE CASCADE（任务随论文消失）
+          llm_calls → ON DELETE SET NULL（用量记录保留，费用仍计入——
+                      钱花过了不能因为删论文就消失）
+        """
+        spec = {
+            "jobs": ("paper_id", "CASCADE"),
+            "llm_calls": ("paper_id", "SET NULL"),
+        }
+        for table, (col, action) in spec.items():
+            fks = c.execute(f"PRAGMA foreign_key_list({table})").fetchall()
+            has = any(f["table"] == "papers" and f["from"] == col
+                      and f["on_delete"].upper() == action for f in fks)
+            if has:
+                continue
+            c.execute("PRAGMA defer_foreign_keys=ON")
+            try:
+                c.execute("PRAGMA foreign_keys=OFF")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                new = f"{table}_fknew"
+                c.execute(f"DROP TABLE IF EXISTS {new}")
+                # 按现结构重建，仅给 paper_id 加外键
+                cols = [r[1] for r in c.execute(f"PRAGMA table_info({table})")]
+                if col not in cols:
+                    continue
+                ddl = c.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                ).fetchone()
+                if not ddl or not ddl[0]:
+                    continue
+                sql = ddl[0]
+                # 把 paper_id 列定义替换为带外键的版本
+                import re as _re
+                pat = _re.compile(rf"(\b{col}\s+TEXT)([^,\n]*)")
+                new_sql = pat.sub(
+                    lambda m: f"{m.group(1)} REFERENCES papers(id) ON DELETE {action}"
+                    if "REFERENCES" not in m.group(2) else m.group(0), sql, count=1)
+                if new_sql == sql:
+                    continue
+                c.execute(new_sql.replace(f"CREATE TABLE {table}", f"CREATE TABLE {new}", 1))
+                c.execute(
+                    f"INSERT INTO {new} SELECT * FROM {table}")
+                c.execute(f"DROP TABLE {table}")
+                c.execute(f"ALTER TABLE {new} RENAME TO {table}")
+                # 重建表会连带删除其上的索引 —— 逐个重建（索引定义集中声明）
+                for idx_sql in _INDEXES_ON.get(table, ()):
+                    c.execute(idx_sql)
+            finally:
+                try:
+                    c.execute("PRAGMA foreign_keys=ON")
+                except sqlite3.OperationalError:
+                    pass
 
     @staticmethod
     def _add_col(c: sqlite3.Connection, table: str, col: str, ddl: str) -> None:

@@ -201,6 +201,28 @@ if (head) {
   ok('再点收起', doc.querySelector('[data-jobs="bt1"]').hidden);
 }
 
+// 5b) 已结束区有「清理记录」入口（任务日志会无限堆积）
+{
+  await window.__T.renderTaskPanel();
+  await new Promise((r) => setTimeout(r, 250));
+  const clr = doc.querySelector('[data-jobs-clear]');
+  ok('已结束区有清理记录按钮', !!clr);
+  if (clr) {
+    calls.length = 0;
+    clr.click();
+    await new Promise((r) => setTimeout(r, 250));
+    // 确认框 → 点确认
+    const okBtn = doc.querySelector('.ui-pop [data-ok]');
+    ok('清理前有确认框', !!okBtn);
+    if (okBtn) {
+      okBtn.click();
+      await new Promise((r) => setTimeout(r, 300));
+      ok('清理调用 /api/jobs/clear-finished',
+         calls.some(c => c.includes('/api/jobs/clear-finished')));
+    }
+  }
+}
+
 // 6) 批量选择主入口在文库管理页：勾选 → 批量中心（耦合流）
 window.__T.switchPage('batch');
 window.__T.state.libLevel = 2;   // 进第二层（库内论文表），第一层是库列表
