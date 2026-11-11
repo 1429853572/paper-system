@@ -4280,82 +4280,165 @@ async function renderMeQuota() {
     </div>`;
 }
 
+/* 审计动作名（库里是英文 action → 中文可读） */
+const AUDIT_ACT = {
+  'delete-user': '注销账号', 'enable-user': '启用账号', 'disable-user': '禁用账号',
+  'reset-password': '重置密码', 'change-password': '修改密码', 'create_invite': '生成邀请码',
+  'login': '登录', 'logout': '退出', 'create-topic': '新建专题', 'update-quota': '调整限额',
+};
+function auditActionName(a) { return AUDIT_ACT[a] || a; }
+
 async function renderAdminZone() {
   const el = $('#admin-zone');
   if (!el) return;
-  const users = await api('/api/admin/users');
-  const pool = await api('/api/admin/pool');
-  const usage = await api('/api/usage').catch(() => ({rows: []}));
-  const audit = await api('/api/admin/audit?limit=50').catch(() => ({rows: []}));
+  const [users, pool, audit] = await Promise.all([
+    api('/api/admin/users'),
+    api('/api/admin/pool').catch(() => ({enabled: false})),
+    api('/api/admin/audit?limit=50').catch(() => ({rows: []})),
+  ]);
+  const list = users.users || [];
+  const memberN = list.filter(u => u.role !== 'admin' && u.disabled !== 2).length;
+  const adminN = list.filter(u => u.role === 'admin').length;
+  const paperN = list.reduce((n, u) => n + (u.papers || 0), 0);
+  const diskN = list.reduce((n, u) => n + (u.disk_used || 0), 0);
+  const costN = list.reduce((n, u) => n + (u.month_cost || 0), 0);
+  const auditRows = (audit.rows || []).filter(r => r.action !== 'login');
+
+  const quotaSummary = ov => {
+    const keys = ['daily_parse_papers', 'max_file_mb', 'max_pages', 'max_disk_gb', 'monthly_budget_cny'];
+    const hit = keys.filter(k => ov[k] !== undefined && ov[k] !== null);
+    return hit.length
+      ? `<span class="badge run" title="${hit.join('、')}">${hit.length} 项自定义</span>`
+      : '<span class="muted" style="font-size:11px">默认</span>';
+  };
+  const stateBadge = u => u.disabled === 2 ? '<span class="badge priv">已注销</span>'
+    : u.disabled === 1 ? '<span class="badge err">已禁用</span>'
+    : u.role === 'admin' ? '<span class="badge ok">管理员</span>'
+    : '<span class="badge ok">正常</span>';
+
   el.innerHTML = `
-    <h2 class="page-h">${icon('crown')} 管理（仅管理员可见）</h2>
+    <h2 class="page-h">${icon('crown')} 管理后台</h2>
+
+    <div class="adm-stats">
+      <div class="adm-stat"><span class="muted">成员</span><b>${memberN}</b><span class="muted">人活跃 · 管理员 ${adminN}${list.filter(u => u.disabled === 2).length ? ` · 已注销 ${list.filter(u => u.disabled === 2).length}` : ''}</span></div>
+      <div class="adm-stat"><span class="muted">论文</span><b>${paperN}</b><span class="muted">篇 · 全员合计</span></div>
+      <div class="adm-stat"><span class="muted">磁盘</span><b>${fmtGB(diskN).toFixed(1)}</b><span class="muted">GB 已用</span></div>
+      <div class="adm-stat"><span class="muted">本月花费</span><b>¥${costN.toFixed(2)}</b><span class="muted">LLM 调用估算</span></div>
+    </div>
+
     <div class="set-card">
-      <div class="set-head">邀请码</div>
-      <div style="display:flex;gap:6px;align-items:center">
+      <div class="set-head">${icon('user')} 成员管理
+        <span class="muted" style="font-weight:400">限额留空=默认值；超限在调用前拦截</span>
+        <span class="spacer"></span>
         <select id="invite-days" style="width:auto;font-size:12px">
           <option value="3">3 天</option><option value="7" selected>7 天</option>
           <option value="14">14 天</option><option value="30">30 天</option>
         </select>
         <button class="btn small primary" onclick="createInvite()">${icon('plus')} 生成邀请码</button>
       </div>
-      <div id="invite-out" style="margin-top:8px;font-size:13px"></div>
+      <div id="invite-out" style="margin:2px 0 10px;font-size:13px"></div>
+      <table class="list adm-table">
+        <tr><th>成员</th><th>状态</th><th style="text-align:right">论文</th><th style="text-align:right">磁盘</th>
+            <th style="text-align:right">本月花费</th><th>限额</th><th style="width:56px"></th></tr>
+        ${list.filter(u => u.disabled !== 2).map(u => {
+          const ov = (() => { try { return JSON.parse(u.overrides || '{}'); } catch { return {}; } })();
+          state._quotaRaw = state._quotaRaw || {};
+          state._quotaRaw[u.id] = ov;
+          const isSelf = u.id === state.me.id;
+          return `<tr>
+            <td><b>${esc(u.username)}</b>${u.role === 'admin' ? ' <span class="muted" style="font-size:11px">admin</span>' : ''}</td>
+            <td>${stateBadge(u)}</td>
+            <td style="text-align:right;font-size:12px">${u.papers || 0}</td>
+            <td style="text-align:right;font-size:12px">${fmtGB(u.disk_used).toFixed(2)}G</td>
+            <td style="text-align:right;font-size:12px">¥${Number(u.month_cost || 0).toFixed(2)}</td>
+            <td>${quotaSummary(ov)}</td>
+            <td class="row-actions">
+              <details class="adm-menu">
+                <summary class="btn small" title="更多操作" aria-label="更多操作">更多 ▾</summary>
+                <div class="tool-pop adm-menu-pop">
+                  <div class="tp-item" onclick="openQuotaDialog(${u.id});this.closest('details').removeAttribute('open')">${icon('sliders')} 编辑限额</div>
+                  <div class="tp-item" onclick="resetUserPw(${u.id}, '${esc(u.username)}');this.closest('details').removeAttribute('open')">${icon('key')} 重置密码</div>
+                  ${!isSelf && u.role !== 'admin' && !u.disabled ? `<div class="tp-item" onclick="deleteUser(${u.id}, '${esc(u.username)}');this.closest('details').removeAttribute('open')">${icon('trash')} 注销账号</div>` : ''}
+                  ${!isSelf && !u.disabled ? `<div class="tp-item" onclick="toggleUser(${u.id}, '${esc(u.username)}', true);this.closest('details').removeAttribute('open')">${icon('stop')} 禁用登录</div>` : ''}
+                  ${u.disabled === 1 ? `<div class="tp-item" onclick="toggleUser(${u.id}, '${esc(u.username)}', false);this.closest('details').removeAttribute('open')">${icon('play')} 重新启用</div>` : ''}
+                </div>
+              </details>
+            </td></tr>`;
+        }).join('')}
+      </table>
+      ${(() => {
+        const gone = list.filter(u => u.disabled === 2);
+        if (!gone.length) return '';
+        return `<details class="adm-gone"><summary class="muted">已注销 ${gone.length} 个账号（论文保留，可恢复）</summary>
+          <table class="list adm-table" style="margin-top:6px">
+            ${gone.map(u => `<tr><td class="muted" style="font-size:12px">${esc(u.username)}</td>
+              <td class="muted" style="font-size:11px">已注销</td>
+              <td style="text-align:right;font-size:12px">${u.papers || 0}</td>
+              <td colspan="4"></td></tr>`).join('')}
+          </table></details>`;
+      })()}
     </div>
+
     <div class="set-card">
-      <div class="set-head">用户与限额 <span class="muted" style="font-size:11px">展开行编辑限额，留空用默认值</span></div>
-      <table class="list">${users.users.map(u => {
-        const ov = (() => { try { return JSON.parse(u.overrides || '{}'); } catch { return {}; } })();
-        state._quotaRaw = state._quotaRaw || {};
-        state._quotaRaw[u.id] = ov;
-        const n = Object.keys(ov).length;
-        return `<tr>
-        <td>${esc(u.username)} ${u.role === 'admin' ? '<span class="badge priv">admin</span>' : ''}
-          ${u.disabled === 2 ? '<span class="badge priv">已注销</span>' : ''}${u.disabled === 1 ? '<span class="badge err">已禁用</span>' : ''}</td>
-        <td style="font-size:11px">${u.papers} 篇<br><span class="muted">${fmtGB(u.disk_used).toFixed(2)}G · 本月 ¥${Number(u.month_cost || 0).toFixed(2)}</span></td>
-        <td class="row-actions">
-          <details class="q-edit"><summary class="btn small" title="编辑限额">${icon('sliders')}${n ? ` ${n}` : ''}</summary>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;padding:6px 2px;align-items:center">
-              <label>解析/日 <input id="q-${u.id}-dp" type="number" min="1" style="width:58px;font-size:12px" value="${ov.daily_parse_papers ?? ''}" placeholder="默认"></label>
-              <label>单文件MB <input id="q-${u.id}-fm" type="number" min="1" style="width:58px;font-size:12px" value="${ov.max_file_mb ?? ''}" placeholder="100"></label>
-              <label>页数 <input id="q-${u.id}-pp" type="number" min="1" style="width:58px;font-size:12px" value="${ov.max_pages ?? ''}" placeholder="∞"></label>
-              <label>磁盘GB <input id="q-${u.id}-dk" type="number" min="1" style="width:58px;font-size:12px" value="${ov.max_disk_gb ?? ''}" placeholder="20"></label>
-              <label>月预算¥ <input id="q-${u.id}-bg" type="number" min="0" step="1" style="width:66px;font-size:12px" value="${ov.monthly_budget_cny ?? ''}" placeholder="不限"></label>
-              <button class="btn small primary" onclick="saveQuota(${u.id})">${icon('save')} 保存</button>
-            </div>
-          </details>
-          <button class="btn small danger" onclick="resetUserPw(${u.id}, '${esc(u.username)}')" title="重置为临时密码">${icon('key')}</button>
-          ${u.id !== state.me.id && u.role !== 'admin' && !u.disabled ? `<button class="btn small danger" onclick="deleteUser(${u.id}, '${esc(u.username)}')" title="注销账号（匿名化，保留其论文）">${icon('trash')}</button>` : ''}
-          ${u.id !== state.me.id && !u.disabled ? `<button class="btn small danger" onclick="toggleUser(${u.id}, '${esc(u.username)}', true)" title="禁用登录">${icon('stop')}</button>` : ''}
-          ${u.disabled === 1 ? `<button class="btn small" onclick="toggleUser(${u.id}, '${esc(u.username)}', false)" title="重新启用">${icon('play')}</button>` : ''}
-        </td></tr>`;}).join('')}</table>
-      <div class="set-head" style="margin-top:14px">${icon('clock')} 审计日志 <span class="muted" style="font-weight:400">最近操作</span></div>
-      <div id="audit-list" style="max-height:220px;overflow-y:auto;font-size:var(--fs-xs)">
-        ${(() => {
-          const rows = audit.rows.filter(r => r.action !== 'login');   // 登录噪音不进敏感操作流
-          if (!rows.length) return '<p class="muted">暂无记录——删除/重置密码/禁用等敏感操作会记录在此（登录不计）</p>';
-          return `<div class="muted" style="font-size:10px;margin-bottom:2px">已略去 ${audit.rows.length - rows.length} 条登录记录</div>` +
-            rows.map(r =>
-          `<div style="padding:3px 0;border-bottom:1px solid var(--line-soft)">
-             <span class="muted">${fmtTime(r.created_at)}</span>
-             <b>${esc(r.username || '系统')}</b> ${esc(r.action)}
-             <span class="muted">${esc(r.detail || '').slice(0, 40)}</span>
-           </div>`).join('');
-        })()}
+      <div class="set-head">${icon('stack')} 公共额度池
+        <span class="muted" style="font-weight:400">未配置 key 的成员可用管理员的 key 调用</span></div>
+      <div class="pool-row">
+        <span class="badge ${pool.enabled ? 'ok' : 'priv'}">${pool.enabled ? '已开启' : '已关闭'}</span>
+        <span class="muted" style="font-size:12px">${pool.enabled ? '成员未配 key 时走公共池' : '成员必须各自配置 key'}</span>
+        <span class="spacer"></span>
+        <button class="btn small ${pool.enabled ? 'danger' : 'primary'}" onclick="togglePool(${!pool.enabled})">${pool.enabled ? '关闭' : '开启'}</button>
       </div>
     </div>
+
     <div class="set-card">
-      <div class="set-head">${icon('chart')} 本月花费 <span class="muted" style="font-weight:400">按用户估算（元）</span></div>
-      <table class="list">${(() => {
-        const rows = (users.users || []).map(u => ({name: u.username, cost: u.month_cost || 0}));
-        return rows.sort((a, b) => b.cost - a.cost).map(r =>
-          `<tr><td>${esc(r.name)}</td><td class="muted" style="font-size:11px">¥${Number(r.cost).toFixed(2)}</td></tr>`).join('')
-          || '<tr><td class="muted">暂无花费——问答/翻译/导读产生调用后在此估算</td></tr>';
-      })()}</table>
-    </div>
-    <div class="set-card">
-      <div class="set-head">公共额度池 <span class="muted" style="font-size:11px">未配置 key 的成员将使用你的 POOL key</span></div>
-      <button class="btn small ${pool.enabled ? 'danger' : 'primary'}" onclick="togglePool(${!pool.enabled})">${pool.enabled ? '关闭' : '开启'}</button>
+      <div class="set-head">${icon('clock')} 审计日志
+        <span class="muted" style="font-weight:400">敏感操作留痕（登录不计）</span></div>
+      ${auditRows.length ? `<table class="list adm-table">
+        <tr><th style="width:110px">时间</th><th style="width:110px">操作者</th><th>操作</th></tr>
+        ${auditRows.slice(0, 8).map(r => `<tr>
+          <td class="muted" style="font-size:11px">${esc(relTime(r.created_at))}</td>
+          <td style="font-size:12px">${esc(r.username || '系统')}</td>
+          <td style="font-size:12px">${esc(auditActionName(r.action))}${r.detail ? ` <span class="muted">${esc(String(r.detail).slice(0, 40))}</span>` : ''}</td>
+        </tr>`).join('')}
+      </table>${auditRows.length > 8 ? `<div style="padding:6px 0 0"><button class="btn small" id="audit-more">展开其余 ${auditRows.length - 8} 条</button></div>` : ''}`
+        : '<p class="muted">暂无记录——删除/重置密码/禁用等敏感操作会记录在此</p>'}
     </div>`;
+
+  const more = $('#audit-more');
+  if (more) more.onclick = () => renderAdminZone();
 }
+
+/* 限额编辑弹窗：5 个数字字段（留空=默认），保存复用 saveQuota */
+function openQuotaDialog(uid) {
+  const ov = (state._quotaRaw || {})[uid] || {};
+  // suf = DOM 后缀（saveQuota 按后缀取值），key = 后端语义键（ov 里存的是语义键）
+  const f = (suf, key, label, ph, min) => `<label class="adm-q-row"><span>${label}</span>
+    <input id="q-${uid}-${suf}" type="number" min="${min}" style="width:100px;font-size:12px"
+      value="${ov[key] ?? ''}" placeholder="${ph}"></label>`;
+  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
+  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop adm-quota-pop'});
+  pop.innerHTML = `
+    <div class="ui-pop-title">编辑限额 <span class="muted" style="font-weight:400">留空 = 使用默认值</span></div>
+    <div class="adm-q-grid">
+      ${f('dp', 'daily_parse_papers', '每日解析篇数', '200', 1)}
+      ${f('fm', 'max_file_mb', '单文件上限 MB', '100', 1)}
+      ${f('pp', 'max_pages', '单篇页数', '500', 1)}
+      ${f('dk', 'max_disk_gb', '磁盘上限 GB', '20', 1)}
+      ${f('bg', 'monthly_budget_cny', '月预算 ¥', '不限', 0)}
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:6px">预算超限会在调用前拦截；解析篇数/页数/磁盘按上限校验。</div>
+    <div class="ui-pop-foot">
+      <button class="btn small" data-cancel>取消</button>
+      <button class="btn small primary" data-ok>保存</button>
+    </div>`;
+  backdrop.appendChild(pop);
+  document.body.appendChild(backdrop);
+  const close = () => { pop.remove(); backdrop.remove(); };
+  backdrop.onclick = e => { if (e.target === backdrop) close(); };
+  pop.querySelector('[data-cancel]').onclick = close;
+  pop.querySelector('[data-ok]').onclick = async () => { await saveQuota(uid); close(); };
+}
+window.openQuotaDialog = openQuotaDialog;
 /* 管理区动作（48b9862 改造时误删了实现，按钮留着 → 一按就 ReferenceError） */
 window.createInvite = async () => {
   const days = +($('#invite-days')?.value || 7);

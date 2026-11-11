@@ -143,17 +143,31 @@ await new Promise(r => setTimeout(r, 500));
 const az = doc.querySelector('#admin-zone');
 check('管理区用户表渲染 2 用户', (az?.querySelectorAll('table.list tr').length || 0) >= 2);
 check('管理区显示磁盘占用（1.07G）', (az?.textContent || '').includes('1.07G'));
-check('管理区显示本月花费（非 token）', (az?.textContent || '').includes('本月 ¥'));
+check('管理区显示本月花费（非 token）', (az?.textContent || '').includes('本月花费'));
 check('已禁用用户带「已禁用」徽章', (az?.textContent || '').includes('已禁用'));
 const enableBtn = [...(az?.querySelectorAll('button[title="重新启用"]') || [])];
-check('禁用用户渲染「重新启用」按钮（依赖后端 disabled 列的 bug 面）', enableBtn.length === 1);
+// 操作已收进「更多 ▾」菜单：禁用用户的「重新启用」在菜单里
+const disabledMenuHasEnable = (() => {
+  const row = [...(az?.querySelectorAll('tr') || [])].find(r => r.textContent.includes('已禁用'));
+  const item = row ? [...row.querySelectorAll('.tp-item')].find(x => x.textContent.includes('重新启用')) : null;
+  return !!item;
+})();
+check('禁用用户菜单含「重新启用」（依赖后端 disabled 列的 bug 面）', disabledMenuHasEnable);
 check('邀请码有效期下拉存在', !!az?.querySelector('#invite-days'));
 check('邀请码下拉含 30 天选项', [...(az?.querySelectorAll('#invite-days option') || [])].some(o => o.value === '30'));
 const qd = az?.querySelector('details.q-edit');
-check('结构化限额编辑器存在（替代裸 JSON 框）', !!qd);
-check('限额编辑器含 5 个数字字段（含月预算）', (qd?.querySelectorAll('input[type="number"]').length || 0) === 5);
-check('已有 override 值回填（max_pages=500）', qd?.querySelector('input[id$="-pp"]')?.value === '500');
-check('删除用户按钮存在且仅对启用中的非 admin', [...(az?.querySelectorAll('button[title^="注销账号"]') || [])].length === 1);
+// 限额编辑已改为弹窗（openQuotaDialog）；等 renderAdminZone 填好 _quotaRaw
+await new Promise(r => setTimeout(r, 400));
+window.openQuotaDialog && window.openQuotaDialog(1);
+await new Promise(r => setTimeout(r, 150));
+const qpop = doc.querySelector('.adm-quota-pop');
+check('结构化限额编辑器（弹窗）存在（替代裸 JSON 框）', !!qpop);
+check('限额编辑器含 5 个数字字段（含月预算）', (qpop?.querySelectorAll('input[type="number"]').length || 0) === 5);
+check('已有 override 值回填（max_pages=500）', qpop?.querySelector('input[id$="-pp"]')?.value === '500');
+doc.querySelector('.adm-quota-pop')?.remove();
+// 删除已收进「更多 ▾」菜单
+const delInMenu = [...(az?.querySelectorAll('.adm-menu-pop .tp-item') || [])].filter(x => x.textContent.includes('注销账号')).length;
+check('删除用户在「更多」菜单里（仅启用中的非 admin）', delInMenu === 1, '菜单内删除项=' + delInMenu);
 
 /* 5. 保存限额 → 结构化 PUT */
 calls.length = 0;
@@ -170,8 +184,14 @@ const putBody = JSON.parse(putQ ? putQ.split(' HTTP')[0] && '{}' : '{}');  // bo
     if (String(url).includes('/quota')) captured = opts.body;
     return of(url, opts);
   };
-  doc.querySelector('#q-2-dk').value = '50';
+  // 限额编辑已改为弹窗（openQuotaDialog），输入框在弹窗里
+  window.openQuotaDialog && window.openQuotaDialog(2);
+  await new Promise(r => setTimeout(r, 150));
+  const dkInp = doc.querySelector('#q-2-dk');
+  check('限额编辑弹窗含磁盘上限输入', !!dkInp);
+  dkInp.value = '50';
   await window.saveQuota(2);
+  doc.querySelector('.adm-quota-pop')?.remove();   // 关掉限额弹窗，避免后续选择器误命中
   await new Promise(r => setTimeout(r, 150));
   const j = JSON.parse(captured || '{}');
   check('限额 PUT 组装 {max_disk_gb:50}（留空键不写入）', j.max_disk_gb === 50 && !('daily_parse_papers' in j));

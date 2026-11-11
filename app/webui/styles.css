@@ -1181,3 +1181,32 @@ details.q-edit[open] { display: block; width: 100%; }
 .task-done-fold > summary.bp-sec-title { margin-top: 2px; }
 .task-done-fold + .bpanel-batch, .task-done-fold + .bpanel-batch { margin-top: 4px; }
 .tasks-body > .bp-sec-title + .muted { margin-bottom: 4px; }
+
+/* ===== 管理后台：概览统计卡 + 成员表 + 更多菜单 + 限额弹窗 ===== */
+.adm-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.adm-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: var(--r-md);
+            background: var(--panel); border: 1px solid var(--border); }
+.adm-stat b { font-size: 22px; font-weight: 650; line-height: 1.25; letter-spacing: -.01em; }
+.adm-stat .muted { font-size: 11px; }
+.adm-table th { font-size: 11px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+.adm-table td { vertical-align: middle; }
+.adm-table td b { font-weight: 600; }
+.adm-menu { position: relative; display: inline-block; }
+.adm-menu > summary { list-style: none; cursor: pointer; white-space: nowrap; }
+.adm-menu > summary::-webkit-details-marker { display: none; }
+.adm-menu-pop { position: absolute; right: 0; top: calc(100% + 4px); min-width: 168px; z-index: 70;
+                display: block; padding: 4px; box-shadow: 0 10px 30px rgba(0,0,0,.16); }
+.adm-menu-pop .tp-item { display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: var(--r-sm);
+                        cursor: pointer; font-size: 12px; white-space: nowrap; }
+.adm-menu-pop .tp-item:hover { background: var(--hover); color: var(--primary); }
+.pool-row { display: flex; align-items: center; gap: 10px; }
+.adm-quota-pop { width: min(420px, 92vw); max-width: min(420px, 92vw); }
+.adm-q-grid { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 4px; }
+.adm-q-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; }
+.adm-q-row input { padding: 5px 8px; }
+
+.adm-gone { margin-top: 8px; }
+.adm-gone > summary { cursor: pointer; font-size: 11px; list-style: none; user-select: none; }
+.adm-gone > summary::-webkit-details-marker { display: none; }
+.adm-gone > summary:hover { color: var(--primary); }
+.adm-gone[open] > summary { margin-bottom: 4px; }
