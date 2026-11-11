@@ -37,8 +37,12 @@ const handlers = [
 ];
 const called = new Set();
 for (const m of handlers) {
-  // 排除对象方法调用（event.stopPropagation()、e.preventDefault() 等）：整段替换掉
-  const expr = m[1].replace(/\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\s*\(/g, '(');
+  // 排除对象方法调用：a.b( / a?.b( / ?.b( 三种形式整段替换掉
+  // （只剥 obj.method 不剥可选链 → ?.click() 里的 click 被误报成缺失函数）
+  const expr = m[1]
+    .replace(/\?\.\s*[A-Za-z_$][\w$]*\s*\(/g, '(')
+    .replace(/\b[A-Za-z_$][\w$]*\s*\?\.\s*[A-Za-z_$][\w$]*\s*\(/g, '(')
+    .replace(/\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\s*\(/g, '(');
   for (const id of expr.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) called.add(id[1]);
 }
 
@@ -47,6 +51,9 @@ const builtin = new Set([
   'confirm', 'prompt', 'alert', 'parseInt', 'parseFloat', 'String', 'Number', 'Math', 'Date',
   'JSON', 'Boolean', 'Object', 'Array', 'isNaN', 'encodeURIComponent', 'decodeURIComponent',
   'setTimeout', 'clearTimeout', 'undefined', 'replace', 'toString', 'trim', 'split', 'join', 'void',
+  // DOM/全局内置（不是项目函数，缺失也不报错）
+  'document', 'window', 'console', 'fetch', 'setInterval', 'clearInterval',
+  'click', 'focus', 'blur', 'removeAttribute', 'setAttribute', 'getAttribute', 'scrollIntoView',
 ]);
 
 const missing = [...called].filter(n => !onWindow.has(n) && !builtin.has(n)).sort();

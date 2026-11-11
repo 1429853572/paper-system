@@ -101,14 +101,24 @@ await send('Page.navigate', { url: BASE + '/' }); await sleep(2000);
 
 const CHECK_ONCLICK = `(()=>{
   const bad = []; const seen = new Set();
+  // 内置全局（不是项目函数，缺失也不报错）
+  const BUILTIN = new Set(['document','window','console','setTimeout','setInterval','clearTimeout',
+    'clearInterval','alert','confirm','prompt','fetch','JSON','Object','Array','String','Number',
+    'Boolean','Math','Date','parseInt','parseFloat','isNaN','encodeURIComponent','decodeURIComponent',
+    'Event','CustomEvent','FormData','URL','Blob','File','FileReader','Intl','Map','Set','Promise']);
   for (const el of document.querySelectorAll('[onclick]')) {
     const attr = el.getAttribute('onclick') || '';
     const key = el.tagName + '|' + (el.id||'') + '|' + attr.slice(0,50);
     if (seen.has(key)) continue; seen.add(key);
-    const clean = attr.replace(/\\b[A-Za-z_$][\\w$]*\\.[A-Za-z_$][\\w$]*\\s*\\(/g, '(');
+    // 剥掉「对象.方法(」「obj?.method(」「?.method(」三种形式——剩下的才是裸函数调用
+    const clean = attr
+      .replace(/\\?\\.\\s*[A-Za-z_$][\\w$]*\\s*\\(/g, '(')
+      .replace(/\\b[A-Za-z_$][\\w$]*\\s*\\?\\.\\s*[A-Za-z_$][\\w$]*\\s*\\(/g, '(')
+      .replace(/\\b[A-Za-z_$][\\w$]*\\.[A-Za-z_$][\\w$]*\\s*\\(/g, '(');
     for (const m of clean.matchAll(/\\b([A-Za-z_$][\\w$]*)\\s*\\(/g)) {
       const fn = m[1];
       if (fn === 'event' || fn === 'e' || fn === 'this') continue;
+      if (BUILTIN.has(fn)) continue;
       if (typeof window[fn] !== 'function')
         bad.push({tag: el.tagName, cls: String(el.className).slice(0,26),
                   text: (el.textContent||'').trim().slice(0,16), fn, onclick: attr.slice(0,70)});

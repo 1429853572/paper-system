@@ -69,7 +69,20 @@
 
 ## 前端回归
 
-`node scripts/ui-regression.mjs`（总）｜ `batch-page-test.mjs`（批量+综述+任务中心+勾选面板）｜ `topic-acquire-test.mjs`（采集弹层+专题流）｜ `discover-test.mjs`（找相关）｜ `qa-ux-test.mjs`（命令标签/选中浮条/历史/标识符导入）｜ `cite-jump-test.mjs`｜ `trash-btn-test.mjs`｜ `cite-csl-test.mjs`｜ `user-test.mjs`（多用户：用量页/归属标识/限额编辑/禁用启用）｜ `permission-test.sh`（权限边界 35 项：未认证/member 越权/属主/配额 429/邀请码/会话吊销，需 docker 做造数与清理）｜ `backend-test.py`（后端：容器内 `docker exec paper-system-app python3 /app/scripts/backend-test.py`）
+`node scripts/ui-regression.mjs`（总）｜ `batch-page-test.mjs`（批量+综述+任务中心+勾选面板+任务清理+删除撤销）｜ `topic-acquire-test.mjs`（采集弹层+专题流+综述费用预估）｜ `discover-test.mjs`（找相关）｜ `qa-ux-test.mjs`（命令标签/选中浮条/历史/标识符导入）｜ `cite-jump-test.mjs`｜ `trash-btn-test.mjs`｜ `cite-csl-test.mjs`｜ `user-test.mjs`（多用户：用量页/归属标识/限额编辑/禁用启用）｜ `permission-test.sh`（权限边界 35 项：未认证/member 越权/属主/配额 429/邀请码/会话吊销，需 docker 做造数与清理）｜ `backend-test.py`（后端：容器内 `docker exec paper-system-app python3 /app/scripts/backend-test.py`）｜ `smoke-test.sh`（部署后 41 项，含「viewer.js 与 src/ 同步」校验）
+
+## 前端开发
+
+源码在 `app/webui/src/*.js`（13 个功能域分片），`app/webui/viewer.js` 是**拼接产物**：
+
+```bash
+python3 scripts/build-webui.py           # 改完 src/ 后重建
+python3 scripts/build-webui.py --check   # 只校验产物是否最新（smoke-test 也会查）
+```
+
+## 数据维护脚本
+
+`scripts/cleanup-test-residue.py`（清理测试残留账号及其附属数据）｜ `scripts/backfill-synthesis-titles.py`（回填存量综述标题）｜ `scripts/backfill-llm-user.py`（回填匿名用量归属）——均支持 `--dry-run`。
 
 ## 技术栈
 
