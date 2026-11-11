@@ -5860,7 +5860,7 @@ function libLevel1Html(d) {
         <button class="btn small" onclick="libUpload('${c.id}')" title="上传到此库">${icon('upload')}</button>
         <button class="btn small" onclick="addSubLib('${c.id}')" ${depth >= 2 ? 'disabled title="最多三级"' : ''} title="新建子库">${icon('plus')}</button>
         <button class="btn small" onclick="renameLib('${c.id}', '${jsArg(c.name)}')" title="重命名">${icon('edit')}</button>
-        <button class="btn small danger" onclick="delLib('${c.id}', '${jsArg(c.name)}')" title="删除库">${icon('trash')}</button>
+        <button class="btn small danger hover-only" onclick="delLib('${c.id}', '${jsArg(c.name)}')" title="删除库">${icon('trash')}</button>
       </div>
     </div>`;
   };
@@ -5898,7 +5898,7 @@ function libLevel1Html(d) {
               <td class="row-actions" onclick="event.stopPropagation()">
                 <button class="btn small" title="上传到此库" onclick="libUpload('${c.id}')">${icon('upload')}</button>
                 <button class="btn small" title="重命名" onclick="renameLib('${c.id}', '${jsArg(c.name)}')">${icon('edit')}</button>
-                <button class="btn small danger" title="删除库" onclick="delLib('${c.id}', '${jsArg(c.name)}')">${icon('trash')}</button>
+                <button class="btn small danger hover-only" title="删除库" onclick="delLib('${c.id}', '${jsArg(c.name)}')">${icon('trash')}</button>
               </td></tr>`).join('');
           })()}
         </table></div>`}`;

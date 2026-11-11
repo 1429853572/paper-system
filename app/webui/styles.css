@@ -1217,3 +1217,15 @@ details.q-edit[open] { display: block; width: 100%; }
 .adm-gone > summary::-webkit-details-marker { display: none; }
 .adm-gone > summary:hover { color: var(--primary); }
 .adm-gone[open] > summary { margin-bottom: 4px; }
+
+/* 破坏性图标按钮默认隐藏，悬停所在行/区才显形（一列红垃圾桶太扎眼） */
+.hover-only { opacity: 0; transition: opacity .13s; pointer-events: none; }
+.lib-head:hover .hover-only,
+tr:hover .hover-only,
+.lc1-ops:hover .hover-only,
+.tp-row:hover .hover-only,
+.hover-only:focus-visible { opacity: 1; pointer-events: auto; }
+/* 触屏/无 hover 设备：无法悬停 → 常驻显示（否则功能不可达） */
+@media (hover: none) {
+  .hover-only { opacity: 1; pointer-events: auto; }
+}
