@@ -4820,9 +4820,25 @@ async function renderCollectionsPage(preset = null) {
   const pd = await api('/api/papers?' + qs.toString());
   const papers = pd.papers || [];
   const total = pd.total ?? papers.length;
+  // 范围全量 id（已译统计/跨页全选用；按 scope 缓存，scope 变则失效）
+  state._scopeAllIds = state._scopeAllIds || {};
+  if (!state._scopeAllIds[scopeKey] || state._scopeAllIds._at !== scopeKey + '|' + (state.libSel || '') + '|' + (state.q || '')) {
+    const scopeQ = new URLSearchParams();
+    if (scopeIds.length) scopeQ.set('collection_id', scopeIds.join(','));
+    if (q) scopeQ.set('q', state.libQuery);
+    scopeQ.set('all', '1');
+    try {
+      const ad = await api('/api/papers?' + scopeQ.toString());
+      state._scopeAllIds[scopeKey] = (ad.papers || []).map(x => x.id);
+      state._scopeAllIds._at = scopeKey + '|' + (state.libSel || '') + '|' + (state.q || '');
+    } catch { state._scopeAllIds[scopeKey] = papers.map(x => x.id); }
+  }
   const totalPages = Math.max(1, Math.ceil(total / ps));
   const shown = papers;
   const doneTr = papers.filter(p => st[p.id]?.translate_job?.status === 'done').length;
+  // 已译数按【范围全量】统计（state._scopeAllIds 为范围内全部 id，跨页准确）
+  const allIds = state._scopeAllIds && state._scopeAllIds[scopeKey];
+  const doneTrAll = allIds ? allIds.filter(id => st[id]?.translate_job?.status === 'done').length : doneTr;
 
   const moveOpts = exclude => d.collections.filter(x => x.id !== exclude)
     .map(x => `<option value="${x.id}">${'\u3000'.repeat(treeDepth(x.id))}${esc(x.name)}</option>`).join('');
@@ -4869,7 +4885,7 @@ async function renderCollectionsPage(preset = null) {
     <div class="lib-main" id="lib-main-drop">
         <div class="lib-head">
           <h2 style="margin:0;flex:1">${sel ? icon('folder') : icon('library')} ${esc(scopeName)}
-            <span class="muted" style="font-size:12px">${papers.length} 篇${scopeIds.length > 1 ? '（含子库）' : ''} · 译${doneTr}/${papers.length}</span></h2>
+            <span class="muted" style="font-size:12px">共 ${total} 篇${scopeIds.length > 1 ? '（含子库）' : ''}${scopeIds.length > 1 ? ` · 本页 ${papers.length} 篇` : ''} · 已译 ${doneTrAll}</span></h2>
           ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">${icon('upload')} 上传</button>
           <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>${icon('plus')}子库</button>
           <button class="btn small" title="重命名" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
@@ -5000,6 +5016,14 @@ document.addEventListener('click', async e => {
   }
 });
 
+/* 导出弹层的「勾选的 N 篇」与批量条计数同步（弹层只在页面渲染时算过一次，
+   勾选后不重渲染 → 数字会停在旧值） */
+function syncExportSelCount(cid, n) {
+  const selN = $('#exp-sel-n'), selItem = $('#exp-sel-item');
+  if (selN) selN.textContent = n;
+  if (selItem) selItem.hidden = !n;
+}
+
 /* 勾选按【范围】分桶：同一范围内跨页累积（翻页不丢），不同库互不串。
    真值不再查 DOM（DOM 只有当前页 → 翻页后计数与批量操作会丢）。 */
 state._selByScope = state._selByScope || {};
@@ -5021,6 +5045,7 @@ window.libCk = cid => {
   const n = libSelected(cid).length;
   $('#lb-' + cid).hidden = !n;
   $('#lb-count-' + cid).textContent = n;
+  syncExportSelCount(cid, n);   // 导出弹层的「勾选的 N 篇」即时跟随
   // 总复选框：随行勾选联动（全选 / 半选 / 未选）
   const all = document.querySelector(`.lib-ck-all[data-cid="${cid}"]`);
   if (all) {
@@ -5046,6 +5071,7 @@ window.libCkAll = async (cid, on) => {
   const n = libSelected(cid).length;
   $('#lb-' + cid).hidden = !n;
   $('#lb-count-' + cid).textContent = n;
+  syncExportSelCount(cid, n);
   const all = document.querySelector(`.lib-ck-all[data-cid="${cid}"]`);
   if (all) { all.checked = on; all.indeterminate = false; }
 };
