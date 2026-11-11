@@ -44,10 +44,51 @@ function debounce(fn, ms = 300) {
 }
 
 let _toastTimer = 0;
-function toast(msg, ms = 2500) {
+function toast(msg, ms = 0) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
   clearTimeout(_toastTimer);   // 连续触发时旧 timer 会让后一条提前消失
-  _toastTimer = setTimeout(() => t.classList.remove('show'), ms);
+  const text = String(msg || '');
+  const dur = ms || (text.length > 80 ? 8000 : text.length > 30 ? 5000 : 2500);  // 长文案给足阅读时间
+  _toastTimer = setTimeout(() => t.classList.remove('show'), dur);
+}
+
+/* 写操作统一包装：期间禁用按钮（防连点/重复提交）+ 捕获异常并给友好提示 */
+async function withBusy(btn, fn, failMsg) {
+  const el = btn && btn.tagName === 'BUTTON' ? btn : null;
+  const old = el ? el.innerHTML : '';
+  if (el) { el.disabled = true; el.innerHTML = '<span class="spin"></span> 处理中…'; }
+  try {
+    await fn();
+  } catch (e) {
+    toast(friendlyError(e, failMsg || '操作失败，请重试'));
+  } finally {
+    if (el) { el.disabled = false; el.innerHTML = old; }
+  }
+}
+
+/* 用户可见错误：把技术异常翻译成「发生了什么 + 下一步做什么」，
+   原始信息只进 console（排障用），不让用户看到 ConnectionError / HTTP 502 这类黑话。 */
+window.friendlyError = friendlyError;
+function friendlyError(e, fallback) {
+  const raw = String(e?.message || e || '');
+  const msg = raw.toLowerCase();
+  if (/429|rate limit|额度|余额|too many requests/.test(msg))
+    return '请求太频繁或额度已用尽，请稍后再试；若是额度问题可在「设置 → 我的用量」查看';
+  if (/401|未登录|登录/.test(msg))
+    return '登录状态已失效，请重新登录';
+  if (/403|无权|权限|仅管理员/.test(msg))
+    return '没有权限执行该操作，请联系管理员';
+  if (/no ?key|未配置.*key|key.*未配置/.test(msg))
+    return '尚未配置 LLM key，请到「设置 → AI 模型」填写后再试';
+  if (/404|not found|不存在/.test(msg))
+    return '目标不存在或已被删除';
+  if (/connection|connect|网络|timeout|超时|refused|abort/.test(msg))
+    return '连接不上服务（网络或后端未响应），请稍后重试';
+  if (/5\d\d|internal|服务器/.test(msg))
+    return '服务出错了，请稍后重试；若持续出现请查看任务中心';
+  if (/llm api/.test(msg))
+    return '模型接口报错——可能是 key 无效、额度不足或模型名不对，请到「设置 → AI 模型」用「测试」验证';
+  return fallback || '操作失败，请重试';
 }
 
 /* 复制到剪贴板：clipboard API 仅安全上下文（HTTPS/localhost）可用——
@@ -480,7 +521,15 @@ function renderPapers() {
           <div class="up-bar"><i style="width:${u.pct || 0}%"></i></div></div>
       </div>
     </div>`).join('');
-  if (!state.papers.length && !ups) { el.innerHTML = '<p class="muted" style="padding:20px">暂无论文，上传 PDF 开始</p>'; return; }
+  if (!state.papers.length && !ups) {
+    el.innerHTML = `<div class="muted" style="padding:24px;text-align:center">
+      <p style="font-size:14px;margin-bottom:10px">这里还没有论文</p>
+      <p style="margin-bottom:14px">把 PDF 拖到这里，或从下方入口导入（也支持 DOI / arXiv / BibTeX）</p>
+      <button class="btn primary" onclick="document.querySelector('#upload-arrow')?.click()">${icon('upload')} 上传第一篇</button>
+      <button class="btn" onclick="document.querySelector('#upload-arrow')?.click(); setTimeout(()=>document.querySelector('#ident-input')?.focus(), 200)">粘贴 DOI 导入</button>
+    </div>`;
+    return;
+  }
   const listHtml = sortPapers(state.papers).map(p => {
     const pr = (state.parseProg || {})[p.id];
     const bar = p.parse_status === 'parsing' && pr?.total
@@ -917,6 +966,7 @@ async function pdfEnsureAll() {
   // 仅倍率变化（拖动分栏 / 缩放）：原地更新尺寸，不重建页面骨架——避免整页重绘闪烁
   if (_pdfBuilt && _pdfBuilt.pid === pid) { await _pdfRescale(); return; }
   const host = $('#pdf-host');
+  if (!host) return;
   host.innerHTML = '';
   const wraps = new Map();
   _pdfBuilt = {pid, scale: state.scale, wraps};
@@ -936,7 +986,9 @@ async function pdfEnsureAll() {
     const vp = pg.getViewport({scale: state.scale});
     state.pdfDoc.pgHeights[i-1] = vp.height;
     const w = wraps.get(i - 1);
-    w.querySelector('.pdf-ph').style.height = Math.round(vp.height) + 'px';
+    if (!w) continue;   // 换文档竞态（切论文时 numPages 变化）→ 该页骨架已不存在，跳过
+    const ph = w.querySelector('.pdf-ph');
+    if (ph) ph.style.height = Math.round(vp.height) + 'px';
     state.pdfDoc[`pgvp_${i}`] = vp;
   }
   // 懒渲染观察器：进入视口即渲染该页（画布+文字层+覆盖层）
@@ -1249,7 +1301,7 @@ async function startTranslate() {
   try {
     const r = await api('/api/papers/translate', {method: 'POST', body: JSON.stringify({paper_ids: [state.current.id]})});
     toast(r.skipped_in_flight?.length ? '该论文已有译文/已在队列，无需重复' : '翻译任务已加入队列');
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(friendlyError(e, '翻译失败，请检查 LLM key 与队列状态')); }
   refreshJobState();
 }
 window.startTranslate = startTranslate;
@@ -1351,7 +1403,7 @@ window.editBlock = async (bid, anchorEl) => {
     const pr = (state.pairs || []).find(x => x.block_id === bid); if (pr) pr.en = nv;
     renderContentView();
     toast('已修正（索引与向量已同步）');
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(friendlyError(e, '保存失败，请重试')); }
 };
 
 function blockRowHtml(b) {
@@ -1472,7 +1524,7 @@ $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.data
 function switchPage(page) {
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
   $('#page-title').textContent = {reader: '阅读', collections: '文库管理',
-    tasks: '任务中心', trash: '回收站', settings: '设置'}[page];
+    tasks: '任务中心', trash: '回收站', settings: '设置'}[page] || 'paper-system';
   syncSynBackBtn();
   for (const p of ['reader', 'collections', 'tasks', 'trash', 'settings']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
@@ -1553,7 +1605,6 @@ state._batchPreset = null;      // 从文库批量条带过来的圈定
 state._batchPapers = [];        // 圈定来源论文缓存（供明细显示标题）
 
 // 批量导读/翻译/元数据/重解析/BibTeX/删除卡已移除——与文库管理页批量条逐一重复（收敛到单一入口）
-const BATCH_ACTS = {};
 
 /* ---- 采集与专题面板（浮层）——原「批量」顶级页并入文库管理 ----
    快速采集=一次性检索入库；专题跟踪=持久化任务（可中断可恢复 + 一键综述）。 */
@@ -1588,6 +1639,10 @@ window.openCollectPanel = async () => {
   await showTopics();
 };
 window.openCollectPanel = openCollectPanel;
+window.showTopicsView = showTopicsView;
+window.newTopicDialog = newTopicDialog;
+window.openAcquirePop = openAcquirePop;
+window.runSynthesis = runSynthesis;
 
 
 /* ---- 综述状态公共件（syn-list / 任务面板 synJob 两处复用，原先各写一份映射） ---- */
@@ -1609,7 +1664,7 @@ async function renderSynList() {
   try { items = (await api('/api/syntheses')).syntheses; }
   catch (e) { el.innerHTML = `<p class="muted" style="padding:8px 16px">加载失败: ${esc(e.message)}</p>`; return; }
   if (!items.length) {
-    el.innerHTML = '<p class="muted" style="padding:8px 16px">还没有综述——圈定 2 篇以上论文，点上方「综述报告」发起</p>';
+    el.innerHTML = '<p class="muted" style="padding:8px 16px">还没有综述报告——在「文库管理」勾选 2 篇以上已解析论文，点批量条「生成综述报告」</p>';
     return;
   }
   el.innerHTML = items.map(s => {
@@ -1857,48 +1912,6 @@ function syncBpCount() {
 /* 批量操作卡已移除（统一走文库批量条）——保留空实现以免调用点报错 */
 function updateBatchOpsState() {}
 
-async function runBatchAction(act, anchor) {
-  // 采集/专题是独立入口（自带检索），不需要先圈定论文
-  if (act === 'acquire' || act === 'topics') {
-    if (act === 'acquire') openAcquirePop(anchor); else showTopicsView();
-    return;
-  }
-  if (!state.selected.size) {
-    toast('综述需先圈定：去「文库管理」勾选论文，再点批量条「综述」');
-    switchPage('collections');
-    return;
-  }
-  const ids = [...state.selected];
-  if (act === 'review') { await runSynthesis(anchor, ids); return; }
-  if (act === 'bibtex') { downloadBibtex(ids); return; }
-  if (act === 'delete') {
-    if (!(await uiConfirm(`将圈定的 ${ids.length} 篇移入回收站？（${state.health.trash_days || 30} 天内可恢复）`,
-                          {title: '批量移入回收站', anchor}))) return;
-    try {
-      await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
-      toast(`已移入回收站 ${ids.length} 篇`);
-      state.selected.clear();
-      await refreshLib();
-    } catch (e) { toast('删除失败: ' + e.message); }
-    return;
-  }
-  const meta = BATCH_ACTS[act];
-  if (!meta) return;
-  if (act === 'parse' && !(await uiConfirm(
-      `重解析 ${ids.length} 篇会重新提取全文，已有译文/导读与旧版本的对应关系将作废。继续？`,
-      {title: '批量重解析', danger: true, anchor}))) return;
-  try {
-    const d = await api('/api/batch/' + act, {method: 'POST', body: JSON.stringify({paper_ids: ids})});
-    toast(`${meta.label.replace(/^\S+\s/, '')}：入队 ${d.queued.length} 篇` +
-          (d.skipped.length ? `，跳过 ${d.skipped.length} 篇（已完成/进行中/无权限）` : ''));
-    if (d.queued.length) {
-      state._batchOpen = new Set([d.batch_id]);
-      renderTaskPanel();
-      switchPage('tasks');                                   // 进度在任务中心页
-      setTimeout(() => $('#task-body')?.scrollIntoView({behavior: 'smooth', block: 'start'}), 350);
-    } else renderTaskPanel();
-  } catch (e) { toast('批量操作失败: ' + e.message); }
-}
 
 
 /* ---- 综述流水线（批量页核心卡）----
@@ -2206,7 +2219,7 @@ async function runSynthesis(anchor, ids = null) {
   let est;
   try {
     est = await api('/api/synthesize/estimate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
-  } catch (e) { toast(e.message); return; }
+  } catch (e) { toast(friendlyError(e, '估算失败——请确认已勾选 ≥2 篇已解析论文')); return; }
 
   // 参数弹窗（survey-writer 五问的落地：轴最关键；quick 可空轴）
   const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
@@ -2311,7 +2324,7 @@ async function showSynthesisReport(sid) {
   el.classList.add('syn-page');       // 综述报告页放宽容器（全文宽度利用）
   let s;
   try { s = (await api('/api/syntheses/' + encodeURIComponent(sid))).synthesis; }
-  catch (e) { toast(e.message); return; }
+  catch (e) { toast(friendlyError(e, '综述报告加载失败')); return; }
   // 记录来源：从此页跳到论文后，阅读页顶栏出现「← 返回综述」
   state._synBack = {sid, title: s.title || ''};
   syncSynBackBtn();
@@ -2461,8 +2474,6 @@ $('#page-tasks').addEventListener('click', async e => {
     }
     return;
   }
-  const card = e.target.closest('.batch-card');
-  if (card && !card.classList.contains('soon')) { runBatchAction(card.dataset.act, card); return; }
   const head = e.target.closest('.bpanel-row.head');
   if (head) {
     const batchEl = head.closest('[data-batch]');
@@ -3336,7 +3347,7 @@ window.switchSess = async sid => {
   updateExportBtn?.();
 };
 window.delSess = async sid => {
-  if (!(await uiConfirm('删除该会话及其全部消息？', {title: '删除会话'}))) return;
+  if (!(await uiConfirm('删除该会话及其全部消息？此操作不可恢复。', {title: '删除会话', danger: true}))) return;
   await api(`/api/chat/sessions/${sid}`, {method: 'DELETE'});
   if (state.qaSession === sid) state.qaSession = '';
   $('#qa-sess-panel').hidden = true;
@@ -4019,6 +4030,7 @@ window.jumpEvidence = page => { switchPage('reader'); if (state.pdfDoc) { state.
 /* ---- 回收站 ---- */
 async function renderTrash() {
   const d = await api('/api/papers?trash=1');
+  state._trashCount = (d.papers || []).length;   // 清空确认框要显示影响篇数
   $('#page-trash').innerHTML = `<div class="card"><h2 style="display:flex;gap:10px;align-items:center">回收站（${state.health.trash_days || 30} 天后自动清理）
     <button class="btn small danger" style="margin-left:auto" onclick="emptyTrash()">${icon('trash')} 清空回收站</button></h2>
     <table class="list"><tr><th>标题</th><th>删除时间</th><th></th></tr>
@@ -4026,7 +4038,12 @@ async function renderTrash() {
       <td class="row-actions"><button class="btn small" onclick="restorePaper('${p.id}')">恢复</button>
       </td></tr>`).join('') || '<tr><td colspan="3" class="muted">回收站为空——删除的论文在此保留 30 天，可随时恢复</td></tr>'}</table></div>`;
 }
-window.restorePaper = async id => { await api(`/api/papers/${id}/restore`, {method: 'POST'}); toast('已恢复'); renderTrash(); await refreshLib(); };
+window.restorePaper = async id => {
+  try {
+    await api(`/api/papers/${id}/restore`, {method: 'POST'});
+    toast('已恢复'); renderTrash(); await refreshLib();
+  } catch (e) { toast(friendlyError(e, '恢复失败，请重试')); }
+};
 
 /* ---- 设置（BYOK + 术语表 + 测试连接） ---- */
 /* 设置页：页签分组（账号 / AI 模型 / 术语表 / 用量 / 管理）——
@@ -4264,7 +4281,7 @@ window.createInvite = async () => {
   if (el) el.innerHTML = `邀请码: <code style="font-size:16px">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
 };
 window.logoutAll = async () => {
-  if (!(await uiConfirm('登出所有设备？其他已登录的会话将全部失效。', {title: '登出所有设备'}))) return;
+  if (!(await uiConfirm('登出所有设备？其他已登录的会话将全部失效（本设备保持登录）。', {title: '登出所有设备', danger: true}))) return;
   await api('/api/logout-all', {method: 'POST'});
   toast('其他设备已登出（本设备保持登录）');
 };
@@ -4320,7 +4337,10 @@ window.openBudgetDialog = async () => {
     当前本月已花 ¥${Number(q.month_cost || 0).toFixed(2)}`,
     {value: cur ? String(cur) : '', placeholder: '如 50（不设=留空）', okText: '保存'});
   if (v === null) return;
-  const budget = parseFloat(v) || 0;
+  const parsed = parseFloat(v);
+  if (v !== '' && v !== null && !Number.isFinite(parsed)) { toast('请输入有效金额（数字）'); return; }
+  if (Number.isFinite(parsed) && parsed < 0) { toast('预算不能为负'); return; }
+  const budget = Number.isFinite(parsed) ? parsed : 0;
   try {
     await api('/api/me/budget', {method: 'PUT', body: JSON.stringify({budget})});
     toast(budget ? `月预算已设为 ¥${budget}` : '已取消预算（不再拦截）');
@@ -4346,7 +4366,7 @@ async function loadGlossary() {
   if (!el) return;
   el.innerHTML = d.terms.map(t =>
     `<span class="chip">${esc(t.term)}${t.target === 'trans' ? ' → ' + esc(t.value) : t.target === 'first_both' ? ' ⇄ ' + esc(t.value) : ' (EN)'}
-     <button onclick="delGlossary('${jsArg(t.term)}')">${icon('close')}</button></span>`).join('') ||
+     <button title="删除该术语" onclick="delGlossary('${jsArg(t.term)}')">${icon('close')}</button></span>`).join('') ||
     '<span class="muted" style="font-size:12px">暂无术语——按需添加以保证全文译名一致</span>';
   $('#gl-add').onclick = async () => {
     const term = $('#gl-term').value.trim();
@@ -4360,8 +4380,11 @@ async function loadGlossary() {
   };
 }
 window.delGlossary = async term => {
-  await api('/api/glossary/' + encodeURIComponent(term), {method: 'DELETE'});
-  loadGlossary();
+  if (!(await uiConfirm(`删除术语「${term}」？之后翻译将不再套用该术语。`, {title: '删除术语'}))) return;
+  try {
+    await api('/api/glossary/' + encodeURIComponent(term), {method: 'DELETE'});
+    toast('已删除术语'); loadGlossary();
+  } catch (e) { toast(friendlyError(e, '删除失败，请重试')); }
 };
 
 
@@ -4876,17 +4899,32 @@ window.libClearSel = cid => {
 };
 window.libBatchMove = async (cid, v, sel) => {
   if (!v) return;
+  const ids = libSelected(cid);
+  if (!ids.length) { toast('先勾选要移动的论文'); return; }
   const target = v === '__none__' ? null : v;
-  for (const pid of libSelected(cid)) await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: target})});
-  toast('已移动'); sel.value = ''; await refreshLib();
+  await withBusy(sel, async () => {
+    sel.value = '';
+    let ok = 0, bad = 0;
+    for (const pid of ids) {
+      try {
+        await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: target})});
+        ok++;
+      } catch (e) { bad++; }
+    }
+    toast(`已移动 ${ok} 篇${bad ? `，${bad} 篇失败` : ''}`);
+    await refreshLib();
+  }, '移动失败，请重试');
 };
 window.libBatchDelete = async cid => {
   const ids = libSelected(cid);
   if (!(await uiConfirm(`删除选中的 ${ids.length} 篇？（进回收站，${state.health.trash_days || 30} 天内可恢复）`,
-                        {title: '批量删除'}))) return;
-  await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
-  ids.forEach(pid => state.selected.delete(pid));
-  toast('已移入回收站'); await refreshLib();
+                        {title: '批量删除', danger: true}))) return;
+  try {
+    await api('/api/papers/batch-delete', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
+    ids.forEach(pid => state.selected.delete(pid));
+    toast(`已移入回收站 ${ids.length} 篇（${state.health.trash_days || 30} 天内可在回收站恢复）`);
+  } catch (e) { toast(friendlyError(e, '批量删除失败')); }
+  await refreshLib();
 };
 window.libUpload = cid => {
   const inp = document.createElement('input');
@@ -4915,24 +4953,34 @@ window.delLib = async (cid, name) => {
   toast('已删除'); await refreshLib();
 };
 window.createLibFromPage = async () => {
-  const name = $('#newlib-name').value.trim();
+  const inp = $('#newlib-name');
+  const name = inp.value.trim();
   if (!name) { toast('请输入库名'); return; }
-  await api('/api/collections', {method: 'POST', body: JSON.stringify({name})});
-  $('#newlib-name').value = '';
-  toast('已创建'); await refreshLib();
+  if (name.length > 50) { toast('库名最多 50 个字符'); inp.focus(); return; }
+  try {
+    await api('/api/collections', {method: 'POST', body: JSON.stringify({name})});
+    inp.value = '';
+    toast('已创建'); await refreshLib();
+  } catch (e) { toast(friendlyError(e, '创建失败，请重试')); }
 };
 window.movePaper = async (pid, v, sel) => {
   if (!v) return;
   const cid = v === '__none__' ? null : v;
-  await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: cid})});
-  toast('已移动'); await refreshLib();
+  try {
+    await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: cid})});
+    toast('已移动'); await refreshLib();
+  } catch (e) { toast(friendlyError(e, '移动失败，请重试')); }
 };
 window.delPaperFromLib = async pid => {
   const p = (state.papers || []).find(x => x.id === pid) || (state._libScopePapers || []).find(x => x.id === pid);
   if (p?.visibility === 'shared' && state.me?.role !== 'admin') { toast('共享论文仅管理员可删除'); return; }
-  if (!(await uiConfirm(`删除这篇论文？（进回收站，${state.health.trash_days || 30} 天内可恢复）`, {title: '移入回收站'}))) return;
-  await api('/api/papers/' + pid, {method: 'DELETE'});
-  toast('已移入回收站'); await refreshLib();
+  const title = (p?.title || '这篇论文').slice(0, 40);
+  if (!(await uiConfirm(`《${title}》移入回收站？（${state.health.trash_days || 30} 天内可恢复）`,
+                        {title: '移入回收站'}))) return;
+  try {
+    await api('/api/papers/' + pid, {method: 'DELETE'});
+    toast('已移入回收站'); await refreshLib();
+  } catch (e) { toast(friendlyError(e, '删除失败，请重试')); }
 };
 window.viewPaper = pid => { switchPage('reader'); openPaper(pid); };
 
@@ -4944,7 +4992,7 @@ window.lightbox = (src, caption) => {
     lb = document.createElement('div');
     lb.id = 'ps-lightbox';
     lb.className = 'lightbox';
-    lb.innerHTML = `<img><p class="lb-cap"></p><button class="lb-close">${icon('close')}</button>`;
+    lb.innerHTML = `<img><p class="lb-cap"></p><button class="lb-close" title="关闭" aria-label="关闭">${icon('close')}</button>`;
     document.body.appendChild(lb);
     lb.onclick = e => { if (e.target === lb || e.target.closest?.('.lb-close')) lb.classList.remove('open'); };
     document.addEventListener('keydown', e => { if (e.key === 'Escape') lb.classList.remove('open'); });
@@ -4973,7 +5021,7 @@ window.quickDelete = async (pid, anchor) => {
     if (state.current?.id === pid) { state.current = null; state.blocks = []; renderContentView(); }
     state.qaPapers.delete(pid);
     await refreshLib();
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(friendlyError(e, '删除失败，请重试')); }
 };
 
 /* 导读后的追问建议 */
@@ -5573,10 +5621,15 @@ window.addSubLib = async pid => {
 };
 
 window.emptyTrash = async () => {
-  if (!(await uiConfirm('所有已删除论文（含译文/索引/会话）将永久移除，不可恢复。', {title: '彻底清空回收站', okText: '清空'}))) return;
-  const r = await api('/api/trash/empty', {method: 'POST'});
-  toast(`已彻底删除 ${r.purged} 篇`);
-  renderTrash(); await refreshLib();
+  const n = (state._trashCount ?? 0);
+  if (!(await uiConfirm(
+      `将<strong>永久删除</strong>回收站中的 ${n} 篇论文（含译文、索引与会话），<strong>不可恢复</strong>。`,
+      {title: '彻底清空回收站', okText: `永久删除 ${n} 篇`, danger: true}))) return;
+  try {
+    const r = await api('/api/trash/empty', {method: 'POST'});
+    toast(`已彻底删除 ${r.purged} 篇`);
+    renderTrash(); await refreshLib();
+  } catch (e) { toast(friendlyError(e, '清空失败，请重试')); }
 };
 
 /* 增量加载解析块（滚动到底自动续拉；只追加新行，不全量重渲染） */
@@ -5656,7 +5709,11 @@ function libLevel1Html(d) {
       </div>
     </div>
     ${state.libView === 'card'
-      ? `<div class="lib-cards">${cards || '<p class="muted" style="padding:16px">还没有文献库——点上方「新建库」</p>'}</div>`
+      ? `<div class="lib-cards">${cards || `<div class="muted" style="padding:28px;text-align:center">
+          <p style="font-size:14px;margin-bottom:8px">还没有文献库</p>
+          <p style="margin-bottom:12px">用文献库把论文按主题分组（可建子库，最多三级）</p>
+          <button class="btn primary" onclick="document.querySelector('#newlib-name')?.focus()">${icon('plus')} 新建文献库</button>
+        </div>`}</div>`
       : `<div class="card"><table class="list">
           <tr><th>库名</th><th>论文</th><th>子库</th><th></th></tr>
           ${(() => {
@@ -5667,13 +5724,14 @@ function libLevel1Html(d) {
             const ordered = [];
             const walk = cid => { for (const k of kidsOf(cid)) { ordered.push(k); walk(k.id); } };
             walk('root');
-            if (!ordered.length) return '<tr><td colspan="4" class="muted">还没有库</td></tr>';
+            if (!ordered.length) return `<tr><td colspan="4" class="muted" style="text-align:center;padding:24px">
+              还没有文献库 —— <button class="btn small primary" onclick="document.querySelector('#newlib-name')?.focus()">${icon('plus')} 新建文献库</button></td></tr>`;
             return ordered.map(c => `<tr class="lib-row" onclick="libOpenLib('${c.id}')">
               <td>${'　'.repeat(treeDepth(c.id))}${icon('folder')} ${esc(c.name)}</td>
               <td>${c.papers ?? 0}</td><td>${(children[c.id] || []).length}</td>
               <td class="row-actions" onclick="event.stopPropagation()">
-                <button class="btn small" onclick="libUpload('${c.id}')">${icon('upload')}</button>
-                <button class="btn small" onclick="renameLib('${c.id}', '${jsArg(c.name)}')">${icon('edit')}</button>
+                <button class="btn small" title="上传到此库" onclick="libUpload('${c.id}')">${icon('upload')}</button>
+                <button class="btn small" title="重命名" onclick="renameLib('${c.id}', '${jsArg(c.name)}')">${icon('edit')}</button>
                 <button class="btn small danger" title="删除库" onclick="delLib('${c.id}', '${jsArg(c.name)}')">${icon('trash')}</button>
               </td></tr>`).join('');
           })()}
@@ -5770,10 +5828,10 @@ const CMD_ACTIONS = [
   {label: '上传文献', hint: '动作', kw: 'upload 上传 pdf', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); }},
   {label: '粘贴 DOI / arXiv / BibTeX 导入', hint: '动作', kw: 'doi arxiv bibtex 导入 identifier', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); setTimeout(() => $('#ident-input')?.focus(), 200); }},
   {label: '目录批量导入', hint: '动作', kw: '目录 导入 inbox dir', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); }},
-  {label: '新建专题跟踪', hint: '动作', kw: 'topic 专题 采集 关键词', run: () => { switchPage('batch'); setTimeout(() => { showTopicsView(); newTopicDialog(); }, 250); }},
-  {label: '快速采集文献（检索入库）', hint: '动作', kw: 'acquire 采集 检索 知网 chinaxiv', run: () => { switchPage('batch'); setTimeout(() => openAcquirePop(), 250); }},
-  {label: '发起综述', hint: '动作', kw: 'synthesis 综述 survey 报告', run: () => { switchPage('batch'); setTimeout(() => runSynthesis(null), 250); }},
-  {label: '我的综述报告列表', hint: '跳转', kw: '综述 报告 syntheses 历史', run: () => { switchPage('batch'); setTimeout(() => $('#syn-list')?.scrollIntoView({behavior: 'smooth'}), 400); }},
+  {label: '新建专题跟踪', hint: '动作', kw: 'topic 专题 采集 关键词', run: () => { switchPage('collections'); setTimeout(() => { openCollectPanel(); newTopicDialog(); }, 250); }},
+  {label: '快速采集文献（检索入库）', hint: '动作', kw: 'acquire 采集 检索 知网 chinaxiv', run: () => { switchPage('collections'); setTimeout(() => openAcquirePop(), 250); }},
+  {label: '发起综述', hint: '动作', kw: 'synthesis 综述 survey 报告', run: () => { switchPage('collections'); setTimeout(() => runSynthesis(null), 250); }},
+  {label: '我的综述报告列表', hint: '跳转', kw: '综述 报告 syntheses 历史', run: () => { switchPage('tasks'); setTimeout(() => $('#syn-list')?.scrollIntoView({behavior: 'smooth'}), 400); }},
   {label: '翻译当前论文', hint: '动作', kw: 'translate 翻译', run: () => { switchPage('reader'); setTimeout(() => startTranslate?.(), 250); }},
   {label: '生成/查看导读', hint: '动作', kw: 'summary 导读', run: () => {
     switchPage('reader');
@@ -5934,7 +5992,7 @@ function showOnboardingOnce() {
       <div class="onboard-step"><b>① 上传文献</b><span>拖 PDF 到左侧论文列表，或点「上传」弹层选文件 / 粘贴 DOI、arXiv、BibTeX / 目录导入</span></div>
       <div class="onboard-step"><b>② 等待解析</b><span>GPU 提取全文（列表显示进度），完成后可阅读/翻译/图表</span></div>
       <div class="onboard-step"><b>③ 提问与导读</b><span>右栏「✍️ 提问」对着论文问答（引用可点回原文）；问答右栏「生成导读」产出 9 字段导读；「文献信息」页的「AI 补全」补元数据</span></div>
-      <div class="onboard-step"><b>④ 批量与综述</b><span>「批量」页圈定论文批量处理、建专题采集中文文献、一键生成带引用校验的综述</span></div>
+      <div class="onboard-step"><b>④ 批量与综述</b><span>「文库管理」勾选论文 → 批量条翻译 / 生成综述报告；工具条「采集文献」检索中文文献或建专题跟踪</span></div>
       <div class="onboard-step"><b>找不到入口？</b><span>随时 <code>Ctrl + K</code> 命令面板搜索一切；<code>?</code> 看快捷键</span></div>
     </div>
     <div class="ui-pop-foot"><span class="muted" style="font-size:11px;flex:1">问答/翻译需要 LLM key（「设置」页配置）；管理员开启公共额度池时可直接使用</span>

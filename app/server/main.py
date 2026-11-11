@@ -301,6 +301,11 @@ async def register(request: Request):
         with db.write() as c:
             c.execute("DELETE FROM users WHERE id=?", (uid,))
         raise HTTPException(400, "邀请码无效或已过期")
+    # 新成员即建「默认文献库」——否则首登侧栏无任何归属（上传时才隐式创建，用户不知去向）
+    try:
+        get_or_create_default_collection(uid)
+    except Exception:  # noqa: BLE001 —— 建库失败不影响注册
+        log.warning("新用户 %s 建默认库失败", username)
     return {"ok": True}
 
 
