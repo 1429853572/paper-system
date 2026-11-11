@@ -819,7 +819,7 @@ table.list input[type=checkbox] { width: auto; }
 .r-subtabs #download-pop { right: 0; }
 
 /* ===== 批量中心（左圈定 / 右操作 / 底进度） ===== */
-.batch-wrap { max-width: 1240px; margin: 0 auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.batch-wrap { max-width: 1500px; margin: 0 auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }   /* 与主界面 .page 限宽一致（1500），此前 1240 致宽屏两侧大量留白 */
 .batch-intro { color: var(--muted); font-size: var(--fs-sm); padding: 0 2px; display: flex; align-items: center; gap: 5px; }
 .batch-grid { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }   /* 圈定面板已移除：单列全宽 */
 .batch-right { min-width: 0; container-type: inline-size; }   /* 操作卡列数随自身宽度（缩放/侧栏折叠均自适应） */
@@ -852,7 +852,19 @@ table.list input[type=checkbox] { width: auto; }
 
 /* ---- 综述报告视图 ---- */
 .syn-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
-.syn-body { display: grid; grid-template-columns: 250px 1fr; gap: 14px; align-items: start; }
+/* 综述报告页：导航改顶部可折叠条（原左侧 sticky 浮层会压在报告上、报告被挤成窄条） */
+.syn-body { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }
+.syn-groups { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel); margin-bottom: 12px; }
+.syn-groups > summary { cursor: pointer; padding: 9px 14px; font-size: var(--fs-sm); font-weight: 600;
+                        display: flex; align-items: center; gap: 6px; list-style: none; }
+.syn-groups > summary::-webkit-details-marker { display: none; }
+.syn-groups > summary::before { content: '▸'; color: var(--muted); font-size: 10px; transition: transform .15s; }
+.syn-groups[open] > summary::before { transform: rotate(90deg); }
+.syn-groups > summary:hover { color: var(--primary); }
+.syn-groups-body { padding: 4px 14px 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.syn-nav-group { min-width: 0; }
+.syn-nav-group a { display: block; font-size: var(--fs-xs); color: var(--text-2); padding: 2px 0 2px 10px;
+                   border-left: 2px solid var(--line-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .syn-nav { padding: 12px 14px; position: sticky; top: 12px; max-height: calc(100vh - 140px); overflow: auto; }
 .syn-nav b { display: block; margin-bottom: 8px; font-size: var(--fs-md); }
 .syn-nav-group { margin-bottom: 12px; }
@@ -1141,3 +1153,7 @@ details.q-edit[open] { display: block; width: 100%; }
 .md-n { flex: none; min-width: 18px; height: 18px; border-radius: 9px; background: var(--tint-primary);
         color: var(--primary); font-size: 10px; line-height: 18px; text-align: center; margin-top: 2px; }
 .md-bullet .md-n { background: none; color: var(--muted); }
+
+/* 综述报告页：正文用满容器宽度（不再额外限宽留白） */
+#page-batch.syn-page .batch-wrap { max-width: 1500px; }
+.syn-report { max-width: none; }

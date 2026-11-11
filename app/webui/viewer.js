@@ -2256,6 +2256,7 @@ async function renderSynJob(sid, box) {
 /* ---- 综述报告视图（批量页内全屏切换）---- */
 async function showSynthesisReport(sid) {
   const el = $('#page-batch');
+  el.classList.add('syn-page');       // 综述报告页放宽容器（全文宽度利用）
   let s;
   try { s = (await api('/api/syntheses/' + encodeURIComponent(sid))).synthesis; }
   catch (e) { toast(e.message); return; }
@@ -2289,8 +2290,11 @@ async function showSynthesisReport(sid) {
         <button class="btn small" id="syn-dl-md">⬇ MD</button>
         <button class="btn small" id="syn-dl-csv">⬇ CSV</button>
       </div>
+      ${clusters.length ? `<details class="syn-groups">
+        <summary>${icon('stack')} 主题分组 <span class="muted">${clusters.length} 组 · ${clusters.reduce((n, c) => n + (c.paper_ids || []).length, 0)} 篇（点击标题定位论文）</span></summary>
+        <div class="syn-groups-body">${nav}</div>
+      </details>` : ''}
       <div class="syn-body">
-        <aside class="syn-nav card"><b>主题分组</b>${clusters.length ? nav : '<p class="muted">无分组信息</p>'}</aside>
         <div class="syn-report card" id="syn-report"></div>
       </div>
       ${fws?.frameworks?.length > 1 ? `
@@ -2373,7 +2377,7 @@ async function showSynthesisReport(sid) {
       paper_id: e.paper_id, page_index: e.page_index || 0,
       block_id: e.block_id, text: e.text }));
   });
-  $('#syn-back').onclick = () => renderBatchPage();
+  $('#syn-back').onclick = () => { el.classList.remove('syn-page'); renderBatchPage(); };
   $('#syn-dl-md').onclick = () => { location.href = `/api/syntheses/${encodeURIComponent(sid)}/export?fmt=md`; };
   $('#syn-dl-csv').onclick = () => { location.href = `/api/syntheses/${encodeURIComponent(sid)}/export?fmt=csv`; };
   $$('#page-batch [data-syn-paper]').forEach(a => a.onclick = () => {
