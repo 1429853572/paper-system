@@ -3692,19 +3692,90 @@ async function boot() {
 boot().then(() => setTimeout(showOnboardingOnce, 600)).catch(() => {});
 
 /* ================= 跨文献讨论（覆盖层） ================= */
+/* 行内编号列表拆分：模型常把「方法」写成一行 '1) xxx 2) yyy'，需按序号切分。
+   仅当序号从 1 连续递增时才拆（避免误伤 F1=0.523 / (2024) 之类）。 */
+function splitInlineList(text) {
+  // 编号前只允许空白或中文句读（不含括号——否则 "Sim(3)" 会被误当编号）
+  const re = /(?:^|[\s。；;，,、])(\d{1,2})\)\s+/g;
+  const hits = [];
+  let m;
+  while ((m = re.exec(text)) !== null) hits.push({ num: +m[1], start: m.index, from: re.lastIndex });
+  if (hits.length < 2) return null;
+  // 从 1 起贪心取连续递增的编号（跳过误命中项，如 "Sim(3)"）
+  const picked = [];
+  let expect = 1;
+  for (const h of hits) if (h.num === expect) { picked.push(h); expect++; }
+  if (picked.length < 2) return null;
+  const lead = text.slice(0, picked[0].start).trim();
+  const items = picked.map((h, i) => ({
+    num: h.num,
+    content: text.slice(h.from, i + 1 < picked.length ? picked[i + 1].start : text.length).trim(),
+  }));
+  return { lead, items };
+}
+
 function mdLite(text) {
-  let h = esc(text);
-  h = h.replace(/(^|\n)((?:\|[^\n]+\|\n)+)/g, (m, pre, block) => {
+  let raw = String(text ?? '');
+  // 模型偶尔给 ```json 围栏（历史坏数据）——剥掉围栏只留内容
+  if (raw.trim().startsWith('```')) {
+    const m2 = raw.trim().match(/^```(?:\w*)\n?([\s\S]*?)\n?```$/);
+    if (m2) raw = m2[1];
+  }
+  let h = esc(raw);
+  // 表格先抽出（占位保护，避免逐行处理把表格拆散）
+  const tables = [];
+  h = h.replace(/(^|\n)((?:\|[^\n]+\|\n)+)/g, (m3, pre, block) => {
     const rows = block.trim().split('\n').filter(r => !/^\|[\s:|-]+\|$/.test(r));
     const cells = rows.map(r => r.split('|').slice(1, -1).map(c => c.trim()));
-    if (cells.length < 2) return m;
-    return pre + '<table class="tbl-md"><tr>' + cells[0].map(c => `<th>${c}</th>`).join('') + '</tr>' +
+    if (cells.length < 2) return m3;
+    const html = '<table class="tbl-md"><tr>' + cells[0].map(c => `<th>${c}</th>`).join('') + '</tr>' +
       cells.slice(1).map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('') + '</table>';
+    tables.push(html);
+    return pre + `\u0000TBL${tables.length - 1}\u0000`;
   });
   h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   h = h.replace(/^#{2,4} (.+)$/gm, '<h4>$1</h4>');
-  h = h.replace(/^- (.+)$/gm, '&bull; $1');
-  return katexify(h);
+  // 逐行处理：编号/无序列表成组，段落按空行切分（导读的「方法」几乎都是 1) 2) 3) 结构）
+  const lines = h.split('\n');
+  const out = [];
+  let listBuf = [], listType = '', paraBuf = [];
+  const flushList = () => {
+    if (listBuf.length) { out.push(`<${listType} class="md-list">${listBuf.join('')}</${listType}>`); listBuf = []; listType = ''; }
+  };
+  const flushPara = () => {
+    if (paraBuf.length) { out.push(`<p>${paraBuf.join('<br>')}</p>`); paraBuf = []; }
+  };
+  for (const ln of lines) {
+    let mm;
+    // 先判行内编号（覆盖 '1) A 2) B' 与 '1) A' 两种：序号从 1 连续递增才拆）
+    const inline = splitInlineList(ln);
+    if (inline) {
+      flushPara(); flushList();
+      if (inline.lead) out.push(`<p>${inline.lead}</p>`);
+      out.push(`<ol class="md-list">${inline.items.map(it =>
+        `<li class="md-num"><span class="md-n">${it.num}</span><span>${it.content}</span></li>`).join('')}</ol>`);
+      continue;
+    }
+    if ((mm = ln.match(/^(\d+)[.)]\s+(.*)$/))) {
+      flushPara();
+      if (listType !== 'ol') { flushList(); listType = 'ol'; }
+      listBuf.push(`<li class="md-num"><span class="md-n">${mm[1]}</span><span>${mm[2]}</span></li>`);
+      continue;
+    }
+    if ((mm = ln.match(/^[-*]\s+(.*)$/))) {
+      flushPara();
+      if (listType !== 'ul') { flushList(); listType = 'ul'; }
+      listBuf.push(`<li class="md-bullet"><span class="md-n">&bull;</span><span>${mm[1]}</span></li>`);
+      continue;
+    }
+    if (!ln.trim()) { flushPara(); flushList(); continue; }
+    flushList();
+    paraBuf.push(ln);
+  }
+  flushPara(); flushList();
+  let res = out.join('');
+  tables.forEach((t, i) => { res = res.replace(`\u0000TBL${i}\u0000`, t); });
+  return katexify(res);
 }
 function renderCites(text, evidence) {
   return mdLite(text).replace(/\[(\d{1,3})\]/g, (m, n) => {
@@ -4244,7 +4315,7 @@ function drawSummary(s, pid, target = '#content-view', asBubble = false) {
       const tip = `第${ev.page_index + 1}页 · ${(ev.text || '').slice(0, 120).replace(/\s+/g, ' ')}`;
       return `<span class="cite" data-gid="${gid}" title="${esc(tip)}">[${n}]</span>`;
     });
-    return `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><p>${html}</p></div>`;
+    return `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><div class="summary-body">${html}</div></div>`;
   }).join('');
   t.innerHTML = (asBubble ? (state._sumHead || '') + '<div class="msg assistant"><div class="bubble" style="width:100%">' : '<div class="card">') +
     (asBubble ? `<b class="sum-toggle" data-sum-toggle title="点击展开/收起导读">${icon('copy')} 导读（9 字段）<span class="sum-arrow">▾</span></b>` : '<h2>科研导读</h2>') +
@@ -5646,6 +5717,12 @@ function showShortcutHelp() {
   pop.querySelector('[data-ok]').onclick = close;
 }
 window.showShortcutHelp = showShortcutHelp;
+
+/* 调试入口：状态与导读渲染（供真机探针/排障调用；只读不改业务逻辑） */
+window.__state = state;
+window.renderSumBubble = renderSumBubble;
+window.drawSummary = drawSummary;
+window.openPaper = openPaper;
 
 /* ---- 全局快捷键监听 ---- */
 document.addEventListener('keydown', e => {

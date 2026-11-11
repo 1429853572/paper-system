@@ -1126,3 +1126,18 @@ details.q-edit[open] { display: block; width: 100%; }
 .lib-pager { display: flex; align-items: center; gap: 10px; justify-content: flex-end;
              padding: 6px 2px 8px; font-size: var(--fs-xs); }
 .lib-pager .muted b { color: var(--primary); }
+
+/* 导读展示：字段卡片 + 编号列表（方法类字段常是 1) 2) 3) 结构） */
+.summary-sec { margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border);
+               border-radius: var(--r-md); background: var(--bg-soft); }
+.summary-sec h3 { font-size: var(--fs-sm); color: var(--primary); margin-bottom: 6px;
+                  display: flex; align-items: center; gap: 6px; }
+.summary-sec h3::before { content: ''; width: 3px; height: 12px; border-radius: 2px; background: var(--primary); }
+.summary-body { font-size: var(--fs-sm); line-height: 1.75; color: var(--text); }
+.summary-body p { margin: 0 0 6px; }
+.summary-body p:last-child { margin-bottom: 0; }
+.md-list { margin: 4px 0 6px; padding-left: 2px; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.md-list li { display: flex; gap: 8px; align-items: flex-start; }
+.md-n { flex: none; min-width: 18px; height: 18px; border-radius: 9px; background: var(--tint-primary);
+        color: var(--primary); font-size: 10px; line-height: 18px; text-align: center; margin-top: 2px; }
+.md-bullet .md-n { background: none; color: var(--muted); }

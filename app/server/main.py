@@ -3334,7 +3334,14 @@ def get_paper_summary(paper_id: str, request: Request):
     s = summarizer.get_latest(paper_id)
     if s is None:
         return {"summary": None}
-    return {"summary": json.loads(s["content"]), "model": s["model"], "created_at": s["created_at"]}
+    data = json.loads(s["content"])
+    # 读取时规范化：早期版本把模型的扁平 JSON（含 ```json 围栏）整段塞进 problem
+    # → 界面显示源码。历史记录无需重新生成即可修复。
+    if isinstance(data.get("sections"), dict):
+        by_key, cm = summarizer.normalize_sections(data)
+        if by_key:
+            data = {**data, "sections": by_key, "cite_map": cm or data.get("cite_map", {})}
+    return {"summary": data, "model": s["model"], "created_at": s["created_at"]}
 
 
 # ---------------- 静态资源 ----------------

@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 
 from .db import db
 
-PROMPT_VERSION = "v1"
+log = logging.getLogger(__name__)
+
+PROMPT_VERSION = "v2"   # v2：prompt 加固（禁围栏/明确格式）+ max_tokens 提升 → 旧缓存失效
 
 SECTIONS = [
     ("problem", "Research Problem", "论文试图解决什么问题"),
@@ -21,7 +24,9 @@ SECTIONS = [
 ]
 
 _PROMPT = (
-    "你是论文导读引擎。依据提供的论文全文材料，按以下 JSON 模板输出导读（只输出 JSON）：\n"
+    "你是论文导读引擎。依据提供的论文全文材料，按以下 JSON 模板输出导读。\n"
+    "【输出格式硬要求】只输出一个 JSON 对象，不要任何解释文字，"
+    "不要用 ``` 代码围栏包裹，不要在 JSON 前后加任何字符。\n"
     '{"sections": ['
     + ", ".join(f'{{"key": "{s[0]}", "content": "..."}}' for s in SECTIONS)
     + ']}\n'
@@ -31,6 +36,108 @@ _PROMPT = (
     "3. 实验数据引用原始表格数值；若重要结果只在曲线图中，写\"（曲线图数据，需视觉理解）\"不臆造数值\n"
     "4. Limitations 只写论文明确承认的局限\n5. [n] 必须标注在该论断真正来源的行上；实验数值只能来自所标证据行，不得凭记忆配对"
 )
+
+
+_SECTION_KEYS = {k for k, _, _ in SECTIONS}
+
+
+def _unwrap_json_text(text: str) -> dict | None:
+    """文本里裹着 ```json {...} → 解出内层 dict（非则 None）。"""
+    t = (text or "").strip()
+    if not t.startswith("```") or "{" not in t:
+        return None
+    if t.startswith("```json"):
+        t = t[t.find("\n") + 1:] if "\n" in t else t[7:]
+    else:
+        t = t[3:]
+    t = t.rstrip()
+    if t.endswith("```"):
+        t = t[:-3]
+    t = t.strip()
+    i, j = t.find("{"), t.rfind("}")
+    if i < 0 or j <= i:
+        return None
+    try:
+        data = json.loads(t[i:j + 1])
+        return data if isinstance(data, dict) else None
+    except ValueError:
+        return None
+
+
+_KEY_RE = None
+
+
+def salvage_fields(raw: str) -> dict:
+    """从非完整/非法 JSON 文本里抢救字段（max_tokens 截断时模型输出常缺尾括号）。
+
+    例：'{"problem": "……", "method": "1) x 2) y"'（缺右括号）→ 取到前两个字段。
+    """
+    import re as _re
+    global _KEY_RE
+    if _KEY_RE is None:
+        keys = "|".join(_re.escape(k) for k, _, _ in SECTIONS)
+        _KEY_RE = _re.compile(r'"(' + keys + r')"\s*:\s*"((?:[^"\\]|\\.)*)"')
+    out: dict[str, str] = {}
+    for m in _KEY_RE.finditer(raw or ""):
+        try:
+            out[m.group(1)] = json.loads('"' + m.group(2) + '"')
+        except ValueError:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def normalize_sections(data: dict) -> tuple[dict, dict]:
+    """把 LLM 返回规整成 {字段: 内容} + cite_map。
+
+    兼容三种返回：
+      A 标准 {"sections": [{"key":..., "content":...}]}
+      B {"sections": {"problem": "...", ...}}
+      C 扁平 {"problem": "...", ...}（模型常直接给字段名）
+    并处理"整个 JSON 被 ```json 围栏裹住塞进某个字段"的坏形态——那是历史版本
+    解析失败走 fallback 的产物（界面直接显示 JSON 源码）。
+    扁平/坏形态的 cite_map 从原 problem 的全局映射继承（各字段的 [n] 同源）。
+    """
+    import re as _re
+    secs = data.get("sections")
+    by_key: dict[str, str] = {}
+    cm = data.get("cite_map") or {}
+    if isinstance(secs, list) and secs:
+        by_key = {x["key"]: x.get("content", "") for x in secs
+                  if isinstance(x, dict) and x.get("key") in _SECTION_KEYS}
+    elif isinstance(secs, dict) and secs:
+        by_key = {k: v for k, v in secs.items() if k in _SECTION_KEYS and isinstance(v, str)}
+    else:
+        by_key = {k: v for k, v in data.items() if k in _SECTION_KEYS and isinstance(v, str)}
+
+    # 坏形态：某个字段的内容其实是裹着围栏的整份 JSON → 展开它
+    for k in list(by_key):
+        inner = _unwrap_json_text(by_key[k])
+        if inner and any(x in _SECTION_KEYS for x in inner):
+            inner_secs = {x: v for x, v in inner.items()
+                          if x in _SECTION_KEYS and isinstance(v, str)}
+            by_key.pop(k)
+            by_key.update(inner_secs)
+            break
+        else:
+            # 展开失败（多半是 max_tokens 截断导致 JSON 不完整）→ 逐字段抢救
+            salv = salvage_fields(by_key[k])
+            if len(salv) >= 2:
+                by_key.pop(k)
+                by_key.update(salv)
+                break
+
+    if not by_key:
+        return {}, cm
+    # cite_map：各字段的 [n] 从全局（problem）映射继承
+    glob = cm.get("problem") or {}
+    new_cm: dict[str, dict] = {}
+    for k, txt in by_key.items():
+        own = cm.get(k) or {}
+        nums = set(_re.findall(r"\[(\d{1,3})\]", txt))
+        merged = {n: own[n] for n in nums if n in own}
+        merged.update({n: glob[n] for n in nums if n not in merged and n in glob})
+        new_cm[k] = merged
+    return by_key, new_cm
 
 
 def compute_key(run_id: str, model: str) -> str:
@@ -94,21 +201,32 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
     import re
 
     by_key: dict[str, str] = {}
+    truncated = False
     raw = ""
     for attempt in range(2):
-        raw = client.complete(messages, max_tokens=4096)
+        raw = client.complete(messages, max_tokens=6144)
         try:
             start, end = raw.index("{"), raw.rindex("}") + 1
             data = json.loads(raw[start:end])
-            sec = data.get("sections", [])
-            if isinstance(sec, dict):   # 容错：sections 直接给 {key: content}
-                sec = [{"key": k, "content": v} for k, v in sec.items()]
-            by_key = {s["key"]: s.get("content", "") for s in sec if isinstance(s, dict) and s.get("key")}
+            by_key, _cm_fix = normalize_sections(data)
+            truncated = False
         except (ValueError, KeyError):
-            by_key = {}
+            # JSON 不完整（多半 max_tokens 截断）→ 逐字段抢救，不丢弃已生成内容
+            by_key = salvage_fields(raw[start:end] if "{" in raw else raw)
+            truncated = True
+            if by_key:
+                log.warning("导读 JSON 解析失败，已抢救 %d 个字段（疑似输出截断）", len(by_key))
         # fallback：完全非 JSON 时把原文按字段平铺，保证有内容
         if not by_key and raw.strip():
-            by_key = {"problem": raw[:2000]}
+            txt = raw.strip()
+            if txt.startswith("```"):          # 剥 markdown 围栏（模型爱加）
+                txt = txt.split("\n", 1)[-1] if "\n" in txt else txt
+                if txt.rstrip().endswith("```"):
+                    txt = txt.rstrip()[:-3]
+            try:                                # 再宽松试一次 JSON
+                by_key, _ = normalize_sections(json.loads(txt))
+            except ValueError:
+                by_key = {"problem": txt[:2000]}
             break
         if by_key:
             break
@@ -183,7 +301,8 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
         cur = c.execute(
             "INSERT INTO summaries(paper_id,cache_key,content,model,created_by) VALUES(?,?,?,?,?)",
             (paper_id, cache_key,
-             json.dumps({"sections": by_key, "evidence": evidence_out, "cite_map": cite_map},
+             json.dumps({"sections": by_key, "evidence": evidence_out, "cite_map": cite_map,
+                        "truncated": truncated},
                         ensure_ascii=False),
              cfg.model, user["id"]),
         )
