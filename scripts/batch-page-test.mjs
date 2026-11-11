@@ -171,11 +171,11 @@ if (btn) {
 
 // 2) 结构（圈定面板已移除——综述圈定唯一入口在文库管理勾选）
 ok('圈定器已移除（避免与文库勾选双 UI）', !doc.querySelector('#page-batch .batch-pick'));
-ok('操作卡=3（专题/采集/综述——批量操作卡已收敛到文库批量条）',
-   doc.querySelectorAll('#page-batch .batch-card').length === 3,
+ok('操作卡=2（专题跟踪/快速采集——综述报告引导卡已删，唯一入口在文库批量条）',
+   doc.querySelectorAll('#page-batch .batch-card').length === 2,
    `实际 ${doc.querySelectorAll('#page-batch .batch-card').length}`);
-ok('综述卡已激活', !!doc.querySelector('#page-batch .batch-card[data-act="review"]') &&
-   !doc.querySelector('#page-batch .batch-card[data-act="review"]').classList.contains('soon'));
+ok('综述报告引导卡已移除（综述走文库批量条）',
+   !doc.querySelector('#page-batch .batch-card[data-act="review"]'));
 ok('任务中心页签存在', !!doc.querySelector('.topnav button[data-page="tasks"]'));
 
 // 5) 任务中心：独立页 + 类型徽章 + 分区
@@ -241,20 +241,27 @@ ok('未圈定时操作卡置灰（采集/专题除外）', (() => {
   return ops.every(c => c.classList.contains('off')) && free.every(c => !c.classList.contains('off'));
 })());
 const acts = [...doc.querySelectorAll('.batch-card')].map(c => c.dataset.act);
-ok('批量卡含 采集/专题/综述入口', acts.includes('acquire') && acts.includes('topics') && acts.includes('review'),
-   acts.join(','));
-ok('综述卡主色高亮', [...doc.querySelectorAll('.batch-card')].find(c => c.dataset.act === 'review')
-   ?.classList.contains('primary'));
+ok('批量卡含 采集/专题入口（无综述卡）',
+   acts.includes('acquire') && acts.includes('topics') && !acts.includes('review'), acts.join(','));
+ok('采集卡均为独立入口（无 primary 综述卡）',
+   ![...doc.querySelectorAll('.batch-card')].some(c => c.dataset.act === 'review'));
 
-// 7) 综述流：卡片激活 → 预估确认 → 批次面板综述行 → 报告视图
-const reviewCard = doc.querySelector('.batch-card[data-act="review"]');
-ok('综述卡已激活（无 soon）', !!reviewCard && !reviewCard.classList.contains('soon'));
-// 切回批量页重新渲染（前面 tocenter 已切页）
-window.__T.switchPage('batch');
-await new Promise((r) => setTimeout(r, 300));
-window.__T.state.selected.add('p1'); window.__T.state.selected.add('p2');
-doc.querySelector('.batch-card[data-act="review"]').click();
+// 7) 综述流：文库批量条「综述」发起（综述唯一入口）→ 预估确认 → 批次面板综述行 → 报告视图
+ok('综述报告引导卡已移除（唯一入口=文库批量条）',
+   !doc.querySelector('#page-batch .batch-card[data-act="review"]'));
+// 切到文库管理页第二层，用页面复选框勾选 2 篇（走真实勾选路径），再点批量条「综述」
+window.__T.state.libLevel = 2; window.__T.state.libSel = '';
+window.__T.switchPage('collections');
+await new Promise((r) => setTimeout(r, 400));
+const cks = [...doc.querySelectorAll('.lib-ck')].slice(0, 2);
+ok('文库论文表有复选框', cks.length >= 2, `实际 ${cks.length}`);
+for (const c of cks) { c.checked = true; window.libCk(c.dataset.cid); }
 await new Promise((r) => setTimeout(r, 200));
+const synBtn = [...doc.querySelectorAll('.lib-batch button')].find(b => b.textContent.includes('综述'));
+ok('文库批量条有「综述」按钮（唯一入口）', !!synBtn);
+// 注意：jsdom runScripts:'outside-only' 不执行内联 onclick 属性（真实浏览器有效）→ 直接调等价入口
+await window.libBatchSynth('all');
+await new Promise((r) => setTimeout(r, 600));
 const synPop = [...doc.querySelectorAll('.ui-pop')].find(p => p.textContent.includes('发起综述'));
 ok('综述参数弹窗出现（survey-writer 五问）', !!synPop, '未找到弹窗');
 ok('参数弹窗含组织轴输入', !!synPop?.querySelector('#syn-axis'));

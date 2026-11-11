@@ -143,7 +143,7 @@ await new Promise(r => setTimeout(r, 500));
 const az = doc.querySelector('#admin-zone');
 check('管理区用户表渲染 2 用户', (az?.querySelectorAll('table.list tr').length || 0) >= 2);
 check('管理区显示磁盘占用（1.07G）', (az?.textContent || '').includes('1.07G'));
-check('管理区显示 30d token', (az?.textContent || '').includes('4,272,075'));
+check('管理区显示本月花费（非 token）', (az?.textContent || '').includes('本月 ¥'));
 check('已禁用用户带「已禁用」徽章', (az?.textContent || '').includes('已禁用'));
 const enableBtn = [...(az?.querySelectorAll('button[title="重新启用"]') || [])];
 check('禁用用户渲染「重新启用」按钮（依赖后端 disabled 列的 bug 面）', enableBtn.length === 1);

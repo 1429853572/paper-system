@@ -1523,17 +1523,15 @@ async function renderBatchPage() {
   const cols = state.collections || [];
   el.innerHTML = `
     <div class="batch-wrap">
-      <div class="batch-intro">${icon('bulb', 12)} 综述：在「文库管理」勾选论文 → 批量条点「综述」；专题/采集在此发起；综述历史与批次进度见下方。</div>
+      <div class="batch-intro">${icon('bulb', 12)} 综述：在「文库管理」勾选论文 → 批量条点「综述」（唯一入口）；此处发起中文文献采集与专题跟踪；综述历史与批次进度见下方。</div>
       <div class="batch-grid">
         <div class="batch-right batch-right-full">
           <div class="bp-head2">选择操作 <span class="muted" style="font-weight:400;font-size:11px">未圈定时综述卡置灰——勾选在「文库管理」进行</span></div>
           <div class="batch-ops">
-            <div class="batch-card" data-act="topics" title="专题采集任务：关键词 → 检索 → 勾选下载入库 → 一键综述（可中断可恢复）">
-              <b>${icon('stack')} 专题采集</b><span class="muted">关键词建专题 → 检索 → 勾选下载入库 → 自动生成综述</span></div>
-            <div class="batch-card" data-act="acquire" id="acq-btn" title="按关键词检索中文文献（知网/中国科学院预印本），勾选后批量下载入库">
-              <b>${icon('inbox')} 采集文献</b><span class="muted">按关键词检索 → 勾选 → 浏览器下载入库（知网/预印本）</span></div>
-            <div class="batch-card primary ${state.selected.size ? '' : 'off'}" data-act="review" title="在文库管理勾选论文后点此卡发起；或直接用文库批量条的「综述」">
-              <b>${icon('doc')} 综述报告</b><span class="muted">文库管理勾选 2~90 篇 → 批量条「综述」发起 · 自动分组比对 · 导出 MD/CSV</span></div>
+            <div class="batch-card" data-act="topics" title="专题跟踪：关键词建专题 → 持续检索 → 勾选下载入库 → 一键综述（可中断可恢复）">
+              <b>${icon('stack')} 专题跟踪</b><span class="muted">可中断可恢复 · 检索入库后一键生成综述</span></div>
+            <div class="batch-card" data-act="acquire" id="acq-btn" title="快速采集：按关键词检索中文文献（知网/中国科学院预印本），勾选后批量下载入库（一次性）">
+              <b>${icon('inbox')} 快速采集</b><span class="muted">一次性检索 → 勾选 → 下载入库（知网/预印本）</span></div>
           </div>
         </div>
       </div>
@@ -4041,7 +4039,7 @@ async function renderAdminZone() {
         return `<tr>
         <td>${esc(u.username)} ${u.role === 'admin' ? '<span class="badge priv">admin</span>' : ''}
           ${u.disabled === 2 ? '<span class="badge priv">已注销</span>' : ''}${u.disabled === 1 ? '<span class="badge err">已禁用</span>' : ''}</td>
-        <td style="font-size:11px">${u.papers} 篇<br><span class="muted">${fmtGB(u.disk_used).toFixed(2)}G · 30d ${(u.tokens_30d || 0).toLocaleString()}tok</span></td>
+        <td style="font-size:11px">${u.papers} 篇<br><span class="muted">${fmtGB(u.disk_used).toFixed(2)}G · 本月 ¥${Number(u.month_cost || 0).toFixed(2)}</span></td>
         <td class="row-actions">
           <details class="q-edit"><summary class="btn small" title="编辑限额">${icon('sliders')}${n ? ` ${n}` : ''}</summary>
             <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;padding:6px 2px;align-items:center">
@@ -4463,7 +4461,6 @@ async function renderCollectionsPage(preset = null) {
   const totalPages = Math.max(1, Math.ceil(total / ps));
   const shown = papers;
   const doneTr = papers.filter(p => st[p.id]?.translate_job?.status === 'done').length;
-  const totTok = papers.reduce((s, p) => s + ((st[p.id]?.tokens?.p || 0) + (st[p.id]?.tokens?.c || 0)), 0);
 
   const moveOpts = exclude => d.collections.filter(x => x.id !== exclude)
     .map(x => `<option value="${x.id}">${'\u3000'.repeat(treeDepth(x.id))}${esc(x.name)}</option>`).join('');
@@ -4479,7 +4476,6 @@ async function renderCollectionsPage(preset = null) {
     const trBadge = s.translating ? `<span class="badge run">${icon('globe')}${tj ? tj.done + '/' + tj.total : ''}</span>`
       : tj?.status === 'done' ? "<span class=\"badge ok\">译" + icon('check') + "</span>"
       : tj?.status === 'failed' ? "<span class=\"badge err\">译" + icon('close') + "</span>" : '<span class="muted">—</span>';
-    const tk = s.tokens;
     const owner = d.collections.find(c => c.id === p.collection_id);
     return `<tr class="lib-paper-row" onclick="viewPaper('${p.id}')">
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${state.selected.has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
@@ -4489,7 +4485,6 @@ async function renderCollectionsPage(preset = null) {
           ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" style="font-size:11px" title="上传者"> · ${esc(p.owner_name)}</span>` : ''}</td>
         <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
-        <td class="muted" style="font-size:11px">${tk ? (tk.p + tk.c).toLocaleString() + ' tok' : ''}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
           <button class="btn small danger" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">删</button>
         </td></tr>`;}).join('');
@@ -4512,7 +4507,7 @@ async function renderCollectionsPage(preset = null) {
     <div class="lib-main" id="lib-main-drop">
         <div class="lib-head">
           <h2 style="margin:0;flex:1">${sel ? icon('folder') : icon('library')} ${esc(scopeName)}
-            <span class="muted" style="font-size:12px">${papers.length} 篇${scopeIds.length > 1 ? '（含子库）' : ''} · 译${doneTr}/${papers.length} · ${totTok.toLocaleString()}tok</span></h2>
+            <span class="muted" style="font-size:12px">${papers.length} 篇${scopeIds.length > 1 ? '（含子库）' : ''} · 译${doneTr}/${papers.length}</span></h2>
           ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">${icon('upload')} 上传</button>
           <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>${icon('plus')}子库</button>
           <button class="btn small" title="重命名" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
@@ -4525,7 +4520,6 @@ async function renderCollectionsPage(preset = null) {
         <div class="lib-batch" id="lb-${scopeKey}" hidden>
           <b id="lb-count-${scopeKey}">0</b>&nbsp;篇选中
           <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 翻译</button>
-          <button class="btn small" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 翻译</button>
           <button class="btn small" onclick="libBatchSynth('${scopeKey}')" title="自动分组比对生成综述报告">综述</button>
           <select style="width:auto;font-size:12px" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
           <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">${icon('trash')} 删除</button>
@@ -4547,8 +4541,8 @@ async function renderCollectionsPage(preset = null) {
             <span class="muted">第 <b>${page}</b> / ${totalPages} 页 · 共 ${total} 篇</span>
             <button class="btn small" ${page >= totalPages ? 'disabled' : ''} onclick="libGoPage(${page + 1})">下一页 ›</button>
           </div>` : `<div class="lib-pager"><span class="muted">共 ${total} 篇</span></div>`}
-          <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th title="解析状态">解析</th><th title="翻译状态">翻译</th><th>用量</th><th></th></tr>
-            ${paperRows || `<tr><td colspan="6" class="muted">${q ? '没有匹配的论文' : '空库'}</td></tr>`}</table>
+          <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th title="解析状态">解析</th><th title="翻译状态">翻译</th><th></th></tr>
+            ${paperRows || `<tr><td colspan="5" class="muted">${q ? '没有匹配的论文' : '空库'}</td></tr>`}</table>
         </div>
       </div>`;
 
@@ -5598,8 +5592,8 @@ const CMD_ACTIONS = [
   {label: '上传文献', hint: '动作', kw: 'upload 上传 pdf', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); }},
   {label: '粘贴 DOI / arXiv / BibTeX 导入', hint: '动作', kw: 'doi arxiv bibtex 导入 identifier', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); setTimeout(() => $('#ident-input')?.focus(), 200); }},
   {label: '目录批量导入', hint: '动作', kw: '目录 导入 inbox dir', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); }},
-  {label: '新建专题采集', hint: '动作', kw: 'topic 专题 采集 关键词', run: () => { switchPage('batch'); setTimeout(() => { showTopicsView(); newTopicDialog(); }, 250); }},
-  {label: '采集文献（检索入库）', hint: '动作', kw: 'acquire 采集 检索 知网 chinaxiv', run: () => { switchPage('batch'); setTimeout(() => openAcquirePop(), 250); }},
+  {label: '新建专题跟踪', hint: '动作', kw: 'topic 专题 采集 关键词', run: () => { switchPage('batch'); setTimeout(() => { showTopicsView(); newTopicDialog(); }, 250); }},
+  {label: '快速采集文献（检索入库）', hint: '动作', kw: 'acquire 采集 检索 知网 chinaxiv', run: () => { switchPage('batch'); setTimeout(() => openAcquirePop(), 250); }},
   {label: '发起综述', hint: '动作', kw: 'synthesis 综述 survey 报告', run: () => { switchPage('batch'); setTimeout(() => runSynthesis(null), 250); }},
   {label: '我的综述报告列表', hint: '跳转', kw: '综述 报告 syntheses 历史', run: () => { switchPage('batch'); setTimeout(() => $('#syn-list')?.scrollIntoView({behavior: 'smooth'}), 400); }},
   {label: '翻译当前论文', hint: '动作', kw: 'translate 翻译', run: () => { switchPage('reader'); setTimeout(() => startTranslate?.(), 250); }},
