@@ -249,9 +249,8 @@ async def change_password(request: Request):
 
 
 @app.post("/api/logout-all")
-def logout_all(request: Request):
+def logout_all(u: dict = Depends(require)):
     """登出所有设备：token_ver+1，全部旧会话失效（当前设备除外——重新签发）。"""
-    u = require(request)
     auth.bump_token_ver(u["id"])
     audit(u["id"], "logout-all", (db.one("SELECT username FROM users WHERE id=?", (u["id"],)) or {"username": "?"})["username"])
     row2 = db.one("SELECT role, token_ver FROM users WHERE id=?", (u["id"],))
@@ -263,8 +262,7 @@ def logout_all(request: Request):
 
 
 @app.get("/api/me")
-def me(request: Request):
-    u = require(request)
+def me(u: dict = Depends(require)):
     row = db.one("SELECT username, role, created_at FROM users WHERE id=?", (u["id"],))
     llm = auth.get_user_llm(u["id"]) or {}
     pool = db.one("SELECT value FROM settings WHERE key='pool_enabled'")
@@ -311,8 +309,7 @@ async def register(request: Request):
 
 # ---------------- BYOK 设置 ----------------
 @app.get("/api/settings/llm")
-def get_llm_settings(request: Request):
-    u = require(request)
+def get_llm_settings(u: dict = Depends(require)):
     row = db.one("SELECT chat_meta, translate_meta FROM user_llm_keys WHERE user_id=?", (u["id"],))
     if row is None:
         return {"chat": {"base_url": "", "model": "", "configured": False},
@@ -536,8 +533,7 @@ def _filter_name_hit(fname: str, rule: str) -> str:
 
 
 @app.get("/api/settings/parse-filter")
-def get_parse_filter(request: Request):
-    u = require(request)
+def get_parse_filter(u: dict = Depends(require)):
     d = _get_parse_filter(u["id"])
     return {"max_pages": int(d.get("max_pages") or 100), "exclude": d.get("exclude") or ""}
 
@@ -556,9 +552,8 @@ async def set_parse_filter(request: Request):
 
 
 @app.get("/api/papers")
-def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
-                collection_id: str = "", page: int = 0, page_size: int = 0, all: int = 0):
-    u = require(request)
+def list_papers(q: str = "", status: str = "", trash: int = 0,
+                collection_id: str = "", page: int = 0, page_size: int = 0, all: int = 0, u: dict = Depends(require)):
     is_admin = u["role"] == "admin"
     vis = "" if is_admin else " AND (visibility='shared' OR owner_id=?)"
     args: list[Any] = [] if is_admin else [u["id"]]
@@ -596,12 +591,11 @@ def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
 
 
 @app.get("/api/papers/{paper_id}")
-def paper_detail(paper_id: str, request: Request, offset: int = 0, limit: int = 0):
+def paper_detail(paper_id: str, offset: int = 0, limit: int = 0, u: dict = Depends(require)):
     """论文详情 + 解析块（分页：大论文首屏只取需要的量，滚动再拉）。
 
     limit=0 表示不分页（兼容旧调用）；前端用 limit 做首屏 + 增量加载。
     """
-    u = require(request)
     p = db.one("SELECT p.*, u.username AS owner_name FROM papers p "
                "LEFT JOIN users u ON u.id=p.owner_id WHERE p.id=?", (paper_id,))
     if p is None or p["deleted_at"]:
@@ -619,8 +613,7 @@ def paper_detail(paper_id: str, request: Request, offset: int = 0, limit: int = 
 
 
 def _blocks_count(paper_id: str) -> int:
-    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
-                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    run = latest_run(paper_id)
     if run is None:
         return 0
     return db.one("SELECT COUNT(*) AS n FROM blocks WHERE parse_run_id=?", (run["id"],))["n"]
@@ -637,9 +630,36 @@ def _require_owner(u: dict, paper) -> None:
         raise HTTPException(403, "仅论文所有者或管理员可执行此操作")
 
 
+def new_batch_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def latest_run(paper_id: str):
+    """该论文最新的 done 解析 run（7 处同款查询的公共件）。"""
+    return latest_run(paper_id)
+
+
+def owner_scope(u: dict, col: str = "user_id", placeholder: bool = True):
+    """admin 看全站，member 限自己——返回 (SQL 片段, 参数元组)；placeholder=False 时内联整型。"""
+    if u["role"] == "admin":
+        return ("", ()) if placeholder else ""
+    if placeholder:
+        return (f" AND {col}=?", (u["id"],))
+    return f" AND {col}={int(u['id'])}"
+
+
+def _own_paper_or_404(u: dict, paper_id: str, write: bool = False):
+    """取论文行 + 404 + （write=True 时）属主校验 / 否则可见性校验。"""
+    p = _get_paper_or_404(paper_id, u)
+    if write:
+        _require_owner(u, p)
+    else:
+        _require_visible(u, p)
+    return p
+
+
 @app.get("/api/papers/{paper_id}/pdf")
-def paper_pdf(paper_id: str, request: Request):
-    u = require(request)
+def paper_pdf(paper_id: str, u: dict = Depends(require)):
     p = _get_paper_or_404(paper_id, u)
     import mimetypes
     path = None
@@ -661,8 +681,7 @@ def paper_pdf(paper_id: str, request: Request):
 
 
 @app.get("/api/papers/{paper_id}/images/{name}")
-def paper_image(paper_id: str, name: str, request: Request):
-    u = require(request)
+def paper_image(paper_id: str, name: str, u: dict = Depends(require)):
     p = _get_paper_or_404(paper_id, u)
     base = (ingest.PAPERS_DIR / paper_id / "parse").resolve()
     matches = sorted(base.glob(f"*/images/{name}"))
@@ -673,8 +692,7 @@ def paper_image(paper_id: str, name: str, request: Request):
 
 # ---------------- 删除/回收站 ----------------
 @app.delete("/api/papers/{paper_id}")
-def delete_paper(paper_id: str, request: Request):
-    u = require(request)
+def delete_paper(paper_id: str, u: dict = Depends(require)):
     p = db.one("SELECT * FROM papers WHERE id=?", (paper_id,))
     if p is None or p["deleted_at"]:
         raise HTTPException(404, "论文不存在")
@@ -696,8 +714,7 @@ def delete_paper(paper_id: str, request: Request):
 
 
 @app.post("/api/papers/{paper_id}/restore")
-def restore_paper(paper_id: str, request: Request):
-    u = require(request)
+def restore_paper(paper_id: str, u: dict = Depends(require)):
     p = db.one("SELECT * FROM papers WHERE id=?", (paper_id,))
     if p is None or not p["deleted_at"]:
         raise HTTPException(404, "不在回收站")
@@ -715,9 +732,8 @@ def restore_paper(paper_id: str, request: Request):
 
 # ---------------- 任务中心 ----------------
 @app.get("/api/jobs")
-def list_jobs(request: Request, status: str = "", job_type: str = "",
-              batch_id: str = "", limit: int = 100):
-    u = require(request)
+def list_jobs(status: str = "", job_type: str = "",
+              batch_id: str = "", limit: int = 100, u: dict = Depends(require)):
     cond, args = "", []
     if u["role"] != "admin":
         cond = " AND j.user_id=?"
@@ -746,8 +762,7 @@ def list_jobs(request: Request, status: str = "", job_type: str = "",
 
 
 @app.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: int, request: Request):
-    u = require(request)
+def cancel_job(job_id: int, u: dict = Depends(require)):
     j = db.one("SELECT * FROM jobs WHERE id=?", (job_id,))
     if j is None:
         raise HTTPException(404, "任务不存在")
@@ -761,8 +776,7 @@ def cancel_job(job_id: int, request: Request):
 
 
 @app.post("/api/jobs/{job_id}/retry")
-def retry_job(job_id: int, request: Request):
-    u = require(request)
+def retry_job(job_id: int, u: dict = Depends(require)):
     j = db.one("SELECT * FROM jobs WHERE id=?", (job_id,))
     if j is None:
         raise HTTPException(404, "任务不存在")
@@ -847,7 +861,7 @@ async def batch_action(action: str, request: Request):
     ids = [x for x in (body.get("paper_ids") or []) if x][:BATCH_LIMIT]
     if not ids:
         raise HTTPException(400, "请先圈定论文")
-    batch_id = uuid.uuid4().hex[:12]
+    batch_id = new_batch_id()
     papers = _batch_papers(u, ids)
     queued, skipped = [], []
 
@@ -906,10 +920,9 @@ async def batch_action(action: str, request: Request):
 
 
 @app.get("/api/batches")
-def list_batches(request: Request, limit: int = 20):
+def list_batches(limit: int = 20, u: dict = Depends(require)):
     """批次汇总（批量中心进度面板）：前端按 active 分「进行中 / 最近完成」两组展示。"""
-    u = require(request)
-    scope = "" if u["role"] == "admin" else f" AND user_id={int(u['id'])}"
+    scope = owner_scope(u, placeholder=False)
     rows = db.all(
         "SELECT batch_id, MIN(job_type) AS job_type, COUNT(*) AS total, "
         "SUM(status='done') AS done, SUM(status='failed') AS failed, "
@@ -971,7 +984,7 @@ async def synthesize_start(request: Request):
           "axis": axis}
     calls = est["calls"] + ({"standard": 8, "deep": 14}.get(tier, 0))
     est = {**est, "calls": calls}   # syntheses.progress_total 用调整后调用数
-    batch_id = uuid.uuid4().hex[:12]
+    batch_id = new_batch_id()
     scheduler.enqueue(u["id"], "synthesis", None,
                       {"synthesis_id": sid, "batch_id": batch_id, "params": pr},
                       priority="background", progress_total=calls)
@@ -981,8 +994,7 @@ async def synthesize_start(request: Request):
 
 
 @app.get("/api/syntheses")
-def list_syntheses(request: Request, limit: int = 20):
-    u = require(request)
+def list_syntheses(limit: int = 20, u: dict = Depends(require)):
     scope = "" if u["role"] == "admin" else " WHERE s.user_id=" + str(int(u["id"]))
     rows = db.all(
         "SELECT s.id, s.title, s.status, s.stage, s.progress_done, s.progress_total, "
@@ -1004,8 +1016,7 @@ def _own_synthesis(u: dict, sid: str):
 
 
 @app.get("/api/syntheses/{sid}")
-def get_synthesis(sid: str, request: Request):
-    u = require(request)
+def get_synthesis(sid: str, u: dict = Depends(require)):
     row = _own_synthesis(u, sid)
     d = dict(row)
     # 大列不下发：cluster_data 仅 rewrite 服务端用（直读库）；matrix_csv 有独立 export 端点
@@ -1043,7 +1054,7 @@ async def rewrite_synthesis(sid: str, request: Request):
     with db.write() as c:
         c.execute("UPDATE syntheses SET status='running', error=NULL, progress_done=0, "
                   "progress_total=?, updated_at=datetime('now') WHERE id=?", (calls, sid))
-    batch_id = uuid.uuid4().hex[:12]
+    batch_id = new_batch_id()
     scheduler.enqueue(u["id"], "synthesis", None,
                       {"synthesis_id": sid, "batch_id": batch_id, "params": pr,
                        "topic": pr.get("axis") or ""},
@@ -1053,8 +1064,7 @@ async def rewrite_synthesis(sid: str, request: Request):
 
 
 @app.delete("/api/syntheses/{sid}")
-def delete_synthesis(sid: str, request: Request):
-    u = require(request)
+def delete_synthesis(sid: str, u: dict = Depends(require)):
     row = _own_synthesis(u, sid)
     if row["status"] == "running":   # 在途：连带取消队列任务
         for j in db.all(f"SELECT * FROM jobs WHERE payload LIKE ? AND status IN {_ACTIVE_JOBS}",
@@ -1067,10 +1077,9 @@ def delete_synthesis(sid: str, request: Request):
 
 
 @app.get("/api/syntheses/{sid}/progress")
-def synthesis_progress(sid: str, request: Request):
+def synthesis_progress(sid: str, u: dict = Depends(require)):
     """进度轮询专用（仅六字段）——综述运行期 2~6s 一拉，
     detail 全量行含 report_md/evidence/cite_table（0.2~0.7MB），轮询用它纯属浪费。"""
-    u = require(request)
     row = db.one("SELECT id,user_id FROM syntheses WHERE id=?", (sid,))
     if row is None:
         raise HTTPException(404, "综述不存在")
@@ -1081,8 +1090,7 @@ def synthesis_progress(sid: str, request: Request):
 
 
 @app.get("/api/syntheses/{sid}/export")
-def export_synthesis(sid: str, request: Request, fmt: str = "md"):
-    u = require(request)
+def export_synthesis(sid: str, fmt: str = "md", u: dict = Depends(require)):
     row = _own_synthesis(u, sid)
     if fmt == "csv":
         data = (row["matrix_csv"] or "").encode("utf-8-sig")   # BOM：Excel 直接打开不乱码
@@ -1101,12 +1109,10 @@ def export_synthesis(sid: str, request: Request, fmt: str = "md"):
 
 
 @app.get("/api/jobs/count")
-def jobs_count(request: Request):
+def jobs_count(u: dict = Depends(require)):
     """badge 轮询专用：只回 {active, mcp_pending} 两个数字。
     原 ?limit=200 每次拉全量（~70KB）只为数个数，空闲单页 ≈8.6MB/h。"""
-    u = require(request)
-    scope = "" if u["role"] == "admin" else " AND user_id=?"
-    args = () if u["role"] == "admin" else (u["id"],)
+    scope, args = owner_scope(u)
     n = db.one(f"SELECT COUNT(*) AS n FROM jobs WHERE status IN "
                f"{ _ACTIVE_JOBS }{scope}", args)["n"]
     pend = 0
@@ -1119,8 +1125,7 @@ def jobs_count(request: Request):
 
 
 @app.get("/api/jobs/stream")
-def jobs_stream(request: Request):
-    u = require(request)
+def jobs_stream(u: dict = Depends(require)):
     is_admin = u["role"] == "admin"
 
     def gen(q: "queue.Queue") -> Iterator[str]:
@@ -1145,8 +1150,7 @@ def jobs_stream(request: Request):
 
 # ---------------- 用量 ----------------
 @app.get("/api/usage")
-def usage(request: Request):
-    u = require(request)
+def usage(u: dict = Depends(require)):
     is_admin = u["role"] == "admin"
     scope = "" if is_admin else " WHERE user_id=?"
     args = () if is_admin else (u["id"],)
@@ -1162,12 +1166,11 @@ def usage(request: Request):
 
 
 @app.get("/api/me/quota")
-def me_quota(request: Request):
+def me_quota(u: dict = Depends(require)):
     """个人用量自助面板：今日解析配额 / 磁盘占用 / 近 30 天 token。
 
     磁盘为「展示+软提醒」口径（超限由前端警告，不在后端硬拦）。
     """
-    u = require(request)
     overrides = _quota_overrides(u["id"])
     from core import costing
     cost = costing.month_cost(u["id"], overrides)
@@ -1221,12 +1224,9 @@ async def set_my_budget(request: Request):
 
 # ---------------- 管理 ----------------
 @app.post("/api/admin/invite")
-def create_invite(request: Request, days: int = 7):
-    admin = require_admin(request)
+def create_invite(days: int = 7, admin: dict = Depends(require_admin)):
     code = auth.create_invite(admin["id"], days)
-    with db.write() as c:
-        c.execute("INSERT INTO audit_log(user_id,action,detail) VALUES(?,?,?)",
-                  (admin["id"], "create_invite", code))
+    audit(admin["id"], "create_invite", code)
     return {"code": code, "expires_in_days": days}
 
 
@@ -1250,9 +1250,8 @@ def admin_users(request: Request):
 
 
 @app.post("/api/admin/users/{user_id}/reset-password")
-def admin_reset_password(user_id: int, request: Request):
+def admin_reset_password(user_id: int, admin: dict = Depends(require_admin)):
     """admin 重置用户密码：生成一次性临时密码返回（用户登录后自行修改）。"""
-    admin = require_admin(request)
     row = db.one("SELECT id, username FROM users WHERE id=?", (user_id,))
     if row is None:
         raise HTTPException(404, "用户不存在")
@@ -1267,9 +1266,8 @@ def admin_reset_password(user_id: int, request: Request):
 
 
 @app.post("/api/admin/users/{user_id}/disable")
-def admin_disable_user(user_id: int, request: Request):
+def admin_disable_user(user_id: int, admin: dict = Depends(require_admin)):
     """禁用用户：无法登录，已有会话全部吊销。不能禁用自己。"""
-    admin = require_admin(request)
     if user_id == admin["id"]:
         raise HTTPException(400, "不能禁用自己")
     row = db.one("SELECT username, role FROM users WHERE id=?", (user_id,))
@@ -1284,8 +1282,7 @@ def admin_disable_user(user_id: int, request: Request):
 
 
 @app.post("/api/admin/users/{user_id}/enable")
-def admin_enable_user(user_id: int, request: Request):
-    admin = require_admin(request)
+def admin_enable_user(user_id: int, admin: dict = Depends(require_admin)):
     row = db.one("SELECT username FROM users WHERE id=?", (user_id,))
     if row is None:
         raise HTTPException(404, "用户不存在")
@@ -1296,9 +1293,8 @@ def admin_enable_user(user_id: int, request: Request):
 
 
 @app.delete("/api/admin/users/{user_id}")
-def admin_delete_user(user_id: int, request: Request):
+def admin_delete_user(user_id: int, admin: dict = Depends(require_admin)):
     """软删除用户：禁用 + 匿名化用户名（保留其论文归属与统计，可随时恢复 disabled=0）。"""
-    admin = require_admin(request)
     if user_id == admin["id"]:
         raise HTTPException(400, "不能删除自己")
     row = db.one("SELECT username, role FROM users WHERE id=?", (user_id,))
@@ -1403,8 +1399,7 @@ def get_or_create_default_collection(user_id: int) -> str:
 
 
 @app.get("/api/collections")
-def list_collections(request: Request):
-    u = require(request)
+def list_collections(u: dict = Depends(require)):
     vis = "" if u["role"] == "admin" else " AND (p.visibility='shared' OR p.owner_id=?)"
     args = () if u["role"] == "admin" else (u["id"],)
     total = db.one(
@@ -1500,12 +1495,11 @@ def _subtree_ids(cid: str) -> list[str]:
 
 
 @app.delete("/api/collections/{cid}")
-def delete_collection(cid: str, request: Request):
+def delete_collection(cid: str, u: dict = Depends(require)):
     """删除文献库（整个子树）；库内论文一并移入回收站（30 天可恢复）。
 
     member 删含他人共享论文的库 → 403（共享论文的回收是 admin 权限）。
     """
-    u = require(request)
     row = db.one("SELECT owner_id FROM collections WHERE id=?", (cid,))
     if row is None or (row["owner_id"] != u["id"] and u["role"] != "admin"):
         raise HTTPException(404, "文献库不存在")
@@ -1586,15 +1580,10 @@ async def search_api(request: Request):
 
 # ---------------- 图表资产（右栏"图表"页签） ----------------
 @app.get("/api/papers/{paper_id}/assets")
-def paper_assets(paper_id: str, request: Request):
+def paper_assets(paper_id: str, u: dict = Depends(require)):
     """从解析产物提取图表/表格清单：页码、图、题注。"""
-    u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
-    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
-                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    p = _own_paper_or_404(u, paper_id, write=False)
+    run = latest_run(paper_id)
     if run is None:
         return {"figures": [], "tables": [], "formulas": []}
     parse_dir = ingest.PAPERS_DIR / paper_id / "parse" / run["id"]
@@ -1749,23 +1738,15 @@ def paper_assets(paper_id: str, request: Request):
 
 # ---------------- 文献信息（管理器式） ----------------
 @app.get("/api/papers/{paper_id}/references")
-def paper_references(paper_id: str, request: Request):
-    u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+def paper_references(paper_id: str, u: dict = Depends(require)):
+    p = _own_paper_or_404(u, paper_id, write=False)
     from core.meta import get_references
     return {"references": get_references(paper_id)}
 
 
 @app.post("/api/papers/{paper_id}/extract-meta")
-def extract_meta(paper_id: str, request: Request):
-    u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+def extract_meta(paper_id: str, u: dict = Depends(require)):
+    p = _own_paper_or_404(u, paper_id, write=False)
     try:
         from core.meta import extract_meta_llm
         data = extract_meta_llm(u["id"], paper_id)
@@ -1777,8 +1758,7 @@ def extract_meta(paper_id: str, request: Request):
 
 
 @app.get("/api/papers/{paper_id}/notes")
-def get_paper_notes(paper_id: str, request: Request):
-    u = require(request)
+def get_paper_notes(paper_id: str, u: dict = Depends(require)):
     row = db.one("SELECT importance, tags, notes, updated_at FROM paper_notes "
                  "WHERE user_id=? AND paper_id=?", (u["id"], paper_id))
     return dict(row) if row else {"importance": 0, "tags": "", "notes": ""}
@@ -1813,9 +1793,8 @@ def _md_response(md: str, filename: str) -> Response:
 
 
 @app.get("/api/chat/sessions/{session_id}/export")
-def export_session(session_id: str, request: Request):
+def export_session(session_id: str, u: dict = Depends(require)):
     """对话记录导出 Markdown（含引用与证据页码）。"""
-    u = require(request)
     s = db.one("SELECT * FROM chat_sessions WHERE id=?", (session_id,))
     if s is None or (s["user_id"] != u["id"] and u["role"] != "admin"):
         raise HTTPException(404, "会话不存在")
@@ -1945,11 +1924,9 @@ def _own_task(u: dict, tid: str):
 
 
 @app.get("/api/acq-tasks")
-def list_acq_tasks(request: Request):
+def list_acq_tasks(u: dict = Depends(require)):
     from core import acqtask
-    u = require(request)
-    scope = "" if u["role"] == "admin" else " AND user_id=?" 
-    args = () if u["role"] == "admin" else (u["id"],)
+    scope, args = owner_scope(u)
     rows = db.all(
         "SELECT id,title,query,site,status,filters,candidates,paper_ids,synthesis_id,error,"
         "created_at,updated_at FROM acq_tasks WHERE 1=1" + scope +
@@ -1990,8 +1967,7 @@ async def create_acq_task(request: Request):
 
 
 @app.get("/api/acq-tasks/{tid}")
-def get_acq_task(tid: str, request: Request):
-    u = require(request)
+def get_acq_task(tid: str, u: dict = Depends(require)):
     t = _own_task(u, tid)
     # 附带论文的解析进度（综述前置条件可视化）
     ids = t.get("paper_ids") or []
@@ -2054,9 +2030,8 @@ async def select_acq_task(tid: str, request: Request):
 
 
 @app.post("/api/acq-tasks/{tid}/download")
-async def download_acq_task(tid: str, request: Request):
+async def download_acq_task(tid: str, u: dict = Depends(require)):
     """把勾选的候选入队下载（job_type='acquire'）。"""
-    u = require(request)
     t = _own_task(u, tid)
     from core import acqtask
     cands = acqtask.selected_candidates(tid)
@@ -2072,9 +2047,8 @@ async def download_acq_task(tid: str, request: Request):
 
 
 @app.post("/api/acq-tasks/{tid}/synthesize")
-async def synthesize_acq_task(tid: str, request: Request):
+async def synthesize_acq_task(tid: str, u: dict = Depends(require)):
     """专题 → 综述：论文全部解析完成后可发起（专题名作为研究问题先验注入）。"""
-    u = require(request)
     t = _own_task(u, tid)
     ids = t.get("paper_ids") or []
     from core import acqtask, synthesis
@@ -2094,7 +2068,7 @@ async def synthesize_acq_task(tid: str, request: Request):
         c.execute("UPDATE syntheses SET title=? WHERE id=?",
                   (f"{t['title']}（{len(ids)} 篇）", sid))
     acqtask.update(tid, synthesis_id=sid, status="reviewing")
-    batch_id = uuid.uuid4().hex[:12]
+    batch_id = new_batch_id()
     scheduler.enqueue(u["id"], "synthesis", None,
                       {"synthesis_id": sid, "batch_id": batch_id, "topic": t["title"],
                        "task_id": tid},
@@ -2103,9 +2077,8 @@ async def synthesize_acq_task(tid: str, request: Request):
 
 
 @app.delete("/api/acq-tasks/{tid}")
-def delete_acq_task(tid: str, request: Request):
+def delete_acq_task(tid: str, u: dict = Depends(require)):
     """删除专题：论文保留在文库，但清掉溯源引用（避免悬挂 task id）。"""
-    u = require(request)
     _own_task(u, tid)
     with db.write() as c:
         c.execute("DELETE FROM acq_tasks WHERE id=?", (tid,))
@@ -2160,7 +2133,7 @@ async def acquire_import(request: Request):
     overrides = _enforce_parse_quota(u)   # 与上传链路同款：解析配额不能被绕过
     from core import acquire, caj as caj_mod
 
-    batch_id = uuid.uuid4().hex[:12]
+    batch_id = new_batch_id()
     queued, skipped = [], []
     for it in picks:
         url = (it.get("pdf_url") or it.get("url") or "").strip()
@@ -2253,7 +2226,7 @@ async def import_directory(request: Request):
     if len(files) > 100:
         raise HTTPException(400, f"单次最多导入 100 个文件（当前 {len(files)} 个），请分批")
 
-    batch_id = uuid.uuid4().hex[:12]
+    batch_id = new_batch_id()
     queued, skipped = [], []
     for f in files:
         try:
@@ -2365,9 +2338,8 @@ async def mcp_endpoint(request: Request):
 
 
 @app.get("/api/mcp/pending")
-def mcp_pending(request: Request):
+def mcp_pending(u: dict = Depends(require)):
     """待确认的 MCP 写动作（网页「队列」浮层轮询展示）。"""
-    u = require(request)
     from core import mcpserver
     return {"pending": mcpserver.pending_for(u["id"])}
 
@@ -2393,11 +2365,7 @@ async def verify_meta(paper_id: str, request: Request):
     确认后带 {apply: true, candidate} 回传直接写入。
     """
     u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
-    _require_owner(u, p)   # 改写元数据属写操作
+    p = _own_paper_or_404(u, paper_id, write=True)
     try:
         body = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
     except Exception:  # noqa: BLE001
@@ -2417,8 +2385,7 @@ async def verify_meta(paper_id: str, request: Request):
 
 
 @app.get("/api/papers/{paper_id}/journal-rank")
-def paper_journal_rank(paper_id: str, request: Request, force: int = 0):
-    u = require(request)
+def paper_journal_rank(paper_id: str, force: int = 0, u: dict = Depends(require)):
     p = db.one("SELECT id, owner_id, visibility, journal FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
     if p is None:
         raise HTTPException(404, "论文不存在")
@@ -2428,13 +2395,12 @@ def paper_journal_rank(paper_id: str, request: Request, force: int = 0):
 
 
 @app.get("/api/statuses")
-def papers_statuses(request: Request, paper_ids: str = "", limit: int = 0):
+def papers_statuses(paper_ids: str = "", limit: int = 0, u: dict = Depends(require)):
     """论文的 解析/翻译状态 + 每篇 token 用量。
 
     优化: 支持 paper_ids 精确查询（前端按当前视图传）+ 结果缓存 30s
     （库上千篇时全表扫描会拖慢文库页）.
     """
-    u = require(request)
     # 缓存（状态变更频率低，30 秒足够）
     cache_key = f"statuses:{u['role']}:{u['id']}:{paper_ids}:{limit}"
     hit = _status_cache.get(cache_key)
@@ -2464,8 +2430,8 @@ def papers_statuses(request: Request, paper_ids: str = "", limit: int = 0):
     tokens = {r["paper_id"]: r for r in db.all(
         "SELECT paper_id, SUM(prompt_tokens) p, SUM(completion_tokens) c, COUNT(*) calls "
         "FROM llm_calls WHERE paper_id IS NOT NULL"
-        + ("" if u["role"] == "admin" else " AND user_id=?"),
-        () if u["role"] == "admin" else (u["id"],))}
+        + owner_scope(u)[0],
+        owner_scope(u)[1])}
     out = {}
     for p in papers:
         lj = latest.get(p["id"], {})
@@ -2525,11 +2491,9 @@ async def batch_delete_papers(request: Request):
 
 
 @app.post("/api/trash/empty")
-def empty_trash(request: Request):
+def empty_trash(u: dict = Depends(require)):
     """清空回收站（按用户独立）：member 清自己删除的；admin 清全部。"""
-    u = require(request)
-    scope = "" if u["role"] == "admin" else " AND owner_id=?"
-    sargs = () if u["role"] == "admin" else (u["id"],)
+    scope, sargs = owner_scope(u, "owner_id")
     rows = db.all(f"SELECT id FROM papers WHERE deleted_at IS NOT NULL{scope}", sargs)
     from core.jobs import scheduler
     for r in rows:
@@ -2539,9 +2503,8 @@ def empty_trash(request: Request):
 
 # ---------------- 导出下载（原文/双语 PDF·MD·ZIP 组合） ----------------
 @app.get("/api/papers/{paper_id}/download/{fmt}")
-def download_paper(paper_id: str, fmt: str, request: Request, items: str = ""):
+def download_paper(paper_id: str, fmt: str, items: str = "", u: dict = Depends(require)):
     """fmt: pdf(原始PDF) md(原文md) bilingual_md bilingual_pdf zh_pdf en_pdf zip(组合)"""
-    u = require(request)
     p = _get_paper_or_404(paper_id, u)
     from core.exporter import (_zip_base_name, bilingual_md, build_zip, en_md,
                                md_to_pdf, original_md, zh_md)
@@ -2595,13 +2558,9 @@ def download_paper(paper_id: str, fmt: str, request: Request, items: str = ""):
 
 
 @app.get("/api/papers/{paper_id}/download-options")
-def download_options(paper_id: str, request: Request):
+def download_options(paper_id: str, u: dict = Depends(require)):
     """可下载项（依据是否已翻译）。"""
-    u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+    p = _own_paper_or_404(u, paper_id, write=False)
     has_pdf = (ingest.PAPERS_DIR / paper_id / "original.pdf").exists()
     tr = db.one("SELECT COUNT(*) n FROM translations WHERE paper_id=?", (paper_id,))
     translated = bool(tr and tr["n"] > 0)
@@ -2615,17 +2574,12 @@ def download_options(paper_id: str, request: Request):
 
 # ---------------- 索引重建 ----------------
 @app.post("/api/papers/{paper_id}/reindex")
-def reindex_paper(paper_id: str, request: Request):
+def reindex_paper(paper_id: str, u: dict = Depends(require)):
     """重建块结构与检索索引：从已存的 middle.json 重新入库（不占 GPU）+ embedding 回填。
 
     解析产物结构修复后使用（如跨栏续文合并）；也用于换向量模型或索引异常。
     """
-    u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
-    _require_owner(u, p)   # 重建索引会重建 parse_run 结构
+    p = _own_paper_or_404(u, paper_id, write=True)
     try:
         n_blocks, n_chunks = ingest.rebuild_from_stored(paper_id)
         from core.retrieval import invalidate_vec_cache
@@ -2650,13 +2604,8 @@ async def edit_paper_block(paper_id: str, block_id: str, request: Request):
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "文本不能为空")
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
-    _require_owner(u, p)
-    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
-                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    p = _own_paper_or_404(u, paper_id, write=True)
+    run = latest_run(paper_id)
     if run is None:
         raise HTTPException(400, "论文尚未解析完成")
     blk = db.one("SELECT type FROM blocks WHERE paper_id=? AND parse_run_id=? AND block_id=?",
@@ -2688,13 +2637,8 @@ def _cancel_paper_jobs(paper_id: str, job_type: str) -> int:
 
 
 @app.post("/api/papers/{paper_id}/cancel-parse")
-def cancel_parse(paper_id: str, request: Request):
-    u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
-    _require_owner(u, p)   # 取消他人任务属写操作
+def cancel_parse(paper_id: str, u: dict = Depends(require)):
+    p = _own_paper_or_404(u, paper_id, write=True)
     n = _cancel_paper_jobs(paper_id, "parse")
     has_done = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done'", (paper_id,))
     with db.write() as c:
@@ -2707,26 +2651,16 @@ def cancel_parse(paper_id: str, request: Request):
 
 
 @app.post("/api/papers/{paper_id}/cancel-translate")
-def cancel_translate(paper_id: str, request: Request):
-    u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
-    _require_owner(u, p)   # 取消他人任务属写操作
+def cancel_translate(paper_id: str, u: dict = Depends(require)):
+    p = _own_paper_or_404(u, paper_id, write=True)
     return {"canceled": _cancel_paper_jobs(paper_id, "translate")}
 
 
 @app.post("/api/papers/{paper_id}/parse")
-def start_parse(paper_id: str, request: Request):
+def start_parse(paper_id: str, u: dict = Depends(require)):
     """(重新)解析：入队 interactive 任务，新建 parse_run。"""
-    u = require(request)
     is_admin = u["role"] == "admin"
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
-    _require_owner(u, p)   # 重解析会作废旧译文对应关系，仅属主可操作
+    p = _own_paper_or_404(u, paper_id, write=True)
     _enforce_parse_quota(u)
     _cancel_paper_jobs(paper_id, "parse")  # 重解析前清掉在途旧任务
     # URL 导入的论文：从历史任务继承 url（无本地原件）
@@ -2743,9 +2677,8 @@ def start_parse(paper_id: str, request: Request):
 
 
 @app.get("/api/papers/{paper_id}/jobstate")
-def paper_jobstate(paper_id: str, request: Request):
+def paper_jobstate(paper_id: str, u: dict = Depends(require)):
     """论文当前在途任务状态（前端按钮切换依据）。"""
-    u = require(request)
     p = db.one("SELECT id, owner_id, visibility, parse_status FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
     if p is None:
         raise HTTPException(404, "论文不存在")
@@ -2820,12 +2753,11 @@ async def translate_papers(request: Request):
 
 
 @app.get("/api/papers/{paper_id}/cite")
-def paper_cite(paper_id: str, request: Request):
+def paper_cite(paper_id: str, u: dict = Depends(require)):
     """引用文本：一次给出全部样式（GB/T 7714 / APA / MLA / BibTeX）。
 
     前端拿到后本地切换样式、即时预览，不弹窗、不逐次请求。
     """
-    u = require(request)
     p = _get_paper_or_404(paper_id, u)
     from core.cite import STYLES, DEFAULT_STYLE, all_styles, csl_json, CSL_STYLES
     return {
@@ -2839,9 +2771,8 @@ def paper_cite(paper_id: str, request: Request):
 
 # ---------------- 找相关（Semantic Scholar 三模式） ----------------
 @app.get("/api/papers/{paper_id}/discover")
-def paper_discover(paper_id: str, request: Request, mode: str = "rec", limit: int = 20):
+def paper_discover(paper_id: str, mode: str = "rec", limit: int = 20, u: dict = Depends(require)):
     """相关文献发现：rec=相关推荐 / refs=参考文献 / cites=引证。结果带 in_library 标记。"""
-    u = require(request)
     p = _get_paper_or_404(paper_id, u)
     from core import discover as _disc
     try:
@@ -2923,8 +2854,7 @@ async def import_identifier(request: Request):
 
 # ---------------- 命令标签（zotero-gpt 式：问答框上方一键快捷指令） ----------------
 @app.get("/api/cmdtags")
-def get_cmdtags(request: Request):
-    u = require(request)
+def get_cmdtags(u: dict = Depends(require)):
     row = db.one("SELECT value FROM settings WHERE key=?", (f"cmdtags:{u['id']}",))
     try:
         tags = json.loads(row["value"]) if row else []
@@ -3028,16 +2958,11 @@ async def discover_import(request: Request):
 
 
 @app.get("/api/papers/{paper_id}/bilingual")
-def get_bilingual(paper_id: str, request: Request, cache_key: str = "",
-                  offset: int = 0, limit: int = 0):
-    u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+def get_bilingual(paper_id: str, cache_key: str = "",
+                  offset: int = 0, limit: int = 0, u: dict = Depends(require)):
+    p = _own_paper_or_404(u, paper_id, write=False)
     from core.translator import bilingual_pairs, translation_versions
-    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
-                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    run = latest_run(paper_id)
     if run is None:
         return {"pairs": [], "versions": []}
     pairs = bilingual_pairs(paper_id, run["id"], cache_key or None)
@@ -3185,8 +3110,7 @@ async def chat_stream(request: Request):
 
 
 @app.get("/api/chat/sessions")
-def chat_sessions(request: Request, paper_id: str = ""):
-    u = require(request)
+def chat_sessions(paper_id: str = "", u: dict = Depends(require)):
     cond, args = "user_id=?", [u["id"]]
     if paper_id:
         cond += " AND paper_scope LIKE ?"
@@ -3197,8 +3121,7 @@ def chat_sessions(request: Request, paper_id: str = ""):
 
 
 @app.delete("/api/chat/sessions/{session_id}")
-def delete_chat_session(session_id: str, request: Request):
-    u = require(request)
+def delete_chat_session(session_id: str, u: dict = Depends(require)):
     row = db.one("SELECT user_id FROM chat_sessions WHERE id=?", (session_id,))
     if row is None or (row["user_id"] != u["id"] and u["role"] != "admin"):
         raise HTTPException(404, "会话不存在")
@@ -3224,8 +3147,7 @@ async def rename_chat_session(session_id: str, request: Request):
 
 
 @app.get("/api/chat/sessions/{session_id}/messages")
-def chat_messages(session_id: str, request: Request):
-    u = require(request)
+def chat_messages(session_id: str, u: dict = Depends(require)):
     s = db.one("SELECT * FROM chat_sessions WHERE id=?", (session_id,))
     if s is None or (s["user_id"] != u["id"] and u["role"] != "admin"):
         raise HTTPException(404, "会话不存在")
@@ -3236,9 +3158,8 @@ def chat_messages(session_id: str, request: Request):
 
 # ---------------- 导读 ----------------
 @app.post("/api/papers/{paper_id}/summary/stream")
-async def paper_summary_stream(paper_id: str, request: Request):
+async def paper_summary_stream(paper_id: str, u: dict = Depends(require)):
     """流式导读：逐段推送（section 事件即时上屏，done 事件给最终校验版）。"""
-    u = require(request)
     p = db.one("SELECT id, title, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
     if p is None:
         raise HTTPException(404, "论文不存在")
@@ -3308,12 +3229,8 @@ async def paper_summary(paper_id: str, request: Request):
 
 
 @app.get("/api/papers/{paper_id}/summary")
-def get_paper_summary(paper_id: str, request: Request):
-    u = require(request)
-    p = db.one("SELECT id, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
+def get_paper_summary(paper_id: str, u: dict = Depends(require)):
+    p = _own_paper_or_404(u, paper_id, write=False)
     s = summarizer.get_latest(paper_id)
     if s is None:
         return {"summary": None}
