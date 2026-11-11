@@ -839,6 +839,7 @@ async function openPaper(id) {
   const PAGE = 40;
   const dp = $('#discover-pop');
   if (dp) dp.hidden = true;   // 切论文关掉「找相关」浮层，避免新论文配旧数据
+  syncSynBackBtn('reader');   // 从综述证据跳进来时（不经 switchPage）也要更新返回键
   const d = await api(`/api/papers/${id}?offset=0&limit=${PAGE}`);
   state.current = d.paper; state.blocks = d.blocks;
   state._blkTotal = d.total ?? d.blocks.length;
@@ -1461,6 +1462,7 @@ function switchPage(page) {
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
   $('#page-title').textContent = {reader: '阅读', collections: '文库管理', batch: '批量中心',
     tasks: '任务中心', trash: '回收站', settings: '设置'}[page];
+  syncSynBackBtn();
   for (const p of ['reader', 'collections', 'batch', 'tasks', 'trash', 'settings']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
@@ -1468,6 +1470,31 @@ function switchPage(page) {
     trash: renderTrash, settings: renderSettings})[page]?.();
 }
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
+
+/* ---- 从综述跳到论文后的返回路径 ----
+   综述报告里的「主题分组」/ 证据索引点进论文后，需要一键回到原综述界面。
+   state._synBack 记录来源（综述 id + 标题），阅读页顶栏显示「← 返回综述」。 */
+function syncSynBackBtn() {
+  const b = $('#syn-back-btn');
+  if (!b) return;
+  // 只在阅读页显示（综述/文库等页面出现这个按钮会让人误解）
+  const onReader = !!$('#page-reader') && $('#page-reader').style.display !== 'none';
+  const has = !!(state._synBack && state._synBack.sid);
+  b.hidden = !(has && onReader);
+  if (has) b.title = `返回综述：${state._synBack.title || ''}`;
+}
+window.syncSynBackBtn = syncSynBackBtn;
+window.backToSynthesis = async () => {
+  const back = state._synBack;
+  if (!back?.sid) { toast('没有可返回的综述'); return; }
+  switchPage('batch');
+  try {
+    await showSynthesisReport(back.sid);
+  } catch (e) {
+    state._synBack = null; syncSynBackBtn();
+    toast('综述已不存在或无法打开');
+  }
+};
 
 /* ---------------- 任务中心（合并进批量中心 ③ 区块） ----------------
    顶栏「队列」按钮 = 角标提醒；点击跳批量中心任务进度区。批次任务、无批次的
@@ -2260,6 +2287,9 @@ async function showSynthesisReport(sid) {
   let s;
   try { s = (await api('/api/syntheses/' + encodeURIComponent(sid))).synthesis; }
   catch (e) { toast(e.message); return; }
+  // 记录来源：从此页跳到论文后，阅读页顶栏出现「← 返回综述」
+  state._synBack = {sid, title: s.title || ''};
+  syncSynBackBtn();
   let clusters = [];
   try { clusters = JSON.parse(s.clusters || '[]'); } catch { /* ignore */ }
   let evidence = [];
