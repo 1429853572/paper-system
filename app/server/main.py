@@ -3277,6 +3277,31 @@ def presets(request: Request):
 
 
 # ---------------- 导读 ----------------
+@app.post("/api/papers/{paper_id}/summary/stream")
+async def paper_summary_stream(paper_id: str, request: Request):
+    """流式导读：逐段推送（section 事件即时上屏，done 事件给最终校验版）。"""
+    u = require(request)
+    p = db.one("SELECT id, title, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    if p is None:
+        raise HTTPException(404, "论文不存在")
+    _require_visible(u, p)
+
+    def gen() -> Iterator[str]:
+        try:
+            for ev in summarizer.generate_stream(u, paper_id):
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        except NoKeyError as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+        except ValueError as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+        except Exception as e:  # noqa: BLE001
+            log.exception("流式导读失败 %s", paper_id)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200]}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
 @app.post("/api/papers/{paper_id}/summary")
 async def paper_summary(paper_id: str, request: Request):
     u = require(request)

@@ -2559,6 +2559,10 @@ async function watchJobs() {
       else if (['done', 'failed', 'canceled'].includes(ev.status)) delete state.parseProg[ev.paper_id];
       if (JSON.stringify(state.parseProg[ev.paper_id] || null) !== prev) renderPapers();
     }
+    // 导读任务完成 → 重拉并重绘气泡（此前只在生成页轮询，切走或超时就看不到结果）
+    if (ev.job_type === 'summary' && ['done', 'failed', 'canceled'].includes(ev.status)) {
+      refreshSummaryFor(ev.paper_id, ev.status);
+    }
     if (state.current && ev.paper_id === state.current.id && ev.job_type === 'parse' && ev.status === 'done') {
       openPaper(state.current.id);  // 解析完成刷新视图
       loadPapers();
@@ -3048,6 +3052,16 @@ function updateExportBtn() {
 async function renderSumBubble() {
   const el = $('#qa-sum-bubble');
   if (!el) return;
+  if (state._sumStreaming) {           // 流式进行中：渲染已累积的段落（DOM 可能被重建过）
+    const got = (state._sumStreamState && state._sumStreamState.got) || {};
+    el.innerHTML = (state._sumHead || '') +
+      '<div class="msg assistant"><div class="bubble" style="width:100%">' +
+      `<b class="sum-toggle" data-sum-toggle title="点击展开/收起导读">${icon('copy')} 导读（生成中…）<span class="sum-arrow">▾</span></b>` +
+      Object.entries(got).map(([k, v]) =>
+        `<div class="summary-sec"><h3>${SUMMARY_NAMES[k] || k}</h3><div class="summary-body">${mdLite(v)}</div></div>`).join('') +
+      '</div></div>';
+    return;
+  }
   const pid = [...state.qaPapers][0] || state.current?.id;
   if (!pid) { el.innerHTML = ''; return; }
   const paper = (state.qaAllPapers || state.papers).find(x => x.id === pid) || state.current || {};
@@ -3072,30 +3086,120 @@ async function renderSumBubble() {
 }
 window.genSumBubble = async pid => {
   const el = $('#qa-sum-bubble');
-  el.innerHTML = (state._sumHead || '') + "<div class=\"msg assistant\"><div class=\"bubble\">" + icon('clock', 12) + " 导读生成中…（全文直读，任务中心可取消）</div></div>";
+  el.innerHTML = (state._sumHead || '') + "<div class=\"msg assistant\"><div class=\"bubble\">" + icon('clock', 12) + " 导读生成中…（全文直读，逐段显示）</div></div>";
+  // 流式优先：逐段上屏（用户不用等整篇生成完）
+  state._sumStreaming = pid;
+  try {
+    const streamed = await streamSummary(pid, el);
+    if (streamed) return;
+  } catch (e) {
+    // 流式不可用 → 回退队列模式（任务中心可见进度）
+    console.warn('流式导读失败，回退队列：', e);
+  } finally {
+    state._sumStreaming = null;
+  }
   try {
     const d = await api(`/api/papers/${pid}/summary`, {method: 'POST',
       body: JSON.stringify({session_id: state.qaSession, async: true})});
     const jobId = d.job_id;
-    for (let i = 0; i < 150; i++) {          // 轮询任务状态（导读单并发，排队可能较久）
+    state._sumPending = state._sumPending || {};
+    state._sumPending[pid] = jobId;
+    // 轮询不因切换论文中断——生成在后台跑完，切回来直接显示（此前切走即 return，
+    // 任务中心显示「完成」但气泡仍是旧内容，只能手动刷新）
+    for (let i = 0; i < 300; i++) {          // 最多 10 分钟（导读单并发，排队可能久）
       await new Promise(r => setTimeout(r, 2000));
-      if (state.current?.id !== pid) return;   // 已切到别的论文 → 停止轮询
       const js = await api(`/api/jobs/${jobId}`).catch(() => null);
       if (!js) continue;
-      if (js.status === 'done') break;
+      if (js.status === 'done') { await refreshSummaryFor(pid, 'done', true); return; }
       if (js.status === 'failed') throw new Error(js.error || '生成失败');
-      if (js.status === 'canceled') { el.innerHTML = (state._sumHead || '') + '<p class="muted">导读生成已取消。</p>'; return; }
+      if (js.status === 'canceled') {
+        delete state._sumPending[pid];
+        if (state.current?.id === pid)
+          el.innerHTML = (state._sumHead || '') + '<p class="muted">导读生成已取消。</p>';
+        return;
+      }
     }
-    const d2 = await api(`/api/papers/${pid}/summary`);
-    if (d2.session_id) state.qaSession = d2.session_id;
-    state._sumCache = state._sumCache || {};
-    state._sumCache[pid] = d2;
-    drawSummary(d2, pid, '#qa-sum-bubble', true);
-    toast('导读已生成，并存入当前会话');
+    // 超时未完成：后台继续跑，完成后由 SSE 事件补渲染
+    el.innerHTML = (state._sumHead || '') + `<div class="msg assistant"><div class="bubble">
+      导读仍在生成（队列中）——完成后会自动显示，也可到「任务中心」查看进度</div></div>`;
   } catch (e) {
     el.innerHTML = (state._sumHead || '') + `<div class="msg assistant"><div class="bubble">生成失败: ${esc(e.message)} <button class="btn small" onclick="genSumBubble('${pid}')">重试</button></div></div>`;
   }
 }
+
+/* 流式导读：POST /summary/stream，逐段解析 SSE → 即时上屏。
+   返回 true=流式成功；false=服务端不支持/无产出（调用方回退队列模式）。 */
+async function streamSummary(pid, el) {
+  const res = await fetch(`/api/papers/${pid}/summary/stream`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: state.qaSession}),
+  });
+  if (!res.ok || !res.body) return false;
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  const got = {};
+  let final = null;
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream: true});
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const chunk = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const line = chunk.split('\n').find(l => l.startsWith('data:'));
+      if (!line) continue;
+      let ev;
+      try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      if (ev.type === 'section') {
+        got[ev.key] = ev.content;
+        // 即时上屏：已完成的段落渲染出来（引用先按原文显示，done 后用校验版覆盖）
+        // 注意：renderQaUI 会整体重建 dock body（气泡节点被替换）——故状态驱动、每次重渲染
+        state._sumStreamState = {pid, got: {...got}};
+        renderSumBubble();
+      } else if (ev.type === 'done') {
+        final = ev;
+      } else if (ev.type === 'error') {
+        throw new Error(ev.message || '生成失败');
+      }
+    }
+  }
+  if (!final) return false;
+  state._sumStreamState = null;
+  const summary = {sections: final.sections, evidence: final.evidence, cite_map: final.cite_map};
+  state._sumCache = state._sumCache || {};
+  state._sumCache[pid] = {summary};
+  delete (state._sumPending || {})[pid];
+  drawSummary(summary, pid, '#qa-sum-bubble', true);   // drawSummary 收 summary 本体
+  toast('导读已生成');
+  return true;
+}
+window.streamSummary = streamSummary;
+
+/* 导读完成/失败后的统一处理：重拉 → 写缓存 → 若正在看该论文则重绘气泡 */
+async function refreshSummaryFor(pid, status, silent) {
+  if (!pid) return;
+  if (status !== 'done') {
+    delete (state._sumPending || {})[pid];
+    if (state.current?.id === pid && !silent) {
+      const el = $('#qa-sum-bubble');
+      if (el) el.innerHTML = (state._sumHead || '') +
+        `<div class="msg assistant"><div class="bubble">导读生成${status === 'failed' ? '失败' : '已取消'}。</div></div>`;
+    }
+    return;
+  }
+  try {
+    const d = await api(`/api/papers/${pid}/summary`);
+    if (!d || !d.summary) return;
+    state._sumCache = state._sumCache || {};
+    state._sumCache[pid] = d;
+    delete (state._sumPending || {})[pid];
+    if (state.current?.id === pid) drawSummary(d.summary, pid, '#qa-sum-bubble', true);  // 同上：传 summary 本体
+    if (!silent) toast('导读已生成');
+  } catch { /* ignore */ }
+}
+window.refreshSummaryFor = refreshSummaryFor;
 
 /* ---- 上下分栏：拖动调占比；问答可整体关闭/重开回默认位 ---- */
 state.rpane = { top: parseFloat(localStorage.getItem('ps-rpane-top') || '55'), readingView: 'orig', split: true };
@@ -4305,11 +4409,12 @@ async function renderAssets() {
    不再在底部铺一长串证据列表——那是各字段引用的并集，纯噪音。 */
 function drawSummary(s, pid, target = '#content-view', asBubble = false) {
   const t = $(target);
-  const sec = Object.entries(s.sections || {});
+  const sec = Object.entries(s.sections || {}).filter(([k]) => k !== 'followups');   // followups 走追问按钮，不作章节卡
   const evById = new Map((s.evidence || []).map(e => [String(e.evidence_id), e]));
   const citeMap = s.cite_map || {};
   const secHtml = sec.map(([k, v]) => {
     const local = citeMap[k] || {};
+    // 编号由后端跨字段连续分配（整篇 [1][2][3]…），此处只做可点击渲染
     const html = mdLite(v).replace(/\[(\d{1,3})\]/g, (m, n) => {
       const gid = local[n];
       const ev = gid != null ? evById.get(String(gid)) : null;
@@ -4820,7 +4925,11 @@ const FOLLOWUP_QS = {
   limitations: '论文承认的局限有哪些？有什么可能的改进方向？',
 };
 function followupButtons(sections) {
-  const qs = Object.keys(sections || {}).map(k => FOLLOWUP_QS[k]).filter(Boolean).slice(0, 5);
+  // 模型生成的 followups（每篇内容定制）优先；缺失时回退通用模板
+  const custom = (sections?.followups || '').split(/\n|；|;/).map(x => x.replace(/^[-*\d.、)\s]+/, '').trim())
+    .filter(x => x.length >= 6).slice(0, 3);
+  const qs = custom.length ? custom
+    : Object.keys(sections || {}).map(k => FOLLOWUP_QS[k]).filter(Boolean).slice(0, 5);
   if (!qs.length) return '';
   return `<div class="followups"><span class="muted" style="font-size:12px">${icon('chat')} 可以接着问：</span>` +
     qs.map(q => `<button class="chip chip-q" onclick="askPreset('${jsArg(q)}')">${esc(q)}</button>`).join('') +

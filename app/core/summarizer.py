@@ -21,7 +21,23 @@ SECTIONS = [
     ("ablation", "Ablation", "消融设置和具体结果"),
     ("complexity", "Complexity", "时间、显存、模型规模"),
     ("limitations", "Limitations", "论文明确承认的限制"),
+    ("followups", "Followups", "针对本文的 2-3 个具体追问（供读者继续深挖）"),
 ]
+
+# 流式生成用：每段以 <<<key>>> 开头（比 JSON 更适合增量解析，模型也不易加围栏跑偏）
+_PROMPT_STREAM = (
+    "你是论文导读引擎。依据提供的论文全文材料，逐段输出结构化导读。\n"
+    "【输出格式】每段先写 <<<字段名>>> 再写内容，字段名只能是："
+    + "、".join(k for k, _, _ in SECTIONS) + "。\n"
+    "示例：\n<<<problem>>>\n本文针对……\n<<<core_idea>>>\n我们提出……\n"
+    "规则：\n"
+    "1. 每个字段内容简洁（2-5 句），中文（术语保留英文）\n"
+    "2. 每条论断末尾标注证据 [n]，n 为材料中行首 [n] 编号；材料未覆盖的字段如实写\"文中未明确提及\"\n"
+    "3. 实验数据引用原始表格数值；重要结果只在曲线图中时写\"（曲线图数据，需视觉理解）\"不臆造\n"
+    "4. limitations 只写论文明确承认的局限\n"
+    "5. [n] 必须标注在该论断真正来源的行上；实验数值只能来自所标证据行\n"
+    "6. followups 给 2-3 个**针对本文具体内容**的追问（能用本文内容作答），不得是通用问题"
+)
 
 _PROMPT = (
     "你是论文导读引擎。依据提供的论文全文材料，按以下 JSON 模板输出导读。\n"
@@ -34,7 +50,9 @@ _PROMPT = (
     "1. 每个字段内容简洁（2-5 句），中文（术语保留英文）\n"
     "2. 每条论断末尾标注证据 [n]，n 为材料中行首 [n] 编号；材料中未覆盖的字段如实写\"文中未明确提及\"\n"
     "3. 实验数据引用原始表格数值；若重要结果只在曲线图中，写\"（曲线图数据，需视觉理解）\"不臆造数值\n"
-    "4. Limitations 只写论文明确承认的局限\n5. [n] 必须标注在该论断真正来源的行上；实验数值只能来自所标证据行，不得凭记忆配对"
+    "4. Limitations 只写论文明确承认的局限\n5. [n] 必须标注在该论断真正来源的行上；实验数值只能来自所标证据行，不得凭记忆配对\n"
+    "6. followups 字段给 2-3 个**针对本文具体内容**的追问（要能用本文内容作答，"
+    "例如「本文的 XX 模块为什么必须用 YY 而不是 ZZ？」），不得是放之四海皆准的通用问题"
 )
 
 
@@ -62,6 +80,24 @@ def _unwrap_json_text(text: str) -> dict | None:
         return data if isinstance(data, dict) else None
     except ValueError:
         return None
+
+
+_MARK_RE = None
+
+
+def parse_marked_sections(text: str) -> dict:
+    """解析 <<<key>>> 分段格式 → {key: content}（非标记格式返回 {}）。"""
+    import re as _re
+    global _MARK_RE
+    if _MARK_RE is None:
+        keys = "|".join(_re.escape(k) for k, _, _ in SECTIONS)
+        _MARK_RE = _re.compile(r"<<<\s*(" + keys + r")\s*>>>", _re.I)
+    out: dict[str, str] = {}
+    marks = list(_MARK_RE.finditer(text or ""))
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        out[m.group(1).lower()] = text[m.end():end].strip()
+    return out
 
 
 _KEY_RE = None
@@ -233,6 +269,9 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
     if not by_key:
         raise RuntimeError("导读生成失败：模型未返回有效内容，请重试")
 
+def _postprocess(by_key: dict, evidence: list, run_id: str, cfg, user_id: int,
+                  paper_id: str, truncated: bool = False) -> tuple[int, dict]:
+    """接地校验 + 跨字段连续编号 + 落库（非流式与流式共用）。"""
     # ---- 数字接地校验（防张冠李戴）：content 中每个 [n] 引用，检查其窗口内
     # 的数字是否真的出现在证据 n 的原文里；不在 → 自动改指到包含这些数字的
     # 证据行；找不到 → 移除该引用（宁缺毋错）。
@@ -273,20 +312,24 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
     # 顺序重新编号 1..N，cite_map 记录 字段 → 局部编号 → 全局 evidence_id，
     # 前端据此把 [n] 渲染成可悬停/可跳转的小标。 ----
     cite_map: dict[str, dict[str, int]] = {}
+    counter = [0]                 # 跨字段共享 → 整篇连续编号（读者能顺着 [1][2][3] 读下来）
+    global_num: dict[int, int] = {}   # gid → 已分配的编号（同一证据复用）
     for k, v in by_key.items():
         local: dict[str, int] = {}
-        counter = [0]
 
         def _renum(m):
             gid = int(m.group(1))
             if gid not in ev_map:
                 return ""                       # 死引用 → 去掉
-            for i, g in local.items():
-                if g == gid:
-                    return f"[{i}]"
+            if gid in global_num:
+                n = global_num[gid]
+                local[str(n)] = gid
+                return f"[{n}]"
             counter[0] += 1
-            local[str(counter[0])] = gid
-            return f"[{counter[0]}]"
+            n = counter[0]
+            global_num[gid] = n
+            local[str(n)] = gid
+            return f"[{n}]"
 
         by_key[k] = _re.sub(r"\[(\d+)\]", _renum, v)
         cite_map[k] = local
@@ -294,7 +337,7 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
     used_ids = {gid for local in cite_map.values() for gid in local.values()}
     evidence_out = [e for e in evidence if e["evidence_id"] in used_ids]
 
-    cache_key = compute_key(run["id"], cfg.model)
+    cache_key = compute_key(run_id, cfg.model)
     # 证据一并落库：导读重新加载后引用仍可点击跳转（此前只存 sections，
     # 刷新页面后 [n] 变成死文本、下方证据列表也消失）。
     with db.write() as c:
@@ -304,12 +347,112 @@ def generate(user: dict, paper_id: str, model: str | None = None) -> tuple[int, 
              json.dumps({"sections": by_key, "evidence": evidence_out, "cite_map": cite_map,
                         "truncated": truncated},
                         ensure_ascii=False),
-             cfg.model, user["id"]),
+             cfg.model, user_id),
         )
         sid = cur.lastrowid
     return sid, {"sections": by_key, "sections_global": by_key_global,
                  "evidence": evidence_out, "cite_map": cite_map,
                  "model": cfg.model}
+
+
+    return _postprocess(by_key, evidence, run["id"], cfg, user["id"], paper_id, truncated)
+
+
+def generate_stream(user: dict, paper_id: str, model: str | None = None):
+    """流式生成导读：逐段 yield 事件，完成后落地（含接地校验与连续编号）。
+
+    事件：
+      {"type": "section", "key": k, "content": v}  —— 一段写完（前端即时上屏）
+      {"type": "done", "sections":…, "evidence":…, "cite_map":…}
+      {"type": "error", "message": …}
+    """
+    import re as _re
+    from .llm import resolve_llm
+    from .qa import _build_context
+    cfg = resolve_llm(user["id"], "chat")
+    p = db.one("SELECT id, title FROM papers WHERE id=?", (paper_id,))
+    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
+                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+    if p is None or run is None:
+        raise ValueError("论文尚未解析完成")
+    paper = {"id": p["id"], "title": p["title"]}
+    # 缓存命中：直接回放已有导读（不重复全文 LLM 调用）
+    ck = compute_key(run["id"], cfg.model)
+    cached = db.one("SELECT id, content FROM summaries WHERE paper_id=? AND cache_key=? "
+                    "ORDER BY id DESC LIMIT 1", (paper_id, ck))
+    if cached:
+        try:
+            data = json.loads(cached["content"])
+            yield {"type": "done", "sections": data.get("sections", {}),
+                   "evidence": data.get("evidence", []), "cite_map": data.get("cite_map", {}),
+                   "cached": True, "model": cfg.model}
+            return
+        except Exception:  # noqa: BLE001 —— 缓存损坏则重新生成
+            pass
+    context, evidence, _ = _build_context("fulltext", [paper], "summary", user)
+    from .llm import LLMClient
+    client = LLMClient(cfg, user_id=user["id"], paper_id=paper_id)
+    messages = [{"role": "system", "content": _PROMPT_STREAM},
+                {"role": "user", "content": context}]
+    keys = "|".join(_re.escape(k) for k, _, _ in SECTIONS)
+    marks = _re.compile(r"<<<\s*(" + keys + r")\s*>>>", _re.I)
+
+    buf = ""
+    cur_key = None
+    cur_parts: list[str] = []
+    lead = ""              # 第一个标记前的说明文字（并入首段）
+    sections: dict[str, str] = {}
+
+    def _emit(key, content):
+        content = (content or "").strip()
+        if not content or key in sections:
+            return None
+        sections[key] = content
+        return {"type": "section", "key": key, "content": content}
+
+    try:
+        for delta in client.stream(messages, max_tokens=6144):
+            buf += delta
+            while True:
+                mk = marks.search(buf)
+                if not mk:
+                    break
+                seg = buf[:mk.start()]
+                if cur_key:
+                    ev = _emit(cur_key, "".join(cur_parts) + seg)
+                    if ev:
+                        yield ev
+                    cur_parts = []
+                elif seg.strip():
+                    lead = seg.strip()
+                cur_key = mk.group(1).lower()
+                buf = buf[mk.end():]
+        if cur_key:
+            ev = _emit(cur_key, "".join(cur_parts) + buf)
+            if ev:
+                yield ev
+        elif buf.strip():
+            ev = _emit("problem", buf)
+            if ev:
+                yield ev
+    except Exception as e:  # noqa: BLE001
+        yield {"type": "error", "message": str(e)[:300]}
+        return
+
+    if not sections:
+        yield {"type": "error", "message": "模型未返回有效内容，请重试"}
+        return
+    if lead and sections:
+        first = next(iter(sections))
+        sections[first] = lead + "\n" + sections[first]
+    try:
+        sid, payload = _postprocess(sections, evidence, run["id"], cfg, user["id"], paper_id)
+    except Exception as e:  # noqa: BLE001
+        yield {"type": "error", "message": str(e)[:300]}
+        return
+    yield {"type": "done", "sections": payload["sections"],
+           "evidence": payload["evidence"], "cite_map": payload["cite_map"],
+           "summary_id": sid, "model": cfg.model}
 
 
 # ================= 分层摘要（两段式问答用） =================
