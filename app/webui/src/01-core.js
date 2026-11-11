@@ -268,6 +268,8 @@ const ICONS = {
   check: '<path d="M3 8.5l3.2 3.2L13 4.5"/>',
   clock: '<circle cx="8" cy="8" r="5.5"/><path d="M8 4.5V8l2.5 1.5"/>',
   globe: '<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c2.3 2.8 2.3 8.2 0 11-2.3-2.8-2.3-8.2 0-11z"/>',
+  download: '<path d="M8 2.5v7.5M4.5 6.5L8 10l3.5-3.5M3 13.5h10"/>',
+  pause: '<path d="M5.5 3v10M10.5 3v10"/>',
   play: '<path d="M5.5 3.5v9l7-4.5z"/>',
   stop: '<rect x="4" y="4" width="8" height="8" rx="1.5"/>',
   copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5h-7v7"/>',
@@ -319,7 +321,7 @@ function renderHealthPop() {
   const h = state.health || {};
   const row = (name, okv, extra = '') =>
     `<div class="hp-row"><span class="hp-dot ${okv ? 'ok' : 'bad'}"></span>${name}` +
-    (extra ? ` <span class="muted" style="font-size:11px">${esc(extra)}</span>` : '') + `</div>`;
+    (extra ? ` <span class="muted" style="font-size: var(--fs-xs)">${esc(extra)}</span>` : '') + `</div>`;
   pop.innerHTML =
     `<div class="hp-head">服务状态 <button class="btn small" id="hp-recheck">${icon('retry')} 重新检测</button></div>` +
     row('数据库', h.db) +

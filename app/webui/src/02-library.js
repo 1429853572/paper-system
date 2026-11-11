@@ -32,7 +32,7 @@ function renderCollections() {
     const desc = colDescendants(c.id);
     const active = selected || desc.includes(state.currentCollection);
     return `<div class="col-item ${active ? 'on' : ''}" data-id="${c.id}" style="padding-left:${8 + depth * 14}px">
-      ${kids.length ? `<span class="col-arrow ${open ? '' : 'closed'}" data-toggle="${c.id}">${open ? icon('chevD') : icon('chevR')}</span>` : '<span class="col-arrow-none"></span>'}
+      ${kids.length ? `<span class="col-arrow" data-toggle="${c.id}">${open ? icon('chevD') : icon('chevR')}</span>` : '<span class="col-arrow-none"></span>'}
       <span class="col-name">${icon('folder')} ${esc(c.name)}</span>
       <span class="col-count">${c.papers_total ?? c.papers ?? 0}</span>
       <button class="col-del" title="删除文献库">${icon('close')}</button>
@@ -53,7 +53,7 @@ function renderCollections() {
       <span class="col-arrow-none"></span><span class="col-name">${icon('inbox')} 未分库</span>
       <span class="col-count">${unassigned}</span></div>` : '') +
     sharedLibs.map(l => `<div class="col-item ${state.currentCollection === l.id ? 'on' : ''}" data-id="${l.id}">
-      <span class="col-arrow-none"></span><span class="col-name">${icon('folder')} ${esc(l.name)} <span class="muted" style="font-size:10px">共享</span></span>
+      <span class="col-arrow-none"></span><span class="col-name">${icon('folder')} ${esc(l.name)} <span class="muted" style="font-size: var(--fs-xs)">共享</span></span>
       <span class="col-count">${l.papers}</span></div>`).join('') +
     `<button class="col-new" id="col-new">${icon('plus')} 新建文献库</button>
      <div class="col-new-form" id="col-new-form" hidden>
@@ -148,7 +148,7 @@ async function renderContentSearch() {
         return `<div class="paper-item" data-id="${h.paper_id}" data-page="${h.page_index}">
           <div class="info"><div class="name">${esc(p.title || h.paper_id)}</div>
           <div class="meta">${icon('doc')} 第${h.page_index + 1}页</div>
-          <div class="muted" style="font-size:11px;padding:2px 0">${esc(h.text.slice(0, 90))}</div></div></div>`;
+          <div class="muted" style="font-size: var(--fs-xs);padding:2px 0">${esc(h.text.slice(0, 90))}</div></div></div>`;
       }).join('');
     $$('.paper-item', el).forEach(item => item.onclick = async () => {
       await openPaper(item.dataset.id);
@@ -179,7 +179,7 @@ async function loadPapers(append = false) {
   renderPapers();
 }
 function statusBadge(p) {  if (p.deleted_at) return '<span class="badge err">回收站</span>';
-  if (p.parse_status === 'skipped') return '<span class="badge priv" title="超页数上限未自动解析，可手动重解析">已跳过</span>';
+  if (p.parse_status === 'skipped') return '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">已跳过</span>';
   if (p.parse_status === 'pending') return '<span class="badge run">排队中</span>';
   if (p.parse_status === 'parsing') {
     const pr = (state.parseProg || {})[p.id];
@@ -211,8 +211,8 @@ function renderPapers() {
       </div>
     </div>`).join('');
   if (!state.papers.length && !ups) {
-    el.innerHTML = `<div class="muted" style="padding:24px;text-align:center">
-      <p style="font-size:14px;margin-bottom:10px">这里还没有论文</p>
+    el.innerHTML = `<div class="empty-state">
+      <p class="t">这里还没有论文</p>
       <p style="margin-bottom:14px">把 PDF 拖到这里，或从下方入口导入（也支持 DOI / arXiv / BibTeX）</p>
       <button class="btn primary" onclick="document.querySelector('#upload-arrow')?.click()">${icon('upload')} 上传第一篇</button>
       <button class="btn" onclick="document.querySelector('#upload-arrow')?.click(); setTimeout(()=>document.querySelector('#ident-input')?.focus(), 200)">粘贴 DOI 导入</button>
@@ -370,7 +370,7 @@ $('#dir-btn').onclick = async () => {
     await loadImportDirs();
     await refreshLib();
   } catch (e) { toast(quotaTip('目录导入失败: ' + e.message), 5000); }
-  btn.disabled = false; btn.textContent = '📁 目录导入';
+  btn.disabled = false; btn.innerHTML = icon('folder') + ' 目录导入';
 };
 loadImportDirs();
 /* 解析过滤器（llm4z 式：页数上限 + 文件名排除；服务端上传时执行，设置跟随账号） */

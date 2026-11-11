@@ -14,8 +14,8 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
         <div class="qa-pick-head">添加参与问答的论文 <span class="muted">2 篇以上自动对比 · 已选 <b id="qa-pick-count">0</b></span>
         <button class="btn small" id="qa-pick-close" title="收起（Esc / 点面板外也可关）">${icon('close')}</button></div>
         <div class="qa-pick-tools">
-          <input id="qa-pick-filter" placeholder="搜索标题…" style="font-size:12px">
-          <select id="qa-pick-sort" title="组内排序" style="font-size:12px;width:auto;flex:none">
+          <input id="qa-pick-filter" placeholder="搜索标题…" style="font-size: var(--fs-sm)">
+          <select id="qa-pick-sort" title="组内排序" style="font-size: var(--fs-sm);width:auto;flex:none">
             <option value="recent">最近添加</option>
             <option value="title">标题 A-Z</option>
             <option value="year">年份（新→旧）</option>
@@ -35,7 +35,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       <div id="qa-msg-list"></div>
     </div>
     <div class="qa-quote" id="qa-quote" hidden>
-      <span class="muted" style="font-size:11px">${icon('quote', 12)} 引用</span>
+      <span class="muted" style="font-size: var(--fs-xs)">${icon('quote', 12)} 引用</span>
       <div class="qa-quote-text" id="qa-quote-text"></div>
       <button class="btn small" id="qa-quote-clear" title="移除引用">${icon('close')}</button>
     </div>
@@ -156,7 +156,7 @@ async function renderSumBubble() {
   const paper = (state.qaAllPapers || state.papers).find(x => x.id === pid) || state.current || {};
   const title = paper.title || pid;
   const multi = state.qaPapers.size > 1;
-  state._sumHead = multi ? `<div class="muted" style="font-size:11px;margin-bottom:4px">已选 ${state.qaPapers.size} 篇 · 导读针对第一篇</div>` : '';
+  state._sumHead = multi ? `<div class="muted" style="font-size: var(--fs-xs);margin-bottom:4px">已选 ${state.qaPapers.size} 篇 · 导读针对第一篇</div>` : '';
   const cached = state._sumCache?.[pid];
   if (cached) { drawSummary(cached.summary, pid, '#qa-sum-bubble', true); return; }
   const d = await api(`/api/papers/${pid}/summary`).catch(() => null);
@@ -344,7 +344,7 @@ async function renderSessList() {
       </div>
       <button class="btn small" onclick="event.stopPropagation();renameSess('${x.id}', '${jsArg(x.title || '')}')" title="重命名">${icon('edit', 12)}</button>
       <button class="btn small danger" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>
-    </div>`).join('') : '<p class="muted" style="padding:8px">当前范围还没有会话</p>';
+    </div>`).join('') : '<div class="empty-note">当前范围还没有会话</div>';
 }
 window.switchSess = async sid => {
   state.qaSession = sid;
@@ -488,7 +488,7 @@ function renderPickList(filter) {
       <div class="qa-pick-group" data-g="${esc(g.id)}">
         <div class="qa-pick-ghead" data-g="${esc(g.id)}">
           <span>${icon('folder')} ${esc(g.name)}</span>
-          <span class="muted" style="font-size:11px">${selN ? `<b class="qp-sel">${selN} 已选</b> · ` : ''}${g.papers.length} 篇 <span class="qp-caret ${isOpen ? 'open' : ''}">${icon('chevD')}</span></span>
+          <span class="muted" style="font-size: var(--fs-xs)">${selN ? `<b class="qp-sel">${selN} 已选</b> · ` : ''}${g.papers.length} 篇 <span class="qp-caret ${isOpen ? 'open' : ''}">${icon('chevD')}</span></span>
         </div>
         <div class="qa-pick-gbody" ${isOpen ? '' : 'hidden'}>${g.papers.map(item).join('')}</div>
       </div>`;}).join('')
@@ -563,7 +563,7 @@ function sendQa() {
   state._histIdx = null;
   const quote = state.qaQuote || '';
   $('#qa-msg-list').insertAdjacentHTML('beforeend',
-    `<div class="msg user"><div class="bubble">${quote ? '<div class="muted" style="font-size:11px;border-left:2px solid #c9d2ee;padding-left:6px;margin-bottom:4px">' + icon('quote', 12) + ' ' + esc(quote.split('\n> ')[1]?.slice(0, 80) || '') + '…</div>' : ''}${esc(text)}</div></div>
+    `<div class="msg user"><div class="bubble">${quote ? '<div class="muted" style="font-size: var(--fs-xs);border-left:2px solid #c9d2ee;padding-left:6px;margin-bottom:4px">' + icon('quote', 12) + ' ' + esc(quote.split('\n> ')[1]?.slice(0, 80) || '') + '…</div>' : ''}${esc(text)}</div></div>
      <div class="msg assistant"><div class="bubble" id="qa-live">…</div></div>`);
   const live = $('#qa-live'); live.id = '';
   clearQuote();
@@ -598,7 +598,7 @@ function sendQa() {
           if (origin) live.insertAdjacentHTML('beforeend',
             `<div class="evo-line">证据来源: ${origin}</div>`);
           if (ev.citations?.illegal?.length) toast('⚠ 部分引用编号无效: ' + ev.citations.illegal.join(','));
-          if (ev.truncated) live.insertAdjacentHTML('beforeend', "<div class=\"muted\" style=\"font-size:11px;margin-top:6px\">" + icon('warn') + " 内容过长，已启用检索取证模式</div>");
+          if (ev.truncated) live.insertAdjacentHTML('beforeend', "<div class=\"muted\" style=\"font-size: var(--fs-xs);margin-top:6px\">" + icon('warn') + " 内容过长，已启用检索取证模式</div>");
         }
       }
     }
@@ -639,7 +639,7 @@ function renderCmdTags(el) {
   const all = [...BUILTIN_TAGS, ...state.cmdtags.map(t => ({...t, custom: true}))];
   el.innerHTML = all.map(t =>
     `<button class="cmdtag" data-tag="${esc(t.id)}" title="${esc(t.prompt || t.prefill || '')}（长按编辑）">${esc(t.label)}</button>`
-  ).join('') + '<button class="cmdtag add" id="cmdtag-add" title="新建自定义标签">＋</button>';
+  ).join('') + '<button class="cmdtag add" id="cmdtag-add" title="新建自定义标签">' + icon('plus', 12) + '</button>';
   $$('.cmdtag[data-tag]', el).forEach(b => {
     const tag = all.find(t => t.id === b.dataset.tag);
     let press = 0, longFired = false;
@@ -799,7 +799,7 @@ async function translateSelection(text) {
   const card = Object.assign(document.createElement('div'), {className: 'sel-result', id: 'sel-result'});
   card.innerHTML = `<div class="sr-head"><b>译文</b><span class="spacer"></span>
     <button class="btn small" data-copy>复制</button>
-    <button class="btn small" data-close>✕</button></div>
+    <button class="btn small" data-close title="关闭">${icon('close')}</button></div>
     <div class="sr-body">翻译中…</div>`;
   document.body.appendChild(card);
   card.querySelector('[data-close]').onclick = () => card.remove();

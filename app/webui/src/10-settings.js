@@ -25,7 +25,7 @@ async function renderSettings(tab) {
         <label>API 地址 <input name="base_url" value="${esc(conf.base_url)}" placeholder="https://open.bigmodel.cn/api/anthropic"></label>
         <label>模型 <input name="model" value="${esc(conf.model)}" placeholder="glm-4.7"></label>
         <label>协议 <select name="api_type"><option value="anthropic" ${(conf.api_type || (conf.base_url.includes('anthropic') ? 'anthropic' : 'openai')) === 'anthropic' ? 'selected' : ''}>anthropic</option><option value="openai" ${(conf.api_type || (conf.base_url.includes('anthropic') ? 'anthropic' : 'openai')) !== 'anthropic' ? 'selected' : ''}>openai</option></select></label>
-        <label>API Key ${conf.configured ? '<span class="muted" style="font-size:11px">已保存（留空不变）</span>' : ''} <input name="api_key" type="password" placeholder="${conf.configured ? '••••••（输入可更换）' : '粘贴 API Key'}"></label>
+        <label>API Key ${conf.configured ? '<span class="muted" style="font-size: var(--fs-xs)">已保存（留空不变）</span>' : ''} <input name="api_key" type="password" placeholder="${conf.configured ? '••••••（输入可更换）' : '粘贴 API Key'}"></label>
         <div class="set-actions">
           <button class="btn" type="button" onclick="testLlm('f-${purpose}')">${icon('bolt')} 测试</button>
           <button class="btn primary" type="submit">${icon('save')} 保存</button>
@@ -53,7 +53,7 @@ async function renderSettings(tab) {
         </div>` : ''}
       ${cur === 'ai' ? `
         <h2 class="page-h">${icon('key')} LLM 配置（BYOK）</h2>
-        <p class="muted" style="font-size:12px;margin:2px 0 12px">聊天/翻译各自独立；embedding 本机运行无需配置。密钥加密存储、永不回显。</p>
+        <p class="muted" style="font-size: var(--fs-sm);margin:2px 0 12px">聊天/翻译各自独立；embedding 本机运行无需配置。密钥加密存储、永不回显。</p>
         ${tpl('chat', d.chat, d.chat)}
         ${tpl('translate', d.translate, d.translate)}` : ''}
       ${cur === 'gloss' ? `
@@ -111,30 +111,28 @@ async function renderMeQuota() {
   const pPct = q.parse_limit ? Math.round(q.parse_used / q.parse_limit * 100) : 0;
   const usedGb = fmtGB(q.disk_used_bytes);
   const dPct = q.disk_limit_gb ? Math.round(usedGb / q.disk_limit_gb * 100) : 0;
-  const bar = (pct, warn) => `<div style="height:6px;background:var(--line-soft);border-radius:3px;overflow:hidden;margin-top:4px">
-    <i style="display:block;height:100%;width:${Math.min(100, pct)}%;background:${pct >= warn ? 'var(--warn)' : 'var(--primary)'}"></i></div>`;
+  const bar = (pct, warn) => `<div class="progress" style="margin-top:4px">
+    <i style="width:${Math.min(100, pct)}%;${pct >= warn ? 'background:var(--warn)' : ''}"></i></div>`;
   const purposeName = {chat: '问答/导读', translate: '翻译', summary: '导读', embed: '向量化', synthesis: '综述'};
   const costRows = Object.entries(q.cost_by_purpose || {})
     .filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
     .map(([k, v]) => `<tr><td>${esc(purposeName[k] || k)}</td>
-      <td style="text-align:right;font-size:11px">¥${Number(v).toFixed(2)}</td>
-      <td style="text-align:right;font-size:11px;width:34%">
-        <div style="height:5px;background:var(--line-soft);border-radius:3px;overflow:hidden">
-          <i style="display:block;height:100%;width:${q.month_cost ? Math.min(100, v / q.month_cost * 100) : 0}%;background:var(--primary)"></i>
-        </div></td></tr>`).join('');
+      <td class="num">¥${Number(v).toFixed(2)}</td>
+      <td class="num" style="width:34%">
+        <div class="progress"><i style="width:${q.month_cost ? Math.min(100, v / q.month_cost * 100) : 0}%"></i></div></td></tr>`).join('');
   const delta = q.prev_month_cost ? Math.round((q.month_cost - q.prev_month_cost) / q.prev_month_cost * 100) : 0;
   const hasBudget = q.budget > 0;
   el.innerHTML = `
     <h2 class="page-h">${icon('chart')} 我的用量</h2>
     <div class="set-card">
       <div class="set-head">本月花费
-        <span class="muted" style="font-weight:400;font-size:11px">按模型单价估算${q.cost_priced ? '' : '（当前模型未收录单价，估为 0——可在下方填你的实际单价）'}</span></div>
-      <div style="font-size:26px;font-weight:600">¥${Number(q.month_cost || 0).toFixed(2)}
-        ${q.prev_month_cost ? `<span class="muted" style="font-size:12px;font-weight:400">（上月 ¥${Number(q.prev_month_cost).toFixed(2)} ${delta >= 0 ? '↑' : '↓'}${Math.abs(delta)}%）</span>` : ''}</div>
-      ${hasBudget ? `<div style="font-size:12px;margin-top:8px">月预算 ¥${q.budget} · 已用 <b>${q.budget_pct}%</b>
+        <span class="muted" style="font-weight:400;font-size: var(--fs-xs)">按模型单价估算${q.cost_priced ? '' : '（当前模型未收录单价，估为 0——可在下方填你的实际单价）'}</span></div>
+      <div style="font-size: var(--fs-h1);font-weight:600">¥${Number(q.month_cost || 0).toFixed(2)}
+        ${q.prev_month_cost ? `<span class="muted" style="font-size: var(--fs-sm);font-weight:400">（上月 ¥${Number(q.prev_month_cost).toFixed(2)} ${delta >= 0 ? '↑' : '↓'}${Math.abs(delta)}%）</span>` : ''}</div>
+      ${hasBudget ? `<div style="font-size: var(--fs-sm);margin-top:8px">月预算 ¥${q.budget} · 已用 <b>${q.budget_pct}%</b>
           ${q.budget_pct >= 100 ? '<span class="badge err">已用尽，将拦截调用</span>' : q.budget_pct >= 80 ? '<span class="badge run">接近上限</span>' : ''}</div>
         ${bar(q.budget_pct, 100)}`
-        : `<div class="muted" style="font-size:12px;margin-top:6px">未设预算——不拦截调用；上游余额不足时由上游报错</div>`}
+        : `<div class="muted" style="font-size: var(--fs-sm);margin-top:6px">未设预算——不拦截调用；上游余额不足时由上游报错</div>`}
       ${costRows ? `<table class="list" style="margin-top:10px">${costRows}</table>` : ''}
       <div class="set-actions">
         <button class="btn small" onclick="openBudgetDialog()">设置预算 / 单价</button>
@@ -142,11 +140,11 @@ async function renderMeQuota() {
     </div>
     <div class="set-card">
       <div class="set-head">额度上限</div>
-      <div style="font-size:12px">今日解析 <b>${q.parse_used}</b> / ${q.parse_limit} 篇${pPct >= 80 ? ' <span class="badge err">接近上限</span>' : ''}</div>
+      <div style="font-size: var(--fs-sm)">今日解析 <b>${q.parse_used}</b> / ${q.parse_limit} 篇${pPct >= 80 ? ' <span class="badge err">接近上限</span>' : ''}</div>
       ${bar(pPct, 80)}
-      <div style="font-size:12px;margin-top:12px">磁盘已用 <b>${usedGb.toFixed(2)}</b> / ${q.disk_limit_gb} GB${dPct >= 90 ? ' <span class="badge err">空间紧张</span>' : ''}</div>
+      <div style="font-size: var(--fs-sm);margin-top:12px">磁盘已用 <b>${usedGb.toFixed(2)}</b> / ${q.disk_limit_gb} GB${dPct >= 90 ? ' <span class="badge err">空间紧张</span>' : ''}</div>
       ${bar(dPct, 90)}
-      <div class="muted" style="font-size:11px;margin-top:10px">${q.month_calls || 0} 次调用（本月）</div>
+      <div class="muted" style="font-size: var(--fs-xs);margin-top:10px">${q.month_calls || 0} 次调用（本月）</div>
     </div>`;
 }
 
@@ -179,9 +177,9 @@ async function renderAdminZone() {
     const hit = keys.filter(k => ov[k] !== undefined && ov[k] !== null);
     return hit.length
       ? `<span class="badge run" title="${hit.join('、')}">${hit.length} 项自定义</span>`
-      : '<span class="muted" style="font-size:11px">默认</span>';
+      : '<span class="muted" style="font-size: var(--fs-xs)">默认</span>';
   };
-  const stateBadge = u => u.disabled === 2 ? '<span class="badge priv">已注销</span>'
+  const stateBadge = u => u.disabled === 2 ? '<span class="badge dim">已注销</span>'
     : u.disabled === 1 ? '<span class="badge err">已禁用</span>'
     : u.role === 'admin' ? '<span class="badge ok">管理员</span>'
     : '<span class="badge ok">正常</span>';
@@ -200,27 +198,27 @@ async function renderAdminZone() {
       <div class="set-head">${icon('user')} 成员管理
         <span class="muted" style="font-weight:400">限额留空=默认值；超限在调用前拦截</span>
         <span class="spacer"></span>
-        <select id="invite-days" style="width:auto;font-size:12px">
+        <select id="invite-days" style="width:auto;font-size: var(--fs-sm)">
           <option value="3">3 天</option><option value="7" selected>7 天</option>
           <option value="14">14 天</option><option value="30">30 天</option>
         </select>
         <button class="btn small primary" onclick="createInvite()">${icon('plus')} 生成邀请码</button>
       </div>
-      <div id="invite-out" style="margin:2px 0 10px;font-size:13px"></div>
+      <div id="invite-out" style="margin:2px 0 10px;font-size: var(--fs-base)"></div>
       <table class="list adm-table">
-        <tr><th>成员</th><th>状态</th><th style="text-align:right">论文</th><th style="text-align:right">磁盘</th>
-            <th style="text-align:right">本月花费</th><th>限额</th><th style="width:56px"></th></tr>
+        <tr><th>成员</th><th>状态</th><th class="num">论文</th><th class="num">磁盘</th>
+            <th class="num">本月花费</th><th>限额</th><th style="width:56px"></th></tr>
         ${list.filter(u => u.disabled !== 2).map(u => {
           const ov = (() => { try { return JSON.parse(u.overrides || '{}'); } catch { return {}; } })();
           state._quotaRaw = state._quotaRaw || {};
           state._quotaRaw[u.id] = ov;
           const isSelf = u.id === state.me.id;
           return `<tr>
-            <td><b>${esc(u.username)}</b>${u.role === 'admin' ? ' <span class="muted" style="font-size:11px">admin</span>' : ''}</td>
+            <td><b>${esc(u.username)}</b>${u.role === 'admin' ? ' <span class="muted" style="font-size: var(--fs-xs)">admin</span>' : ''}</td>
             <td>${stateBadge(u)}</td>
-            <td style="text-align:right;font-size:12px">${u.papers || 0}</td>
-            <td style="text-align:right;font-size:12px">${fmtGB(u.disk_used).toFixed(2)}G</td>
-            <td style="text-align:right;font-size:12px">¥${Number(u.month_cost || 0).toFixed(2)}</td>
+            <td class="num">${u.papers || 0}</td>
+            <td class="num">${fmtGB(u.disk_used).toFixed(2)}G</td>
+            <td class="num">¥${Number(u.month_cost || 0).toFixed(2)}</td>
             <td>${quotaSummary(ov)}</td>
             <td class="row-actions">
               <details class="adm-menu">
@@ -241,9 +239,9 @@ async function renderAdminZone() {
         if (!gone.length) return '';
         return `<details class="adm-gone"><summary class="muted">已注销 ${gone.length} 个账号（论文保留，可恢复）</summary>
           <table class="list adm-table" style="margin-top:6px">
-            ${gone.map(u => `<tr><td class="muted" style="font-size:12px">${esc(u.username)}</td>
-              <td class="muted" style="font-size:11px">已注销</td>
-              <td style="text-align:right;font-size:12px">${u.papers || 0}</td>
+            ${gone.map(u => `<tr><td class="muted" style="font-size: var(--fs-sm)">${esc(u.username)}</td>
+              <td class="muted" style="font-size: var(--fs-xs)">已注销</td>
+              <td class="num">${u.papers || 0}</td>
               <td colspan="4"></td></tr>`).join('')}
           </table></details>`;
       })()}
@@ -254,7 +252,7 @@ async function renderAdminZone() {
         <span class="muted" style="font-weight:400">未配置 key 的成员可用管理员的 key 调用</span></div>
       <div class="pool-row">
         <span class="badge ${pool.enabled ? 'ok' : 'priv'}">${pool.enabled ? '已开启' : '已关闭'}</span>
-        <span class="muted" style="font-size:12px">${pool.enabled ? '成员未配 key 时走公共池' : '成员必须各自配置 key'}</span>
+        <span class="muted" style="font-size: var(--fs-sm)">${pool.enabled ? '成员未配 key 时走公共池' : '成员必须各自配置 key'}</span>
         <span class="spacer"></span>
         <button class="btn small ${pool.enabled ? 'danger' : 'primary'}" onclick="togglePool(${!pool.enabled})">${pool.enabled ? '关闭' : '开启'}</button>
       </div>
@@ -266,9 +264,9 @@ async function renderAdminZone() {
       ${auditRows.length ? `<table class="list adm-table">
         <tr><th style="width:110px">时间</th><th style="width:110px">操作者</th><th>操作</th></tr>
         ${auditRows.slice(0, 8).map(r => `<tr>
-          <td class="muted" style="font-size:11px">${esc(relTime(r.created_at))}</td>
-          <td style="font-size:12px">${esc(r.username || '系统')}</td>
-          <td style="font-size:12px">${esc(auditActionName(r.action))}${r.detail ? ` <span class="muted">${esc(String(r.detail).slice(0, 40))}</span>` : ''}</td>
+          <td class="muted" style="font-size: var(--fs-xs)">${esc(relTime(r.created_at))}</td>
+          <td style="font-size: var(--fs-sm)">${esc(r.username || '系统')}</td>
+          <td style="font-size: var(--fs-sm)">${esc(auditActionName(r.action))}${r.detail ? ` <span class="muted">${esc(String(r.detail).slice(0, 40))}</span>` : ''}</td>
         </tr>`).join('')}
       </table>${auditRows.length > 8 ? `<div style="padding:6px 0 0"><button class="btn small" id="audit-more">展开其余 ${auditRows.length - 8} 条</button></div>` : ''}`
         : '<p class="muted">暂无记录——删除/重置密码/禁用等敏感操作会记录在此</p>'}
@@ -283,7 +281,7 @@ function openQuotaDialog(uid) {
   const ov = (state._quotaRaw || {})[uid] || {};
   // suf = DOM 后缀（saveQuota 按后缀取值），key = 后端语义键（ov 里存的是语义键）
   const f = (suf, key, label, ph, min) => `<label class="adm-q-row"><span>${label}</span>
-    <input id="q-${uid}-${suf}" type="number" min="${min}" style="width:100px;font-size:12px"
+    <input id="q-${uid}-${suf}" type="number" min="${min}" style="width:100px;font-size: var(--fs-sm)"
       value="${ov[key] ?? ''}" placeholder="${ph}"></label>`;
   const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
   const pop = Object.assign(document.createElement('div'), {className: 'ui-pop adm-quota-pop'});
@@ -296,7 +294,7 @@ function openQuotaDialog(uid) {
       ${f('dk', 'max_disk_gb', '磁盘上限 GB', '20', 1)}
       ${f('bg', 'monthly_budget_cny', '月预算 ¥', '不限', 0)}
     </div>
-    <div class="muted" style="font-size:11px;margin-top:6px">预算超限会在调用前拦截；解析篇数/页数/磁盘按上限校验。</div>
+    <div class="muted" style="font-size: var(--fs-xs);margin-top:6px">预算超限会在调用前拦截；解析篇数/页数/磁盘按上限校验。</div>
     <div class="ui-pop-foot">
       <button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>保存</button>
@@ -314,7 +312,7 @@ window.createInvite = async () => {
   const days = +($('#invite-days')?.value || 7);
   const d = await api(`/api/admin/invite?days=${days}`, {method: 'POST'});
   const el = $('#invite-out');
-  if (el) el.innerHTML = `邀请码: <code style="font-size:16px">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
+  if (el) el.innerHTML = `邀请码: <code style="font-size: var(--fs-md)">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
 };
 window.logoutAll = async () => {
   if (!(await uiConfirm('登出所有设备？其他已登录的会话将全部失效（本设备保持登录）。', {title: '登出所有设备', danger: true}))) return;
@@ -403,7 +401,7 @@ async function loadGlossary() {
   el.innerHTML = d.terms.map(t =>
     `<span class="chip">${esc(t.term)}${t.target === 'trans' ? ' → ' + esc(t.value) : t.target === 'first_both' ? ' ⇄ ' + esc(t.value) : ' (EN)'}
      <button title="删除该术语" onclick="delGlossary('${jsArg(t.term)}')">${icon('close')}</button></span>`).join('') ||
-    '<span class="muted" style="font-size:12px">暂无术语——按需添加以保证全文译名一致</span>';
+    '<span class="muted" style="font-size: var(--fs-sm)">暂无术语——按需添加以保证全文译名一致</span>';
   $('#gl-add').onclick = async () => {
     const term = $('#gl-term').value.trim();
     if (!term) { toast('请输入术语'); return; }
@@ -470,7 +468,7 @@ async function renderAssets() {
           <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}" ondblclick="lightbox(this.src, '')">
           ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" ondblclick="lightbox(this.src, '')">`).join('')}
         </div>
-        ${(f.sub_captions || []).length ? `<p class="muted" style="font-size:11px">${esc(f.sub_captions.join(' | ').slice(0, 200))}</p>` : ''}
+        ${(f.sub_captions || []).length ? `<p class="muted" style="font-size: var(--fs-xs)">${esc(f.sub_captions.join(' | ').slice(0, 200))}</p>` : ''}
         ${capHtml(f.caption || '', `cap-${f.page_index}-${(f.image_path || '').replace(/\W/g, '')}`)}
       </div>`;
     }

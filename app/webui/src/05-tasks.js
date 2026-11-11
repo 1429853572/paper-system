@@ -21,25 +21,24 @@ async function renderTasksPage() {
   el.innerHTML = `
     <div class="tasks-wrap">
       <div class="card tasks-head">
-        <div class="bp-head" style="border-bottom:none;padding-bottom:4px">
-          <b style="font-size:var(--fs-lg)">任务中心</b>
-          <span class="muted" style="font-size:11px">解析 / 翻译 / 导读 / 元数据 / 综述——全部任务的实时状态</span>
+        <h2 class="page-h row">任务中心
+          <span class="muted">解析 / 翻译 / 导读 / 元数据 / 综述——全部任务的实时状态</span>
           <span class="spacer"></span>
-          <button class="btn small" id="tk-pause-toggle" title="暂停/恢复批量解析队列（手动任务不受影响）">…</button></div>
+          <button class="btn small" id="tk-pause-toggle" title="暂停/恢复批量解析队列（手动任务不受影响）">…</button></h2>
         <div class="task-filters">
-          <span class="muted" style="font-size:11px">类型</span>
+          <span class="muted" style="font-size:var(--fs-xs)">类型</span>
           ${chips('tt', f.type, [['', '全部'], ['parse', '解析'], ['translate', '翻译'],
             ['summary', '导读'], ['meta', '元数据'], ['synthesis', '综述'], ['acquire', '采集下载']])}
           <span class="task-fsep"></span>
-          <span class="muted" style="font-size:11px">状态</span>
+          <span class="muted" style="font-size:var(--fs-xs)">状态</span>
           ${chips('ts', f.status, [['', '全部'], ['active', '进行中'], ['done', '完成'], ['failed', '失败']])}
         </div>
       </div>
       <div id="mcp-zone"></div>
       <div class="card tasks-body" id="task-body"><p class="muted" style="padding:10px">加载中…</p></div>
       <div class="card syn-list-card" style="margin-top:14px">
-        <div class="bp-head"><b>我的综述</b>
-          <span class="muted" style="font-size:11px">历史报告永久保存——查看 / 导出 / 删除；进行中的显示实时进度</span></div>
+        <h2 class="page-h row sec">我的综述
+          <span class="muted">历史报告永久保存——查看 / 导出 / 删除；进行中的显示实时进度</span></h2>
         <div id="syn-list"><p class="muted" style="padding:8px 16px">加载中…</p></div>
       </div>
     </div>`;
@@ -50,7 +49,7 @@ async function renderTasksPage() {
     if (tb) {
       const q = await api('/api/queue/parse').catch(() => null);
       const paused = !!q?.paused;
-      tb.textContent = paused ? '▶ 恢复批量（已暂停）' : '⏸ 暂停批量';
+      tb.innerHTML = paused ? icon('play', 12) + ' 恢复批量（已暂停）' : icon('pause', 12) + ' 暂停批量';
       tb.classList.toggle('warn', paused);
       tb.onclick = async () => {
         await api(`/api/queue/parse/${paused ? 'resume' : 'pause'}`, {method: 'POST'});
@@ -107,7 +106,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         ${bar}
         ${j.error ? `<span class="bpanel-err" style="padding:0">${esc(taskErr(j.error))}</span>` : ''}
       </span>
-      <span class="muted" style="font-size:11px;white-space:nowrap">${stMap[j.status] || esc(j.status)}${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
+      <span class="muted" style="font-size: var(--fs-xs);white-space:nowrap">${stMap[j.status] || esc(j.status)}${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
       ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
       ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
     </div>`;
@@ -133,7 +132,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         ${failed.map(x => `<span class="bpanel-err" style="padding:0">${esc(taskErr(x.error))}</span>`).join('')}
       </span>
       <span class="task-state"><span class="badge ${state[0]}">${state[1]}</span>
-        <span class="muted" style="font-size:11px">${esc(relTime(t0))}</span></span>
+        <span class="muted" style="font-size: var(--fs-xs)">${esc(relTime(t0))}</span></span>
       ${failed.length ? `<button class="btn small" data-retry="${failed[0].id}">重试</button>` : ''}
       ${live.length ? `<button class="btn small danger" data-cancel="${live[0].id}">取消</button>` : ''}
     </div>`;
@@ -142,14 +141,14 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
     const tt = taskType(b.job_type);
     const resolved = b.done + b.failed + b.canceled;
     const badge = b.active > 0 ? ['run', '进行中'] : b.failed > 0 ? ['err', '有失败']
-      : b.done > 0 ? ['ok', '完成'] : ['priv', '已取消'];
+      : b.done > 0 ? ['ok', '完成'] : ['dim', '已取消'];
     return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
       <div class="bpanel-row head" data-tb="${esc(b.batch_id)}">
         <span class="badge ${badge[0]}">${badge[1]}</span>
         <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
         <span class="muted">${b.done}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}${b.canceled ? ` · ${b.canceled} 取消` : ''}</span>
         <span class="spacer"></span>
-        <span class="muted" style="font-size:11px">${esc(relTime(b.updated_at))}</span>
+        <span class="muted" style="font-size: var(--fs-xs)">${esc(relTime(b.updated_at))}</span>
         <span class="ic">${icon('chevD')}</span>
       </div>
       <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
@@ -213,7 +212,7 @@ async function renderTaskPanel() {
     mz.innerHTML = pend.length
       ? `<div class="card" style="margin-bottom:12px;padding:0"><div class="bp-sec-title" style="padding:10px 16px 2px">MCP 待确认写操作（外部 AI 客户端发起）</div>
          <div style="padding:0 16px 12px">${pend.map(p => `
-           <div class="bpanel-row head" style="border:1px solid var(--border);border-radius:var(--r-sm);margin-bottom:6px">
+           <div class="bpanel-row head" style="border-bottom:1px solid var(--border);margin-bottom:6px">
              <span class="badge run">待确认</span>
              <span style="flex:1;min-width:0">${esc(p.summary || p.tool)}</span>
              <button class="btn small primary" onclick="mcpConfirm('${esc(p.action_id)}',true)">执行</button>

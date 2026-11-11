@@ -45,7 +45,7 @@ async function openPaper(id) {
   } catch (e) {
     // URL/Office 导入无本地 PDF——展示占位（右侧解析内容照常）
     const isImg = /\.(png|jpe?g)(\?|$)/i.test(state.current?.id ? '' : '');
-    $('#pdf-host').innerHTML = `<div style="color:#aab;margin:40px auto;text-align:center;font-size:13px">
+    $('#pdf-host').innerHTML = `<div style="color:#aab;margin:40px auto;text-align:center;font-size: var(--fs-base)">
       ${icon('warn')} 本篇无 PDF 预览（URL/Office 导入）<br>右侧解析内容与问答功能正常</div>`;
   }
   // 解析内容 + 双语（先清掉上一篇的残留，避免串页）

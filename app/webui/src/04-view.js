@@ -119,7 +119,7 @@ function bindBlkClicks(el) {
 
 function renderContentView() {
   const el = $('#content-view');
-  if (!state.current) { el.innerHTML = '<p class="muted">选择左侧论文开始阅读</p>'; return; }
+  if (!state.current) { el.innerHTML = '<div class="empty-state"><p class="t">选择左侧论文开始阅读</p><p>打开一篇后，这里显示正文、图表与引用</p></div>'; return; }
   if (state.mainView === 'read' || ['orig','bilingual','zh'].includes(state.view)) {
     // 阅读：走下方 orig/bilingual/zh 分支
   }
@@ -128,7 +128,7 @@ function renderContentView() {
   if (state.view === 'json') {
     el.innerHTML = `<div class="card json-view">
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-        <b>解析块 JSON（调试）</b><span class="muted" style="font-size:12px">${state.blocks.length} blocks</span>
+        <b>解析块 JSON（调试）</b><span class="muted" style="font-size: var(--fs-sm)">${state.blocks.length} blocks</span>
         <button class="btn small" style="margin-left:auto" onclick="copyJson()">复制</button>
       </div>
       <pre>${esc(JSON.stringify(state.blocks, null, 2))}</pre></div>`;
@@ -136,8 +136,9 @@ function renderContentView() {
   }
   if (state.view === 'bilingual') {
     if (!state.translatedComplete) {
-      el.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px">
-        <p style="font-size:15px;margin-bottom:14px">${state.translatingNow ? icon('clock', 12) + " 翻译中…" : '未翻译'}</p>
+      el.innerHTML = `<div class="empty-state">
+        <p class="t">${state.translatingNow ? icon('clock', 12) + " 翻译中…" : '未翻译'}</p>
+        <p>翻译完成后可在这里对照阅读；现在发起全文翻译，稍后自动显示</p>
         ${state.translatingNow ? '' : `<button class="btn primary" onclick="startTranslate()">${icon('globe')} 全文翻译</button>`}
       </div>`;
       return;
@@ -147,8 +148,9 @@ function renderContentView() {
       (state._biOffset < (state._biTotal || 0) ? loadHintHtml(`${state._biOffset}/${state._biTotal}`) : '');
   } else if (state.view === 'zh') {
     if (!state.translatedComplete) {
-      el.innerHTML = `<div class="card" style="text-align:center;padding:40px 20px">
-        <p style="font-size:15px;margin-bottom:14px">${state.translatingNow ? icon('clock', 12) + " 翻译中…" : '未翻译'}</p>
+      el.innerHTML = `<div class="empty-state">
+        <p class="t">${state.translatingNow ? icon('clock', 12) + " 翻译中…" : '未翻译'}</p>
+        <p>翻译完成后可在这里对照阅读；现在发起全文翻译，稍后自动显示</p>
         ${state.translatingNow ? '' : `<button class="btn primary" onclick="startTranslate()">${icon('globe')} 全文翻译</button>`}
       </div>`;
       return;
@@ -270,7 +272,8 @@ window.openCollectPanel = async () => {
   const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
   const pop = Object.assign(document.createElement('div'), {className: 'ui-pop collect-panel'});
   pop.innerHTML = `<div class="ui-pop-title">采集文献
-      <span class="muted" style="font-weight:400;font-size:11px">按关键词检索中文文献（知网 / 中科院预印本）并入库</span></div>
+      <span class="muted" style="font-weight:400;font-size: var(--fs-xs)">按关键词检索中文文献（知网 / 中科院预印本）并入库</span>
+      <span class="spacer"></span><button class="btn small" data-cp-close title="关闭">${icon('close')}</button></div>
     <div class="collect-actions">
       <button class="btn" id="acq-btn">${icon('inbox')} 快速采集<span class="muted">一次性检索 → 勾选 → 下载入库</span></button>
       <button class="btn" id="cp-topics">${icon('stack')} 专题跟踪<span class="muted">持久化任务 · 可中断可恢复 · 一键综述</span></button>
@@ -282,6 +285,7 @@ window.openCollectPanel = async () => {
   const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
   document.addEventListener('keydown', onKey, true);
   backdrop.onclick = e => { if (e.target === backdrop) close(); };
+  pop.querySelector('[data-cp-close]').onclick = close;
   pop.querySelector('[data-cancel], .ui-pop-foot [data-ok]')?.remove();
   const body = pop.querySelector('#cp-body');
   // 快速采集 → 复用现有采集弹层
@@ -329,7 +333,7 @@ async function renderSynList(all) {
   try { items = (await api('/api/syntheses' + (all ? '?limit=100' : ''))).syntheses; }
   catch (e) { el.innerHTML = `<p class="muted" style="padding:8px 16px">加载失败: ${esc(e.message)}</p>`; return; }
   if (!items.length) {
-    el.innerHTML = '<p class="muted" style="padding:8px 16px">还没有综述报告——在「文库管理」勾选 2 篇以上已解析论文，点批量条「生成综述报告」</p>';
+    el.innerHTML = '<div class="empty-note">还没有综述报告——在「文库管理」勾选 2 篇以上已解析论文，点批量条「生成综述报告」</div>';
     return;
   }
   const shown = all ? items : items.slice(0, 5);
@@ -339,7 +343,7 @@ async function renderSynList(all) {
       ${synBadge(s.status)}
       <span class="syn-item-main">
         <b title="${esc(synTitleOf(s))}">${esc(synTitleOf(s))}</b>
-        <span class="muted" style="font-size:11px">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc(relTime(s.updated_at))}</span>
+        <span class="muted" style="font-size: var(--fs-xs)">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc(relTime(s.updated_at))}</span>
         ${s.status === 'running' ? `<div class="up-bar parse" style="max-width:280px"><i style="width:${pct}%"></i></div>` : ''}
         ${s.status === 'failed' && s.error ? `<div class="bpanel-err">${esc(s.error.slice(0, 120))}</div>` : ''}
       </span>

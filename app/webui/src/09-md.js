@@ -145,12 +145,12 @@ window.jumpEvidence = page => { switchPage('reader'); if (state.pdfDoc) { state.
 async function renderTrash() {
   const d = await api('/api/papers?trash=1');
   state._trashCount = (d.papers || []).length;   // 清空确认框要显示影响篇数
-  $('#page-trash').innerHTML = `<div class="card"><h2 style="display:flex;gap:10px;align-items:center">回收站（${state.health.trash_days || 30} 天后自动清理）
+  $('#page-trash').innerHTML = `<div class="card"><h2 class="page-h row">回收站（${state.health.trash_days || 30} 天后自动清理）
     <button class="btn small danger" style="margin-left:auto" onclick="emptyTrash()">${icon('trash')} 清空回收站</button></h2>
     <table class="list"><tr><th>标题</th><th>删除时间</th><th></th></tr>
     ${d.papers.map(p => `<tr><td>${esc(p.title)}</td><td class="muted">${relTime(p.deleted_at)}</td>
       <td class="row-actions"><button class="btn small" onclick="restorePaper('${p.id}')">恢复</button>
-      </td></tr>`).join('') || '<tr><td colspan="3" class="muted">回收站为空——删除的论文在此保留 30 天，可随时恢复</td></tr>'}</table></div>`;
+      </td></tr>`).join('') || '<tr><td colspan="3" class="muted">回收站为空——删除的论文在此保留 30 天，可随时恢复</td></tr>'}</table>`;
 }
 window.restorePaper = async id => {
   try {

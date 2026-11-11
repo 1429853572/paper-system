@@ -3,34 +3,36 @@
    请勿直接改 app/webui/viewer.js（构建产物）。 */
 const TASK_STATUS = {draft: '待检索', searching: '检索中', ready: '待勾选',
   downloading: '下载中', ingested: '已入库', reviewing: '综述中', done: '已完成', failed: '失败'};
+const taskBadge = st =>
+  `<span class="badge ${st === 'done' ? 'ok' : st === 'failed' ? 'err' : 'run'}">${TASK_STATUS[st] || st}</span>`;
 
 async function showTopicsView(container, onBack, hideBack) {
   const el = container || document.querySelector('#cp-body') || $('#page-tasks');
-  el.innerHTML = `<div class="batch-wrap"><div class="card" style="padding:16px">
+  el.innerHTML = `<div class="batch-wrap"><div class="card pad-x">
     <p class="muted">加载中…</p></div></div>`;
   let tasks = [];
   try { tasks = (await api('/api/acq-tasks')).tasks; }
-  catch (e) { el.innerHTML = `<div class="batch-wrap"><div class="card" style="padding:16px">
+  catch (e) { el.innerHTML = `<div class="batch-wrap"><div class="card pad-x">
     加载失败：${esc(e.message)}</div></div>`; return; }
   el.innerHTML = `
     <div class="batch-wrap">
       <div class="card topics-head">
         ${hideBack ? '' : '<button class="btn small" id="tp-back">← 返回采集</button>'}
-        <b style="flex:1;font-size:var(--fs-lg)">📚 我的专题</b>
-        <button class="btn primary" id="tp-new">＋ 新建专题</button>
+        <h2 class="page-h row" style="flex:1">${icon('library')} 我的专题</h2>
+        <button class="btn primary" id="tp-new">${icon('plus')} 新建专题</button>
       </div>
       <div class="card" style="padding:0">
         ${tasks.length ? tasks.map(t => `
           <div class="tp-row" data-tid="${esc(t.id)}">
-            <span class="badge ${t.status === 'done' ? 'ok' : t.status === 'failed' ? 'err' : 'run'}">${TASK_STATUS[t.status] || t.status}</span>
+            ${taskBadge(t.status)}
             <span class="tp-main">
               <b>${esc(t.title)}</b>
-              <span class="muted" style="font-size:11px">${esc(t.query)} · ${esc(t.site)} · 候选 ${t.cand_selected}/${t.cand_total} · 已下载 ${t.cand_done} · 入库 ${t.papers} 篇 · ${esc(relTime(t.updated_at))}</span>
+              <span class="muted" style="font-size: var(--fs-xs)">${esc(t.query)} · ${esc(t.site)} · 候选 ${t.cand_selected}/${t.cand_total} · 已下载 ${t.cand_done} · 入库 ${t.papers} 篇 · ${esc(relTime(t.updated_at))}</span>
               ${t.error ? `<span class="bpanel-err" style="padding:0">${esc(t.error.slice(0, 120))}</span>` : ''}
             </span>
             <button class="btn small primary" data-tp-open="${esc(t.id)}">打开</button>
             <button class="btn small danger" data-tp-del="${esc(t.id)}">删除</button>
-          </div>`).join('') : '<p class="muted" style="padding:16px">还没有专题——点右上「新建专题」，用关键词建一个（如「3DGS 稀疏视图 中文综述」）</p>'}
+          </div>`).join('') : `<div class="empty-state"><p class="t">还没有专题</p><p>专题跟踪会定期按关键词检索，新论文可勾选入库、一键综述</p><button class="btn primary" onclick="newTopicDialog()">${icon('plus')} 新建专题</button></div>`}
       </div>
     </div>`;
   const backBtn = $('#tp-back');
@@ -62,10 +64,10 @@ async function newTopicDialog() {
 
 async function showTopicDetail(tid, container, onBack) {
   const el = container || document.querySelector('#cp-body') || $('#page-tasks');
-  el.innerHTML = `<div class="batch-wrap"><div class="card" style="padding:16px">加载中…</div></div>`;
+  el.innerHTML = `<div class="batch-wrap"><div class="card pad-x">加载中…</div></div>`;
   let t;
   try { t = (await api('/api/acq-tasks/' + tid)).task; }
-  catch (e) { el.innerHTML = `<div class="batch-wrap"><div class="card" style="padding:16px">${esc(e.message)}</div></div>`; return; }
+  catch (e) { el.innerHTML = `<div class="batch-wrap"><div class="card pad-x">${esc(e.message)}</div></div>`; return; }
   const cands = t.candidates || [];
   const sel = cands.filter(c => c.selected);
   const done = cands.filter(c => c.dl_status === 'done').length;
@@ -76,23 +78,23 @@ async function showTopicDetail(tid, container, onBack) {
     <div class="batch-wrap">
       <div class="card topics-head">
         <button class="btn small" id="td-back">← 我的专题</button>
-        <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title)}</b>
-        <span class="badge ${t.status === 'done' ? 'ok' : t.status === 'failed' ? 'err' : 'run'}">${TASK_STATUS[t.status] || t.status}</span>
+        <h2 class="page-h row tr ell">${esc(t.title)}</h2>
+        ${taskBadge(t.status)}
       </div>
-      <div class="card" style="padding:14px 16px">
+      <div class="card pad-x">
         <div class="bp-sources" style="padding:0">
           <input id="td-q" value="${esc(t.query)}" placeholder="检索关键词" style="flex:1;min-width:140px">
-          <select id="td-site" style="width:auto;font-size:12px">
+          <select id="td-site" style="width:auto;font-size: var(--fs-sm)">
             <option value="chinaxiv" ${t.site === 'chinaxiv' ? 'selected' : ''}>中国科学院预印本</option>
             <option value="cnki" ${t.site === 'cnki' ? 'selected' : ''}>中国知网</option>
           </select>
           <button class="btn small primary" id="td-search">检索</button>
         </div>
-        ${cands.length ? `<div class="muted" style="font-size:11px;margin-top:8px">
+        ${cands.length ? `<div class="muted" style="font-size: var(--fs-xs);margin-top:8px">
           候选 ${cands.length} 条 · 已勾选 ${sel.length} · 已下载 ${done}${failed ? ` · <span class="berr">失败 ${failed}</span>` : ''}
           ${sel.length ? `· <button class="btn small" id="td-dl">下载并入库（${sel.filter(c => c.dl_status !== 'done').length}）</button>` : ''}
           ${sel.length ? `· <button class="btn small" id="td-selall">全选未入库</button>` : ''}
-        </div>` : '<p class="muted" style="font-size:11px;margin-top:8px">填关键词点「检索」拉候选（走宿主浏览器，需采集服务在运行）</p>'}
+        </div>` : '<p class="muted" style="font-size: var(--fs-xs);margin-top:8px">填关键词点「检索」拉候选（走宿主浏览器，需采集服务在运行）</p>'}
       </div>
       ${cands.length ? `<div class="card" style="padding:0">
         ${cands.map((c, i) => `
@@ -100,18 +102,18 @@ async function showTopicDetail(tid, container, onBack) {
             <input type="checkbox" data-tc="${esc(c.pdf_url)}" ${c.selected ? 'checked' : ''} ${c.in_library || !c.pdf_url ? 'disabled' : ''}>
             <span class="tp-cand-main">
               <b>${esc(c.title || '')}</b>
-              <span class="muted" style="font-size:11px">${esc([c.authors, c.year, c.venue].filter(Boolean).join(' · ').slice(0, 70))}</span>
+              <span class="muted" style="font-size: var(--fs-xs)">${esc([c.authors, c.year, c.venue].filter(Boolean).join(' · ').slice(0, 70))}</span>
               ${c.summary ? `<span class="tp-cand-abs">${esc(c.summary)}</span>` : ''}
             </span>
             ${c.dl_status === 'done' ? '<span class="badge ok">已入库</span>'
               : c.dl_status === 'failed' ? `<span class="badge err" title="${esc(c.error || '')}">失败</span>`
-              : c.dl_status === 'skipped' ? '<span class="badge priv" title="无下载链接或内容重复未计入">跳过</span>'
-              : c.in_library ? '<span class="badge priv">已在库</span>' : ''}
+              : c.dl_status === 'skipped' ? '<span class="badge dim" title="无下载链接或内容重复未计入">跳过</span>'
+              : c.in_library ? '<span class="badge ok">已在库</span>' : ''}
           </label>`).join('')}
       </div>` : ''}
-      <div class="card" style="padding:14px 16px">
+      <div class="card pad-x">
         <b>已入库论文（${parsed}/${papers.length} 解析完成）</b>
-        <div class="muted" style="font-size:11px;margin:6px 0">${papers.length
+        <div class="muted" style="font-size: var(--fs-xs);margin:6px 0">${papers.length
           ? papers.map(p => esc((p.title || '').slice(0, 40))).join('、')
           : '尚未下载入库任何文献'}</div>
         ${t.synthesis_id ? `<button class="btn small primary" id="td-syn">查看综述报告</button>`
@@ -200,7 +202,7 @@ function renderAcquirePop() {
     <div class="acq-tabs">
       <button class="dp-tab ${a.site === 'chinaxiv' ? 'on' : ''}" data-as="chinaxiv">中国科学院预印本</button>
       <button class="dp-tab ${a.site === 'cnki' ? 'on' : ''}" data-as="cnki">中国知网</button>
-      <span class="spacer"></span><button class="btn small" id="acq-close">✕</button>
+      <span class="spacer"></span><button class="btn small" id="acq-close" title="关闭">${icon('close')}</button>
     </div>
     <div class="acq-search">
       <input id="acq-q" placeholder="关键词（中文标题/主题）" value="${esc(a.q)}" style="flex:1">
@@ -214,10 +216,10 @@ function renderAcquirePop() {
           <span class="muted">${esc([it.authors, it.year, it.venue].filter(Boolean).join(' · ').slice(0, 70))}</span>
           ${it.summary ? `<span class="acq-abs">${esc(it.summary)}</span>` : ''}
         </span>
-        ${it.in_library ? '<span class="badge ok">已在库</span>' : !it.pdf_url ? '<span class="badge priv">无下载</span>' : ''}
-      </label>`).join('') : '<p class="muted" style="padding:12px">输入关键词检索（需宿主采集服务在运行）</p>'}</div>
+        ${it.in_library ? '<span class="badge ok">已在库</span>' : !it.pdf_url ? '<span class="badge dim">无下载</span>' : ''}
+      </label>`).join('') : '<div class="empty-note">输入关键词检索（需宿主采集服务在运行）</div>'}</div>
     <div class="acq-foot">
-      <span class="muted" style="font-size:11px" id="acq-stat"></span>
+      <span class="muted" style="font-size: var(--fs-xs)" id="acq-stat"></span>
       <span class="spacer"></span>
       <button class="btn small" id="acq-all">${a.items.every((it, i) => it.in_library || !it.pdf_url || a.sel.has(i)) ? '取消全选' : '全选'}</button>
       <button class="btn small primary" id="acq-import">下载并入库（<span id="acq-n">0</span>）</button>
@@ -324,7 +326,7 @@ async function runSynthesis(anchor, ids = null) {
       <select id="syn-purpose"><option value="note">个人笔记（方法细节）</option>
         <option value="proposal">开题/学位（研究空白）</option>
         <option value="submit">投稿初稿（贡献分类）</option></select></div>
-    <div class="muted" style="font-size:11px;margin:4px 0">预计 <b id="syn-calls">${est.calls}</b> 次 LLM 调用；${costLine(est.calls)}；引用键表自动核验，机器校验通过才交付</div>
+    <div class="muted" style="font-size: var(--fs-xs);margin:4px 0">预计 <b id="syn-calls">${est.calls}</b> 次 LLM 调用；${costLine(est.calls)}；引用键表自动核验，机器校验通过才交付</div>
     <div class="ui-pop-foot"><button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>开始综述</button></div>`;
   backdrop.appendChild(pop);
@@ -369,9 +371,9 @@ async function renderBatchJobs(bid, box) {
     }
     box.innerHTML = d.jobs.map(j => `
       <div class="bpanel-row sub">
-        <span class="badge ${j.status === 'failed' ? 'err' : j.status === 'done' ? 'ok' : 'run'}">${BATCH_ST[j.status] || esc(j.status)}</span>
+        <span class="badge ${j.status === 'failed' ? 'err' : j.status === 'done' ? 'ok' : j.status === 'canceled' ? 'dim' : 'run'}">${BATCH_ST[j.status] || esc(j.status)}</span>
         <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.title || j.paper_id || '')}</span>
-        <span class="muted" style="font-size:11px">${j.progress_total > 1 ? `${j.progress_done}/${j.progress_total}` : ''}</span>
+        <span class="muted" style="font-size: var(--fs-xs)">${j.progress_total > 1 ? `${j.progress_done}/${j.progress_total}` : ''}</span>
         ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
         ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
       </div>${j.error ? `<div class="bpanel-err">${esc(j.error.slice(0, 140))}</div>` : ''}`).join('')
@@ -434,10 +436,10 @@ async function showSynthesisReport(sid) {
       <div class="card syn-head">
         <button class="btn small" id="syn-back">← 返回任务</button>
         <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title)}</b>
-        <span class="muted" style="font-size:11px">${esc(s.model || '')} · ${esc(relTime(s.updated_at))}</span>
+        <span class="muted" style="font-size: var(--fs-xs)">${esc(s.model || '')} · ${esc(relTime(s.updated_at))}</span>
         ${ver ? `<span class="badge ${ver.pass ? 'ok' : 'err'}" title="引用双向校验">${ver.pass ? '✓ 引用校验 PASS' : '引用校验需修复'}（${ver.table_n - ver.missing.length}/${ver.table_n}）</span>` : ''}
-        <button class="btn small" id="syn-dl-md">⬇ MD</button>
-        <button class="btn small" id="syn-dl-csv">⬇ CSV</button>
+        <button class="btn small" id="syn-dl-md">${icon('download')} MD</button>
+        <button class="btn small" id="syn-dl-csv">${icon('chart')} CSV</button>
       </div>
       ${clusters.length ? `<details class="syn-groups">
         <summary>${icon('stack')} 主题分组 <span class="muted">${clusters.length} 组 · ${clusters.reduce((n, c) => n + (c.paper_ids || []).length, 0)} 篇（点击标题定位论文）</span></summary>
@@ -453,17 +455,17 @@ async function showSynthesisReport(sid) {
         <div class="syn-fw-alts">${fws.frameworks.map((f, i) => i === pickIdx ? '' : `
           <button class="btn small" data-fw-rewrite="${i}">换「${esc(f.name)}」重写</button>`).join('')}
         </div>
-        <div class="muted" style="font-size:11px">换框架只重跑章节化（组比对与键表复用，成本约为首次的 1/3）</div>
+        <div class="muted" style="font-size: var(--fs-xs)">换框架只重跑章节化（组比对与键表复用，成本约为首次的 1/3）</div>
       </div>` : ''}
       ${ctab.length ? `
       <div class="card syn-refs">
         <b title="键表：综述发起时冻结的论文引用清单（含在线核验结果）。正文引用只出自此表，保证引用真实可查。">参考文献</b>
-        <span class="muted" style="font-size:11px">${ctab.filter(e => e.evidence !== 'inferred').length} 条已核验${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length ? ` · ${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length} 条待核验（元数据未经 API 确认，未进正文）` : ''}</span>
+        <span class="muted" style="font-size: var(--fs-xs)">${ctab.filter(e => e.evidence !== 'inferred').length} 条已核验${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length ? ` · ${ctab.length - ctab.filter(e => e.evidence !== 'inferred').length} 条待核验（元数据未经 API 确认，未进正文）` : ''}</span>
         <div class="syn-refs-list">${ctab.map(e => `
           <div class="syn-ref-row ${e.evidence === 'inferred' ? 'weak' : ''}">
             <code>(${esc(e.key)})</code>
             <span class="syn-ref-main">${esc((e.title || '').slice(0, 60))}
-              <span class="muted" style="font-size:11px">${esc([e.venue, e.year, e.arxiv ? 'arXiv:' + e.arxiv : ''].filter(Boolean).join(' · '))}</span></span>
+              <span class="muted" style="font-size: var(--fs-xs)">${esc([e.venue, e.year, e.arxiv ? 'arXiv:' + e.arxiv : ''].filter(Boolean).join(' · '))}</span></span>
             ${e.evidence === 'api' ? '<span class="badge ok">已核验</span>'
               : e.evidence === 'watermark' ? '<span class="badge run">水印</span>'
               : e.evidence === 'inferred' ? '<span class="badge err" title="元数据未核验，未进入正文引用">待核验</span>' : ''}
@@ -474,7 +476,7 @@ async function showSynthesisReport(sid) {
         <b style="color:var(--err)">引用校验未通过</b>
         ${ver.missing?.length ? `<div>缺漏（表有文无，${ver.missing.length} 条）：${ver.missing.map(k => `<code>${esc(k)}</code>`).join(' ')}</div>` : ''}
         ${ver.phantom?.length ? `<div>幻影（文有表无）：${ver.phantom.map(k => `<code>${esc(k)}</code>`).join(' ')}</div>` : ''}
-        <div class="muted" style="font-size:11px">可稍后重试综述，或先在文献信息页核验元数据（待核验条目不参与正文引用）</div>
+        <div class="muted" style="font-size: var(--fs-xs)">可稍后重试综述，或先在文献信息页核验元数据（待核验条目不参与正文引用）</div>
       </div>` : ''}
       ${evidence.length ? `<div class="card syn-ev">
         <b>证据索引（点击编号跳原文）</b>
@@ -483,7 +485,7 @@ async function showSynthesisReport(sid) {
             <span class="badge run">E${e.n}</span>
             <span class="syn-ev-main">
               <b>${esc((e.title || e.paper_id || '').slice(0, 50))}</b>
-              <span class="muted" style="font-size:11px">第 ${(e.page_index || 0) + 1} 页 · ${esc((e.text || '').slice(0, 80))}…</span>
+              <span class="muted" style="font-size: var(--fs-xs)">第 ${(e.page_index || 0) + 1} 页 · ${esc((e.text || '').slice(0, 80))}…</span>
             </span>
           </div>`).join('')}</div>
       </div>` : ''}
@@ -629,13 +631,13 @@ function renderDiscover() {
       <span class="dp-body">
         <b>${esc(it.title)}</b>
         <span class="muted">${esc([it.year, it.venue, it.citation_count ? '被引 ' + it.citation_count : ''].filter(Boolean).join(' · '))}</span>
-        ${it.in_library ? '<span class="badge ok">已在库</span>' : !it.pdf_url ? '<span class="badge priv">无公开PDF</span>' : ''}
+        ${it.in_library ? '<span class="badge ok">已在库</span>' : !it.pdf_url ? '<span class="badge dim">无公开PDF</span>' : ''}
         ${it.abstract ? `<span class="dp-abs">${esc(it.abstract)}</span>` : ''}
       </span>
-    </label>`).join('') : '<p class="muted" style="padding:14px">该模式下没有结果</p>';
+    </label>`).join('') : '<div class="empty-note">该模式下没有结果</div>';
   const foot = items && items.length ? `
     <div class="dp-foot">
-      <span class="muted" style="font-size:11px">勾选一键导入（自动查重）</span>
+      <span class="muted" style="font-size: var(--fs-xs)">勾选一键导入（自动查重）</span>
       <span class="spacer"></span>
       <button class="btn small primary" id="dp-import">导入所选（<span id="dp-n">0</span>）</button>
     </div>` : '';

@@ -181,7 +181,7 @@ function showOnboardingOnce() {
       <div class="onboard-step"><b>④ 批量与综述</b><span>「文库管理」勾选论文 → 批量条翻译 / 生成综述报告；工具条「采集文献」检索中文文献或建专题跟踪</span></div>
       <div class="onboard-step"><b>找不到入口？</b><span>随时 <code>Ctrl + K</code> 命令面板搜索一切；<code>?</code> 看快捷键</span></div>
     </div>
-    <div class="ui-pop-foot"><span class="muted" style="font-size:11px;flex:1">问答/翻译需要 LLM key（「设置」页配置）；管理员开启公共额度池时可直接使用</span>
+    <div class="ui-pop-foot"><span class="muted" style="font-size: var(--fs-xs);flex:1">问答/翻译需要 LLM key（「设置」页配置）；管理员开启公共额度池时可直接使用</span>
       <button class="btn small" data-settings>去设置</button>
       <button class="btn small primary" data-ok>开始使用</button></div>`;
   backdrop.appendChild(pop);

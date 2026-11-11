@@ -19,7 +19,7 @@ function followupButtons(sections) {
   const qs = custom.length ? custom
     : Object.keys(sections || {}).map(k => FOLLOWUP_QS[k]).filter(Boolean).slice(0, 5);
   if (!qs.length) return '';
-  return `<div class="followups"><span class="muted" style="font-size:12px">${icon('chat')} 可以接着问：</span>` +
+  return `<div class="followups"><span class="muted" style="font-size: var(--fs-sm)">${icon('chat')} 可以接着问：</span>` +
     qs.map(q => `<button class="chip chip-q" onclick="askPreset('${jsArg(q)}')">${esc(q)}</button>`).join('') +
     `</div>`;
 }
@@ -53,9 +53,9 @@ function followupButtons(sections) {
       if (!ev) { p.hidden = true; return; }
       const snippet = (ev.text || '').replace(/\s+/g, ' ').trim();
       p.innerHTML = `<b>${esc((ev.title || ev.paper_id || '').slice(0, 60))}</b>
-        <span class="muted" style="font-size:11px">· 第${ev.page_index + 1}页</span>
+        <span class="muted" style="font-size: var(--fs-xs)">· 第${ev.page_index + 1}页</span>
         <div style="margin-top:4px">${esc(snippet.slice(0, 220))}${snippet.length > 220 ? '…' : ''}</div>
-        <div class="muted" style="font-size:11px;margin-top:4px">${icon('doc')} 点击定位原文</div>`;
+        <div class="muted" style="font-size: var(--fs-xs);margin-top:4px">${icon('doc')} 点击定位原文</div>`;
       p.hidden = false;
       const r = el.getBoundingClientRect();
       p.style.left = Math.min(r.left, innerWidth - 340) + 'px';
@@ -68,7 +68,7 @@ function followupButtons(sections) {
     const ref = (state._refs || [])[n - 1];
     if (!ref) { p.hidden = true; return; }
     p.innerHTML = `<b>[${n}]</b> ${esc(ref.text.slice(0, 220))}${ref.text.length > 220 ? '…' : ''}
-      <div class="muted" style="font-size:11px;margin-top:4px">${icon('doc')} 第${ref.page_index + 1}页 · 点击跳转</div>`;
+      <div class="muted" style="font-size: var(--fs-xs);margin-top:4px">${icon('doc')} 第${ref.page_index + 1}页 · 点击跳转</div>`;
     p.hidden = false;
     const r = el.getBoundingClientRect();
     p.style.left = Math.min(r.left, innerWidth - 340) + 'px';
@@ -163,7 +163,7 @@ const renderBlockBody = b => {
     (subCaps || []).forEach(c => c && caps.push(c));
     return `<figure class="inline-fig ${ub ? 'fig-crop' : ''}" ${ub ? `data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'` : ''}>
       <div class="fig-holder">${fb.map(n => `<img loading="lazy" src="/api/papers/${pid}/images/${n}">`).join('')}</div>
-      ${caps.length ? `<figcaption class="muted" style="font-size:11.5px;line-height:1.5">${esc(caps.join(' ｜ ').slice(0, 300))}</figcaption>` : ''}
+      ${caps.length ? `<figcaption class="muted" style="font-size:var(--fs-xs);line-height:1.5">${esc(caps.join(' ｜ ').slice(0, 300))}</figcaption>` : ''}
     </figure>`;
   }
   if (b.type === 'equation' && (b.text || b.en)) {
@@ -186,7 +186,7 @@ const renderBlockBody = b => {
       t.page_index === b.page_index && JSON.stringify(t.bbox) === bbs);
     return `<figure class="fig-crop tbl-crop" data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'>
       <div class="fig-holder">${fallback}</div>
-      ${ta && ta.caption ? `<figcaption class="muted" style="font-size:11.5px;line-height:1.5">${esc(ta.caption.slice(0, 200))}</figcaption>` : ''}
+      ${ta && ta.caption ? `<figcaption class="muted" style="font-size:var(--fs-xs);line-height:1.5">${esc(ta.caption.slice(0, 200))}</figcaption>` : ''}
     </figure>`;
   }
   return mdLite(b.en !== undefined ? b.en : b.text);   // mdLite 已含 esc+katexify+linkifyRefs，并解析 markdown 表格
@@ -678,19 +678,19 @@ function libLevel1Html(d) {
   const total = d.total;
   const myPapers = (d.collections || []).reduce((n, c) => n + (c.papers_total ?? c.papers ?? 0), 0);
   return `<div class="card lib-l1-head">
-      <h2 style="margin:0;flex:1">📚 全部文献库 <span class="muted" style="font-size:12px">${d.collections.length} 个库 · 在库 ${myPapers} 篇${(d.unassigned || 0) ? ` + 未分库 ${d.unassigned} 篇` : ''} = 共 ${total} 篇</span></h2>
+      <h2 class="page-h row" style="flex:1">${icon('library')} 全部文献库 <span class="muted">${d.collections.length} 个库 · 在库 ${myPapers} 篇${(d.unassigned || 0) ? ` + 未分库 ${d.unassigned} 篇` : ''} = 共 ${total} 篇</span></h2>
       <div class="seg">
         <button class="seg-btn ${state.libView === 'card' ? 'on' : ''}" onclick="setLibView('card')">卡片</button>
         <button class="seg-btn ${state.libView === 'list' ? 'on' : ''}" onclick="setLibView('list')">列表</button>
       </div>
     </div>
     ${state.libView === 'card'
-      ? `<div class="lib-cards">${cards || `<div class="muted" style="padding:28px;text-align:center">
-          <p style="font-size:14px;margin-bottom:8px">还没有文献库</p>
+      ? `<div class="lib-cards">${cards || `<div class="empty-state">
+          <p class="t">还没有文献库</p>
           <p style="margin-bottom:12px">用文献库把论文按主题分组（可建子库，最多三级）</p>
           <button class="btn primary" onclick="document.querySelector('#newlib-name')?.focus()">${icon('plus')} 新建文献库</button>
         </div>`}</div>`
-      : `<div class="card"><table class="list">
+      : `<table class="list" style="margin-top:4px">
           <tr><th>库名</th><th>论文</th><th>子库</th><th></th></tr>
           ${(() => {
             // 树序遍历（父库紧跟其子库，缩进才对得上层级）——原先按 API 返回顺序平铺，
@@ -711,7 +711,7 @@ function libLevel1Html(d) {
                 <button class="btn small danger hover-only" title="删除库" onclick="delLib('${c.id}', '${jsArg(c.name)}')">${icon('trash')}</button>
               </td></tr>`).join('');
           })()}
-        </table></div>`}`;
+        </table>`}`;
 }
 
 function bindLibLevel1() {

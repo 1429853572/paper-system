@@ -34,7 +34,7 @@ async function renderMeta() {
       <div class="meta-line">${icon('user')} <span id="m-authors">${esc(paper.authors || '—')}</span></div>
       <div class="meta-line" id="m-rank"><span class="muted">期刊分区：加载中…</span></div>
       <div class="meta-line">${icon('library')} <span id="m-src">${esc([paper.journal, paper.year, paper.doi ? 'DOI: ' + paper.doi : ''].filter(Boolean).join(' · ') || '—')}</span>
-        ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">${icon('check')} 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge priv">未校准</span>'}</div>
+        ${paper.meta_source ? `<span class="badge ok" title="${esc(paper.meta_verified_at || '')}">${icon('check')} 已校准(${esc(paper.meta_source)})</span>` : '<span class="badge dim">未校准</span>'}</div>
       ${paper.owner_name && paper.owner_id !== state.me?.id ? `<div class="meta-line">${icon('user')} <span class="muted">上传者 ${esc(paper.owner_name)}</span></div>` : ''}`;
 
   $('#content-view').innerHTML = `
@@ -61,11 +61,11 @@ async function renderMeta() {
       </div>
     </div>
     <div class="card" style="cursor:pointer" onclick="flashAbstract('${pid}')" title="点击在 PDF 中定位摘要">
-      <h3>摘要 <span class="muted" style="font-weight:400;font-size:12px">${icon('pin')}点击定位</span> ${kw.length ? '<span class="muted" style="font-weight:400;font-size:12px">· 关键词: ' + esc(kw.join(' · ')) + '</span>' : ''}</h3>
-      <p style="font-size:13px; line-height:1.7">${esc(paper.abstract || '（无——可点 AI 提取）')}</p></div>
+      <h3>摘要 <span class="muted" style="font-weight:400;font-size: var(--fs-sm)">${icon('pin')}点击定位</span> ${kw.length ? '<span class="muted" style="font-weight:400;font-size: var(--fs-sm)">· 关键词: ' + esc(kw.join(' · ')) + '</span>' : ''}</h3>
+      <p style="font-size: var(--fs-base); line-height:1.7">${esc(paper.abstract || '（无——可点 AI 提取）')}</p></div>
     <div class="card"><h3>${icon('note')} 备注</h3>
       <textarea id="m-notes" placeholder="记录阅读笔记…（自动保存）" style="min-height:70px">${esc(notes.notes || '')}</textarea></div>
-    <div class="card"><h3>References (${refs.references.length}) <input id="ref-search" placeholder="搜索…" style="width:140px; font-size:12px; margin-left:8px; display:inline-block"></h3>
+    <div class="card"><h3>References (${refs.references.length}) <input id="ref-search" placeholder="搜索…" style="width:140px; font-size: var(--fs-sm); margin-left:8px; display:inline-block"></h3>
       <div class="ref-list" id="ref-list"></div></div>
     <div class="card"><h3>${icon('folder')} 分库</h3>
       <select id="m-collection" style="max-width:240px"><option value="">未分库</option></select></div>`;
@@ -171,7 +171,7 @@ window.cnkiCalibrate = async (pid) => {
     <div class="ui-pop-title">中文源候选（知网）——选最匹配的一条</div>
     <div class="cnki-list">${cands.candidates.map((c, i) => `
       <label class="cnki-item"><input type="radio" name="cnki" value="${i}">
-        <span><b>${esc(c.title)}</b><br><span class="muted" style="font-size:11px">${esc([c.authors, c.journal, c.year].filter(Boolean).join(' · '))}</span></span>
+        <span><b>${esc(c.title)}</b><br><span class="muted" style="font-size: var(--fs-xs)">${esc([c.authors, c.journal, c.year].filter(Boolean).join(' · '))}</span></span>
       </label>`).join('')}</div>
     <div class="ui-pop-foot">
       <button class="btn small" data-cancel>取消</button>
@@ -207,7 +207,7 @@ window.loadRank = async (pid) => {
                     r.jcr && `JCR ${r.jcr}`, r.impact_factor && `IF ${r.impact_factor}`,
                     r.if5 && `5年IF ${r.if5}`, r.warning && `${icon('warn')}预警`].filter(Boolean);
       el.innerHTML = `<span class="badge ok">${icon('chart')}</span> ${esc(bits.join(' · ') || '无分区数据')}
-        <span class="muted" style="font-size:11px">via easyScholar${r.cached ? '（缓存）' : ''}</span>`;
+        <span class="muted" style="font-size: var(--fs-xs)">via easyScholar${r.cached ? '（缓存）' : ''}</span>`;
     } else {
       el.innerHTML = `<span class="muted">期刊分区：${esc(r.message)}</span>
         <button class="btn small" onclick="loadRank('${pid}')">重查</button>`;

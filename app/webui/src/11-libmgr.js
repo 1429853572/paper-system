@@ -30,12 +30,12 @@ window.libOpenLib = cid => {          // 第一层点库 → 进第二层
 function libMgrToolbarHtml(d) {
   return `
     <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <h2 style="margin:0;flex:1">文献库管理</h2>
+      <h2 class="page-h row" style="flex:1">文献库管理</h2>
       <button class="btn" onclick="openCollectPanel()" title="按关键词检索中文文献并入库（一次性或建专题跟踪）">${icon('inbox')} 采集文献</button>
       <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:200px" value="${esc(state.libQuery)}">
       <input id="newlib-name" placeholder="新库名称" style="max-width:150px">
       <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 新建库</button>
-      <button class="btn" id="export-btn" title="批量导出当前范围/勾选的论文">⬇ 导出</button>
+      <button class="btn" id="export-btn" title="批量导出当前范围/勾选的论文">${icon('download')} 导出</button>
       <div class="tool-pop export-pop" id="export-pop" hidden>
         <div class="tp-label">范围</div>
         <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
@@ -51,7 +51,7 @@ function libMgrToolbarHtml(d) {
           <label><input type="checkbox" data-fmt="bilingual_pdf"> 对照 PDF（逐篇渲染较慢）</label>
           <label><input type="checkbox" data-fmt="bibtex"> BibTeX</label>
         </div>
-        <button class="btn small primary" id="export-zip-btn" style="margin:8px 0 4px">⬇ 导出 ZIP</button>
+        <button class="btn small primary" id="export-zip-btn" style="margin:8px 0 4px">${icon('download')} 导出 ZIP</button>
       </div>
     </div>`;
 }
@@ -141,7 +141,7 @@ async function renderCollectionsPage(preset = null) {
     const tj = s.translate_job;
     const parseBadge = s.parsing ? "<span class=\"badge run\">" + icon('clock', 12) + "解析</span>"
       : p.parse_status === 'parsed' ? "<span class=\"badge ok\">" + icon('check') + "</span>"
-      : p.parse_status === 'skipped' ? '<span class="badge priv" title="超页数未自动解析，可手动重解析">已跳过</span>'
+      : p.parse_status === 'skipped' ? '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">已跳过</span>'
       : "<span class=\"badge err\">" + icon('close') + "</span>";
     const trBadge = s.translating ? `<span class="badge run">${icon('globe')}${tj ? tj.done + '/' + tj.total : ''}</span>`
       : tj?.status === 'done' ? "<span class=\"badge ok\">译" + icon('check') + "</span>"
@@ -151,8 +151,8 @@ async function renderCollectionsPage(preset = null) {
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${selBucket(scopeKey).has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
           ${esc(p.title || p.id)}
-          ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size:11px"> · ${esc(owner.name)}</span>` : ''}
-          ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" style="font-size:11px" title="上传者"> · ${esc(p.owner_name)}</span>` : ''}</td>
+          ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size: var(--fs-xs)"> · ${esc(owner.name)}</span>` : ''}
+          ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" style="font-size: var(--fs-xs)" title="上传者"> · ${esc(p.owner_name)}</span>` : ''}</td>
         <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
@@ -176,22 +176,22 @@ async function renderCollectionsPage(preset = null) {
     </div>
     <div class="lib-main" id="lib-main-drop">
         <div class="lib-head">
-          <h2 style="margin:0;flex:1">${sel ? icon('folder') : icon('library')} ${esc(scopeName)}
-            <span class="muted" style="font-size:12px">共 ${total} 篇${scopeIds.length > 1 ? '（含子库）' : ''}${scopeIds.length > 1 ? ` · 本页 ${papers.length} 篇` : ''} · 已译 ${doneTrAll}</span></h2>
+          <h2 class="page-h row" style="flex:1">${sel ? icon('folder') : icon('library')} ${esc(scopeName)}
+            <span class="muted">共 ${total} 篇${scopeIds.length > 1 ? '（含子库）' : ''}${scopeIds.length > 1 ? ` · 本页 ${papers.length} 篇` : ''} · 已译 ${doneTrAll}</span></h2>
           ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">${icon('upload')} 上传</button>
           <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>${icon('plus')}子库</button>
           <button class="btn small" title="重命名" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
           <button class="btn small danger" title="删除库（整棵子树进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
         </div>
         ${subLibs.length ? `<div class="lib-subbar">
-          <span class="muted" style="font-size:12px">子库：</span>
+          <span class="muted" style="font-size: var(--fs-sm)">子库：</span>
           ${subLibs.map(k => `<span class="chip" onclick="libOpenLib('${k.id}')" style="cursor:pointer">${icon('folder')} ${esc(k.name)} · ${k.papers ?? 0} 篇</span>`).join('')}
         </div>` : ''}
         <div class="lib-batch" id="lb-${scopeKey}" hidden>
           <b id="lb-count-${scopeKey}">0</b>&nbsp;篇选中
           <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 翻译</button>
           <button class="btn small" onclick="libBatchSynth('${scopeKey}')" title="自动分组比对生成综述报告">综述</button>
-          <select style="width:auto;font-size:12px" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
+          <select style="width:auto;font-size: var(--fs-sm)" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
           <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">${icon('trash')} 删除</button>
           <span class="lib-batch-sep"></span>
           <button class="btn small primary" onclick="libToBatchCenter('${scopeKey}')" title="切换到任务中心（勾选全局共享，自动可见）">去任务中心</button>
@@ -300,7 +300,7 @@ document.addEventListener('click', async e => {
       toast(`已导出 ${ids.length} 篇`);
       pop.hidden = true;
     } catch (err) { toast('导出失败: ' + err.message); }
-    zip.disabled = false; zip.textContent = '⬇ 导出 ZIP';
+    zip.disabled = false; zip.innerHTML = icon('download') + ' 导出 ZIP';
     return;
   }
   if (pop && !pop.hidden && !pop.contains(e.target) && !e.target.closest('#export-btn')) {
