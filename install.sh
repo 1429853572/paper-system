@@ -315,6 +315,14 @@ else
 fi
 
 # ---------- 5. 启动与健康检查 ----------
+echo "== 构建前端 =="
+# viewer.js 由 app/webui/src/*.js 拼接生成——源码分片维护，单文件交付
+if python3 scripts/build-webui.py; then
+    info "前端已构建"
+else
+    warn "前端构建失败——将使用仓库中的 viewer.js"
+fi
+
 echo "== 启动服务 =="
 docker compose up -d
 info "等待健康检查（mineru vLLM 首次加载模型需数分钟）..."

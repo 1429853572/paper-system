@@ -3407,13 +3407,21 @@ _ASSET_VER: list[tuple[float, str]] = [0.0, ""]
 
 def _asset_version() -> str:
     """styles.css/viewer.js 内容指纹 → 资源链接 ?v=。改版即换 URL，杜绝
-    『换版瞬间新 JS + 旧 CSS』的浏览器缓存错配（布局重叠正是这么来的）。"""
+    『换版瞬间新 JS + 旧 CSS』的浏览器缓存错配（布局重叠正是这么来的）。
+
+    viewer.js 是 app/webui/src/*.js 的拼接产物——指纹同时纳入各分片的
+    mtime/size，任一分片改动都会换版本号（不必重新构建也能让缓存失效）。"""
     import hashlib
 
     sig = []
     for name in ("styles.css", "viewer.js"):
         p = WEBUI_DIR / name
         sig.append(f"{name}:{p.stat().st_mtime_ns}:{p.stat().st_size}")
+    src_dir = WEBUI_DIR / "src"
+    if src_dir.is_dir():
+        for p in sorted(src_dir.glob("*.js")):
+            st = p.stat()
+            sig.append(f"src/{p.name}:{st.st_mtime_ns}:{st.st_size}")
     key = "|".join(sig)
     if _ASSET_VER[1] != key:
         h = hashlib.sha1(key.encode()).hexdigest()[:12]

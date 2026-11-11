@@ -1,3 +1,11 @@
+/* ============================================================
+ * paper-system 前端主文件 —— 由 app/webui/src/*.js 拼接生成
+ *   构建：python3 scripts/build-webui.py
+ *   请勿直接编辑本文件；改 app/webui/src/ 下的分片后重新构建。
+ * ============================================================ */
+/* ===== 01-core.js —— 基础设施：state/api/toast/对话框/图标/健康检查 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 /* paper-system 前端逻辑（原生 JS，无框架） */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -326,7 +334,9 @@ setInterval(() => { if (!document.hidden) pollHealth(); }, 20000)   // 后台标
 /* ---------------- 文献库 ---------------- */
 state.collections = [];
 state.currentCollection = '';
-
+/* ===== 02-library.js —— 文献库与侧栏：集合树/论文列表/上传导入/筛选 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 async function loadCollections(preset = null) {
   const d = preset || await api('/api/collections');
   state.collections = d.collections;
@@ -889,6 +899,9 @@ $$('#scope-chips .chip-btn').forEach(b => b.addEventListener('click', () => {
 }));
 
 /* ---------------- 阅读器 ---------------- */
+/* ===== 03-reader.js —— 阅读器：PDF 渲染/覆盖层/中英对照/翻译 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 let pdfjsLib = null;
 async function initPdfJs() {
   pdfjsLib = await import('/static/vendor/pdfjs/pdf.min.mjs');
@@ -1359,6 +1372,9 @@ window.updateQaBtn = () => {
   b.classList.toggle('on', !!state.qaOpen);
   b.title = state.qaOpen ? '隐藏论文问答框' : '显示论文问答框（Ctrl+Q）';
 };
+/* ===== 04-view.js —— 视图切换与内容视图：双栏/块编辑/切页 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 function switchView(v, s) {
   updateQaBtn();
   // 双语懒加载：首次切到双语/中文且尚未拉取（openPaper 不再预拉），此时才取全文对照
@@ -1734,6 +1750,9 @@ $('#page-tasks').addEventListener('click', async e => {
 /* ================= 任务中心（独立页） =================
    全部任务的唯一视图：批次任务按组展开、单篇任务平铺；
    类型彩色徽章 + 类型/状态筛选；MCP 待确认置顶。 */
+/* ===== 05-tasks.js —— 任务中心与综述：任务聚合/综述列表/报告渲染 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 const TASK_TYPES = {
   parse:          {label: '解析',    icon: '🔍', cls: 'tt-parse'},
   translate:      {label: '翻译',    icon: 'globe2', cls: 'tt-translate'},
@@ -2014,6 +2033,9 @@ function downloadBibtex(ids) {
 }
 
 /* ---- 专题采集任务：列表 → 详情（候选勾选 → 下载入库 → 综述） ---- */
+/* ===== 06-topic.js —— 专题跟踪与采集：检索/入库/发起综述 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 const TASK_STATUS = {draft: '待检索', searching: '检索中', ready: '待勾选',
   downloading: '下载中', ingested: '已入库', reviewing: '综述中', done: '已完成', failed: '失败'};
 
@@ -2755,6 +2777,9 @@ async function watchJobs() {
 }
 
 /* ---------------- 右栏页签：文献信息 / 导读 / 图表 ---------------- */
+/* ===== 07-meta.js —— 元数据与引用：AI 补全/校准/CSL 引用 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 const SUMMARY_NAMES = {problem: '研究问题', core_idea: '核心思想', method: '方法', datasets: '数据集',
   baselines: '基线', metrics: '指标', ablation: '消融', complexity: '复杂度', limitations: '局限'};
 
@@ -3062,6 +3087,9 @@ window.copyCite = async (pid) => {
 };
 
 /* ---------------- 右栏页签：问答 / 导读（与文章并排） ---------------- */
+/* ===== 08-qa.js —— 问答与导读：问答面板/导读流式/会话 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 function renderQaTab() {   // 问答常驻 dock
   renderQaUI($('#qa-dock-body'));
 }
@@ -3969,7 +3997,9 @@ function splitInlineList(text) {
   }));
   return { lead, items };
 }
-
+/* ===== 09-md.js —— Markdown 渲染：mdLite/表格/引用跳转 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 function mdLite(text) {
   let raw = String(text ?? '');
   // 模型偶尔给 ```json 围栏（历史坏数据）——剥掉围栏只留内容
@@ -4131,6 +4161,9 @@ window.restorePaper = async id => {
 /* ---- 设置（BYOK + 术语表 + 测试连接） ---- */
 /* 设置页：页签分组（账号 / AI 模型 / 术语表 / 用量 / 管理）——
    原为单页 97 个控件 3.6 屏（86% 在首屏外），改为每页只渲染本类内容。 */
+/* ===== 10-settings.js —— 设置与管理：页签/配额/成员/审计 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 const SET_TABS = [
   {id: 'acc',  label: '账号安全', icon: 'lock'},
   {id: 'ai',   label: 'AI 模型',  icon: 'key'},
@@ -4708,7 +4741,9 @@ state._libPage = 1; state._libPageSize = 25;                // 文库表格真�
 state.libLevel = 1;                                         // 管理页层级: 1=库列表 2=库内
 state.libView = 'card';                                     // 库列表视图: card | list
 state._libQTimer = 0;
-
+/* ===== 11-libmgr.js —— 文库管理页：库列表/批量操作/选题 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 function libDescendants(cid, list) {   // 含自身 + 全部子孙
   const out = [cid];
   const kids = (list || state.collections).filter(c => c.parent_id === cid);
@@ -5244,6 +5279,9 @@ window.quickDelete = async (pid, anchor) => {
 };
 
 /* 导读后的追问建议 */
+/* ===== 12-reader-ui.js —— 阅读器交互：追问/目录/分栏/高亮/主题 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 const FOLLOWUP_QS = {
   problem: '这个问题之前的主流解法是什么？为什么不够好？',
   core_idea: '核心思想的关键洞察是什么？与已有方法的本质区别在哪？',
@@ -6034,6 +6072,9 @@ if (!new URLSearchParams(location.search).has('debug')) {
 
 /* ================= 命令面板（Ctrl+K）+ 全局快捷键 + 帮助层 =================
    功能多了之后入口藏得深——面板把 页面/动作/论文/设置 变成一键可达。 */
+/* ===== 13-cmd.js —— 命令面板与快捷键 =====
+   由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
+   请勿直接改 app/webui/viewer.js（构建产物）。 */
 const CMD_PAGES = [
   {label: '阅读', hint: '页面', kw: 'read 阅读论文', run: () => switchPage('reader')},
   {label: '文库管理', hint: '页面', kw: 'collections 文库 库', run: () => switchPage('collections')},

@@ -135,10 +135,23 @@ curl -sf -c "$CJM" -X POST "$BASE/api/login" -H 'Content-Type: application/json'
 
 # ---------- 清理：注销测试用户 + 删测试行 ----------
 curl -sf -b "$CJA" -X DELETE "$BASE/api/admin/users/$UID2" >/dev/null && ok "清理: 测试用户已注销"
+# 硬删测试账号以免残留。注销接口会把用户名改写成「[已注销]<原名>#<id>」，
+# 所以匹配模式要同时覆盖改写前后两种形态（否则测试账号越跑越多）。
+# 邀请码/配额/LLM key 等子表按 user_id 级联删除（user_llm_keys、user_quotas
+# 已声明 ON DELETE CASCADE）；invite_codes.used_by 亦已加 CASCADE。
 docker exec paper-system-app python3 -c "
-import sqlite3; c = sqlite3.connect('/app/data/papersys.db')
-n = c.execute(\"DELETE FROM users WHERE username LIKE '${MU}%'\").rowcount
-c.commit(); print(f'清理: 已删 {n} 行测试用户')"
+import sqlite3
+c = sqlite3.connect('/app/data/papersys.db')
+c.execute('PRAGMA foreign_keys=ON')
+MU = '${MU}'
+pats = [MU + '%', '[已注销]' + MU + '%']
+n = 0
+for p in pats:
+    n += c.execute('DELETE FROM users WHERE username LIKE ?', (p,)).rowcount
+# 兜底：used_by 指向已不存在用户的邀请码（悬挂引用）
+n += c.execute('DELETE FROM invite_codes WHERE used_by IS NOT NULL AND used_by NOT IN (SELECT id FROM users)').rowcount
+c.commit()
+print(f'清理: 已删 {n} 行测试数据')"
 rm -f "$CJA" "$CJM" "$CJM2"
 
 echo

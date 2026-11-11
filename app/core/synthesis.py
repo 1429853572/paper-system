@@ -624,13 +624,35 @@ def build_matrix_csv(digests: list[dict], cluster_jsons: list[dict]) -> str:
     return buf.getvalue()
 
 
+def _derive_title(paper_ids: list[str], n: int) -> str:
+    """综述标题——按首篇论文标题生成，而非「文献综述 · N 篇」。
+
+    泛称标题在列表里完全无法辨认（存量综述全是「文献综述 · N 篇」），
+    用户只能靠顺序猜哪篇是哪篇。改成「首篇论文标题 + 篇数」后一眼可辨。
+    首篇无标题时退回泛称。
+
+    注：聚类（分组名）发生在 create 之后，此处拿不到主题名，故用首篇标题；
+    分组名更贴切的场景由 scripts/backfill-synthesis-titles.py 回填存量。
+    """
+    if not paper_ids:
+        return f"文献综述 · {n} 篇"
+    row = db.one("SELECT title FROM papers WHERE id=?", (paper_ids[0],))
+    first = (row["title"] or "").strip() if row else ""
+    if not first:
+        return f"文献综述 · {n} 篇"
+    first = first[:48]
+    return f"{first} 等 {n} 篇综述" if n > 1 else f"{first} 综述"
+
+
 def create(user_id: int, paper_ids: list[str], est: dict) -> str:
     """建综述行（worker 由调用方入队）。返回 synthesis_id。"""
     sid = "syn" + uuid.uuid4().hex[:10]
+    valid = est["valid"]
+    title = _derive_title(valid, len(valid))
     with db.write() as c:
         c.execute(
             "INSERT INTO syntheses(id,user_id,title,paper_ids,status,stage,progress_total,model) "
             "VALUES(?,?,?,?,'running','cluster',?,'')",
-            (sid, user_id, f"文献综述 · {len(est['valid'])} 篇",
-             json.dumps(est["valid"], ensure_ascii=False), est["calls"]))
+            (sid, user_id, title,
+             json.dumps(valid, ensure_ascii=False), est["calls"]))
     return sid

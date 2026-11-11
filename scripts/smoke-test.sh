@@ -31,6 +31,12 @@ CSS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE/static/styles.css")
 [[ "$CSS" == 200 ]] && ok "styles.css 200" || bad "styles.css HTTP $CSS"
 VJS=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE/static/viewer.js")
 [[ "$VJS" == 200 ]] && ok "viewer.js 200" || bad "viewer.js HTTP $VJS"
+# 前端产物同步性：src/ 分片改了但忘了重建 viewer.js → 改动静默丢失
+if [ -d app/webui/src ]; then
+  python3 scripts/build-webui.py --check >/dev/null 2>&1 \
+    && ok "viewer.js 与 src/ 同步" \
+    || bad "viewer.js 与 src/ 不同步——跑 python3 scripts/build-webui.py"
+fi
 FV=$(curl -sf -o /dev/null -w '%{http_code}' "$BASE/static/favicon.svg")
 [[ "$FV" == 200 ]] && ok "favicon.svg 200" || bad "favicon.svg HTTP $FV"
 

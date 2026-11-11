@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS user_llm_keys (
 CREATE TABLE IF NOT EXISTS invite_codes (
     code       TEXT PRIMARY KEY,
     created_by INTEGER NOT NULL REFERENCES users(id),
-    used_by    INTEGER REFERENCES users(id),
+    used_by    INTEGER REFERENCES users(id) ON DELETE CASCADE,
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -362,6 +362,7 @@ class Database:
     def _init_schema(self) -> None:
         with self.write() as c:
             c.executescript(_SCHEMA)
+            self._fix_invite_fk(c)
             row = c.execute("SELECT version FROM schema_version").fetchone()
             if row is None:
                 c.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
@@ -401,6 +402,51 @@ class Database:
                       "ON papers(owner_id) WHERE deleted_at IS NULL")
             # WAL 常开
             c.execute("PRAGMA journal_mode=WAL")
+
+    @staticmethod
+    def _fix_invite_fk(c: sqlite3.Connection) -> None:
+        """invite_codes.used_by 补 ON DELETE CASCADE（幂等）。
+
+        根因：老库的 used_by 无级联动作，用户被硬删（清理脚本/注销回收）后
+        邀请码行仍引用已不存在的 user → PRAGMA foreign_key_check 报悬挂引用。
+        SQLite 不能 ALTER 外键，只能重建表；此处检测到缺级联才重建（每次启动
+        只多一次 PRAGMA foreign_key_list 查询，可忽略）。
+        """
+        fks = c.execute("PRAGMA foreign_key_list(invite_codes)").fetchall()
+        # fk 结构: (id, seq, table, from, to, on_update, on_delete, match)
+        has_cascade = any(f["table"] == "users" and f["from"] == "used_by"
+                          and f["on_delete"].upper() == "CASCADE" for f in fks)
+        if has_cascade:
+            return
+        # 重建期间需免 FK 检查：PRAGMA foreign_keys 在事务内是 no-op，
+        # 故再叠一层 defer_foreign_keys（提交时才校验，事务内可自由搬数据）
+        c.execute("PRAGMA defer_foreign_keys=ON")
+        try:
+            c.execute("PRAGMA foreign_keys=OFF")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("DROP TABLE IF EXISTS invite_codes_new")
+            c.execute(
+                "CREATE TABLE invite_codes_new ("
+                " code TEXT PRIMARY KEY,"
+                " created_by INTEGER NOT NULL REFERENCES users(id),"
+                " used_by INTEGER REFERENCES users(id) ON DELETE CASCADE,"
+                " expires_at TEXT NOT NULL,"
+                " created_at TEXT NOT NULL DEFAULT (datetime('now')))")
+            # 悬挂的 used_by 置空（其用户已不存在，引用无意义）
+            c.execute(
+                "INSERT INTO invite_codes_new(code,created_by,used_by,expires_at,created_at) "
+                "SELECT code, created_by,"
+                " CASE WHEN used_by IN (SELECT id FROM users) THEN used_by ELSE NULL END,"
+                " expires_at, created_at FROM invite_codes")
+            c.execute("DROP TABLE invite_codes")
+            c.execute("ALTER TABLE invite_codes_new RENAME TO invite_codes")
+        finally:
+            try:
+                c.execute("PRAGMA foreign_keys=ON")
+            except sqlite3.OperationalError:
+                pass
 
     @staticmethod
     def _add_col(c: sqlite3.Connection, table: str, col: str, ddl: str) -> None:
