@@ -558,8 +558,8 @@ def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
     vis = "" if is_admin else " AND (visibility='shared' OR owner_id=?)"
     args: list[Any] = [] if is_admin else [u["id"]]
     if q:
-        vis += " AND title LIKE ?"
-        args.append(f"%{q}%")
+        vis += " AND (title LIKE ? OR authors LIKE ?)"
+        args.extend([f"%{q}%", f"%{q}%"])
     if status:
         vis += " AND parse_status=?"
         args.append(status)
@@ -580,7 +580,9 @@ def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
                   f"FROM papers p LEFT JOIN users u ON u.id=p.owner_id "
                   f"WHERE {cond}{vis} ORDER BY p.created_at DESC LIMIT {limit} OFFSET {offset}",
                   tuple(args))
-    return {"papers": [dict(r) for r in rows], "page": page, "has_more": len(rows) == limit}
+    total = db.one(f"SELECT COUNT(*) AS n FROM papers WHERE {cond}{vis}", tuple(args))["n"]
+    return {"papers": [dict(r) for r in rows], "page": page, "has_more": len(rows) == limit,
+            "total": total}
 
 
 @app.get("/api/papers/{paper_id}")

@@ -129,13 +129,16 @@ check('上传弹层含今日解析余量提示', (doc.querySelector('#quota-hint
 }
 
 /* 4. 设置页：我的用量（admin 也显示）+ 管理区 */
-await window.__T.renderSettings();
+// 设置页已改页签分组：按页签逐个渲染（账号/用量/管理）
+await window.__T.renderSettings('usage');
 await new Promise(r => setTimeout(r, 500));
 const qz = doc.querySelector('#me-quota-zone');
 check('「我的用量」区渲染', !!qz && qz.textContent.includes('今日解析'));
 check('用量区含磁盘已用', (qz?.textContent || '').includes('磁盘已用'));
 check('用量区含 30 天 token', (qz?.textContent || '').includes('近 30 天 token'));
 
+await window.__T.renderSettings('admin');
+await new Promise(r => setTimeout(r, 500));
 const az = doc.querySelector('#admin-zone');
 check('管理区用户表渲染 2 用户', (az?.querySelectorAll('table.list tr').length || 0) >= 2);
 check('管理区显示磁盘占用（1.07G）', (az?.textContent || '').includes('1.07G'));

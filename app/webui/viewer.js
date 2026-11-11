@@ -3666,11 +3666,10 @@ async function boot() {
     if (act === 'logout') { await fetch('/api/logout', {method: 'POST'}); location.href = '/login'; }
     else if (act === 'settings') switchPage('settings');
     else if (act === 'trash') switchPage('trash');
-    else if (act === 'admin') {   // 管理区在设置页底部
+    else if (act === 'admin') {   // 管理 → 设置页「管理」页签
       switchPage('settings');
-      setTimeout(() => $('#admin-zone')?.scrollIntoView({block: 'start', behavior: 'smooth'}), 350);
+      setTimeout(() => renderSettings('admin'), 120);
     }
-    else if (act === 'usage') { switchPage('settings'); setTimeout(() => $('#me-quota-zone')?.scrollIntoView({block: 'center'}), 300); }
   };
   // key 缺失提示横幅（公共池开启时问答可用不算缺失；翻译需本人 key）
   {
@@ -3790,9 +3789,25 @@ async function renderTrash() {
 window.restorePaper = async id => { await api(`/api/papers/${id}/restore`, {method: 'POST'}); toast('已恢复'); renderTrash(); await refreshLib(); };
 
 /* ---- 设置（BYOK + 术语表 + 测试连接） ---- */
-async function renderSettings() {
-  const d = await api('/api/settings/llm');
+/* 设置页：页签分组（账号 / AI 模型 / 术语表 / 用量 / 管理）——
+   原为单页 97 个控件 3.6 屏（86% 在首屏外），改为每页只渲染本类内容。 */
+const SET_TABS = [
+  {id: 'acc',  label: '账号安全', icon: 'lock'},
+  {id: 'ai',   label: 'AI 模型',  icon: 'key'},
+  {id: 'gloss',label: '术语表',   icon: 'book'},
+  {id: 'usage',label: '我的用量', icon: 'chart'},
+  {id: 'admin',label: '管理',     icon: 'crown', admin: true},
+];
+function setTab() {
+  const t = localStorage.getItem('ps-set-tab') || 'acc';
+  return SET_TABS.some(x => x.id === t) ? t : 'acc';
+}
+async function renderSettings(tab) {
   const isAdmin = state.me?.role === 'admin';
+  let cur = tab || setTab();
+  if (cur === 'admin' && !isAdmin) cur = 'acc';   // 非管理员不能停管理页签
+  localStorage.setItem('ps-set-tab', cur);
+  const d = await api('/api/settings/llm');
   const tpl = (purpose, cfg, conf) => `
     <div class="set-card">
       <div class="set-head">${purpose === 'chat' ? icon('chat') + " 聊天（问答/导读）" : icon('globe') + " 翻译"} ${conf.configured ? '<span class="badge ok">已配置</span>' : '<span class="badge err">未配置</span>'}</div>
@@ -3807,9 +3822,13 @@ async function renderSettings() {
         </div>
       </form>
     </div>`;
+  const tabs = SET_TABS.filter(t => !t.admin || isAdmin);
   $('#page-settings').innerHTML = `
-    <div class="set-grid">
-      <div class="set-col">
+    <div class="set-tabs" role="tablist">
+      ${tabs.map(t => `<button class="set-tab ${cur === t.id ? 'on' : ''}" data-set-tab="${t.id}">${icon(t.icon)} ${t.label}</button>`).join('')}
+    </div>
+    <div class="set-panel" id="set-panel-${cur}">
+      ${cur === 'acc' ? `
         <div class="set-card">
           <div class="set-head">${icon('lock')} 账号安全</div>
           <form id="f-password">
@@ -3821,14 +3840,13 @@ async function renderSettings() {
               <button class="btn" type="button" onclick="logoutAll()">${icon('lock')} 登出所有设备</button>
             </div>
           </form>
-        </div>
+        </div>` : ''}
+      ${cur === 'ai' ? `
         <h2 class="page-h">${icon('key')} LLM 配置（BYOK）</h2>
         <p class="muted" style="font-size:12px;margin:2px 0 12px">聊天/翻译各自独立；embedding 本机运行无需配置。密钥加密存储、永不回显。</p>
         ${tpl('chat', d.chat, d.chat)}
-        ${tpl('translate', d.translate, d.translate)}
-      </div>
-      <div class="set-col">
-        <div id="me-quota-zone"></div>
+        ${tpl('translate', d.translate, d.translate)}` : ''}
+      ${cur === 'gloss' ? `
         <h2 class="page-h">${icon('book')} 翻译术语表（全局）</h2>
         <div id="gl-list" style="margin:10px 0"></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -3838,33 +3856,40 @@ async function renderSettings() {
           </select>
           <input id="gl-value" placeholder="译法" style="flex:2;min-width:100px">
           <button class="btn small primary" id="gl-add" title="添加术语">${icon('plus')}</button>
-        </div>
-      </div>
-    </div>
-    ${isAdmin ? '<div id="admin-zone" style="margin-top:22px"></div>' : ''}`;
-  const bind = (fid, purpose) => $(`#${fid}`).onsubmit = async e => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const conf = {base_url: f.get('base_url'), model: f.get('model'), api_type: f.get('api_type')};
-    if (f.get('api_key')) conf.api_key = f.get('api_key');
-    await api('/api/settings/llm', {method: 'PUT', body: JSON.stringify({[purpose]: conf})});
-    toast('已保存'); renderSettings();
+        </div>` : ''}
+      ${cur === 'usage' ? '<div id="me-quota-zone"></div>' : ''}
+      ${cur === 'admin' && isAdmin ? '<div id="admin-zone"></div>' : ''}
+    </div>`;
+  $$('#page-settings .set-tab').forEach(b => b.onclick = () => renderSettings(b.dataset.setTab));
+  const bind = (fid, purpose) => {
+    const form = $(`#${fid}`);
+    if (form) form.onsubmit = async e => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const conf = {base_url: f.get('base_url'), model: f.get('model'), api_type: f.get('api_type')};
+      if (f.get('api_key')) conf.api_key = f.get('api_key');
+      await api('/api/settings/llm', {method: 'PUT', body: JSON.stringify({[purpose]: conf})});
+      toast('已保存'); renderSettings();
+    };
   };
   bind('f-chat', 'chat'); bind('f-translate', 'translate');
-  loadGlossary();
-  $('#f-password').onsubmit = async e => {
-    e.preventDefault();
-    const f = e.target;
-    if (f.new_password.value !== f.confirm.value) { toast('两次输入的新密码不一致'); return; }
-    try {
-      await api('/api/password', {method: 'POST', body: JSON.stringify({
-        old_password: f.old_password.value, new_password: f.new_password.value})});
-      toast('密码已修改（其他设备已登出）');
-      f.reset();
-    } catch (err) { toast('修改失败: ' + err.message); }
-  };
-  if (isAdmin) renderAdminZone();
-  renderMeQuota();
+  if (cur === 'gloss') loadGlossary();
+  if (cur === 'acc') {
+    const pf = $('#f-password');
+    if (pf) pf.onsubmit = async e => {
+      e.preventDefault();
+      const f = e.target;
+      if (f.new_password.value !== f.confirm.value) { toast('两次输入的新密码不一致'); return; }
+      try {
+        await api('/api/password', {method: 'POST', body: JSON.stringify({
+          old_password: f.old_password.value, new_password: f.new_password.value})});
+        toast('密码已修改（其他设备已登出）');
+        f.reset();
+      } catch (err) { toast('修改失败: ' + err.message); }
+    };
+  }
+  if (cur === 'usage') renderMeQuota();
+  if (cur === 'admin' && isAdmin) renderAdminZone();
 }
 /* 我的用量：所有用户可见（/api/me/quota + /api/usage 对 member 自动只返回自己的数据） */
 async function renderMeQuota() {
@@ -4214,6 +4239,7 @@ window.exportChat = exportChat;   // 兼容内联 onclick 调用
 state.libSel = localStorage.getItem('ps-lib-sel') || '';   // '' = 全部文献
 state.scope = '';                                           // 侧栏快捷范围筛选
 state.libQuery = '';                                        // 管理页搜索词
+state._libPage = 1; state._libPageSize = 25;                // 文库表格真分页（25 篇/页）
 state.libLevel = 1;                                         // 管理页层级: 1=库列表 2=库内
 state.libView = 'card';                                     // 库列表视图: card | list
 state._libQTimer = 0;
@@ -4224,7 +4250,12 @@ function libDescendants(cid, list) {   // 含自身 + 全部子孙
   for (const k of kids) out.push(...libDescendants(k.id, list));
   return out;
 }
+window.libGoPage = async pg => {
+  state._libPage = Math.max(1, pg);
+  await renderCollectionsPage();
+};
 window.selectLib = cid => {
+  state._libPage = 1;
   state.libSel = cid;
     state.libLevel = 2;                 // 进第二层：库内（子库+论文）
   localStorage.setItem('ps-lib-sel', cid);
@@ -4272,6 +4303,7 @@ function bindLibMgrToolbar() {
   if (qIn) {
     qIn.oninput = e => {
       state.libQuery = e.target.value;
+      state._libPage = 1;              // 换搜索词回到第一页
       clearTimeout(state._libQTimer);
       state._libQTimer = setTimeout(async () => {
         if (state.libLevel === 1) { renderCollectionsPage(); }
@@ -4310,10 +4342,20 @@ async function renderCollectionsPage(preset = null) {
   const scopeKey = sel || 'all';
   const subLibs = sel ? (d.collections.filter(c => c.parent_id === sel)) : [];
   const scopeName = sel ? (d.collections.find(c => c.id === sel)?.name || '文献库') : '全部文献';
-  const papers = (await api('/api/papers' + (scopeIds.length
-      ? '?collection_id=' + scopeIds.join(',') : ''))).papers;
-  const shown = q ? papers.filter(p => (p.title || '').toLowerCase().includes(q)
-                                  || (p.authors || '').toLowerCase().includes(q)) : papers;
+  // 真分页：25 篇/页（原先一次拉全量 87 行 × 2 控件 = 180 个，首屏外 87%）；
+  // 搜索走后端 q（跨页命中 title+authors，前端过滤只能搜当前页）
+  const page = state._libPage || 1;
+  const ps = state._libPageSize || 25;
+  const qs = new URLSearchParams();
+  if (scopeIds.length) qs.set('collection_id', scopeIds.join(','));
+  if (q) qs.set('q', state.libQuery);
+  qs.set('page', String(page));
+  qs.set('page_size', String(ps));
+  const pd = await api('/api/papers?' + qs.toString());
+  const papers = pd.papers || [];
+  const total = pd.total ?? papers.length;
+  const totalPages = Math.max(1, Math.ceil(total / ps));
+  const shown = papers;
   const doneTr = papers.filter(p => st[p.id]?.translate_job?.status === 'done').length;
   const totTok = papers.reduce((s, p) => s + ((st[p.id]?.tokens?.p || 0) + (st[p.id]?.tokens?.c || 0)), 0);
 
@@ -4394,6 +4436,11 @@ async function renderCollectionsPage(preset = null) {
           </details>
         </div>
         <div class="lib-list">
+          ${totalPages > 1 ? `<div class="lib-pager">
+            <button class="btn small" ${page <= 1 ? 'disabled' : ''} onclick="libGoPage(${page - 1})">‹ 上一页</button>
+            <span class="muted">第 <b>${page}</b> / ${totalPages} 页 · 共 ${total} 篇</span>
+            <button class="btn small" ${page >= totalPages ? 'disabled' : ''} onclick="libGoPage(${page + 1})">下一页 ›</button>
+          </div>` : `<div class="lib-pager"><span class="muted">共 ${total} 篇</span></div>`}
           <table class="list lib-table"><tr><th style="width:26px"><input type="checkbox" class="lib-ck-all" data-cid="${scopeKey}" title="全选" onchange="libCkAll('${scopeKey}', this.checked)"></th><th>论文</th><th title="解析状态">解析</th><th title="翻译状态">翻译</th><th>用量</th><th></th></tr>
             ${paperRows || `<tr><td colspan="6" class="muted">${q ? '没有匹配的论文' : '空库'}</td></tr>`}</table>
         </div>
@@ -4420,6 +4467,7 @@ async function renderCollectionsPage(preset = null) {
   if (qIn) {
     qIn.oninput = e => {
       state.libQuery = e.target.value;
+      state._libPage = 1;              // 换搜索词回到第一页
       clearTimeout(state._libQTimer);
       state._libQTimer = setTimeout(async () => {
         await renderCollectionsPage();          // 等重渲染完成再恢复焦点，否则焦点落在被替换的旧节点上
@@ -5438,6 +5486,7 @@ const CMD_PAGES = [
   {label: '任务中心', hint: '页面', kw: 'tasks 任务 队列 进度', run: () => switchPage('tasks')},
   {label: '回收站', hint: '页面', kw: 'trash 回收 删除', run: () => switchPage('trash')},
   {label: '设置', hint: '页面', kw: 'settings 设置 key 密钥', run: () => switchPage('settings')},
+  {label: '我的用量', hint: '页面', kw: 'usage 用量 配额 磁盘 token', run: () => { switchPage('settings'); setTimeout(() => renderSettings('usage'), 120); }},
 ];
 const CMD_ACTIONS = [
   {label: '上传文献', hint: '动作', kw: 'upload 上传 pdf', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); }},

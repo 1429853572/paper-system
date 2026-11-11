@@ -1110,3 +1110,19 @@ details.q-edit[open] { display: block; width: 100%; }
 #qa-sum-bubble.sum-fold .sum-arrow { transform: rotate(-90deg); }
 .batch-right-full { width: 100%; }
 .btn.warn { background: var(--tint-warn); color: var(--warn-ink); border-color: var(--tint-warn-2); }
+
+/* 设置页页签分组（原单页 97 控件 → 每页只渲染本类） */
+.set-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px;
+            overflow-x: auto; scrollbar-width: none; }
+.set-tabs::-webkit-scrollbar { display: none; }
+.set-tab { border: none; background: none; padding: 8px 14px; border-radius: var(--r-sm) var(--r-sm) 0 0;
+           color: var(--muted); font-size: var(--fs-sm); white-space: nowrap;
+           border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.set-tab:hover { color: var(--primary); background: var(--hover); }
+.set-tab.on { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.set-panel { min-height: 300px; }
+
+/* 文库表格页码器（真分页：50 篇/页） */
+.lib-pager { display: flex; align-items: center; gap: 10px; justify-content: flex-end;
+             padding: 6px 2px 8px; font-size: var(--fs-xs); }
+.lib-pager .muted b { color: var(--primary); }
