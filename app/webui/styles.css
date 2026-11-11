@@ -1163,3 +1163,21 @@ details.q-edit[open] { display: block; width: 100%; }
 .collect-actions .btn { display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
                        padding: 9px 14px; flex: 1; min-width: 220px; text-align: left; }
 .collect-actions .btn .muted { font-size: 11px; font-weight: 400; }
+
+/* 任务中心：按论文聚合的行 + 已结束折叠 —— 一篇论文一行，类型徽章组，状态与相对时间 */
+.task-row.task-paper { align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--r-md);
+                      border: 1px solid transparent; transition: background .12s, border-color .12s; }
+.task-row.task-paper:hover { background: var(--hover); border-color: var(--border); }
+.task-badges { display: inline-flex; gap: 3px; flex: none; }
+.task-badges .tt { padding: 3px 4px; border-radius: var(--r-sm); }
+.task-state { display: inline-flex; align-items: center; gap: 7px; flex: none; white-space: nowrap; }
+.task-done-fold { margin-top: 4px; }
+.task-done-fold > summary { cursor: pointer; list-style: none; user-select: none; }
+.task-done-fold > summary::-webkit-details-marker { display: none; }
+.task-done-fold > summary:hover { color: var(--primary); }
+.task-done-fold[open] > summary { margin-bottom: 6px; }
+
+/* 任务中心紧凑化：进行中空状态与「已结束」折叠行之间不留大片空白 */
+.task-done-fold > summary.bp-sec-title { margin-top: 2px; }
+.task-done-fold + .bpanel-batch, .task-done-fold + .bpanel-batch { margin-top: 4px; }
+.tasks-body > .bp-sec-title + .muted { margin-bottom: 4px; }

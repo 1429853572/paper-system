@@ -979,7 +979,9 @@ def list_syntheses(request: Request, limit: int = 20):
     rows = db.all(
         "SELECT s.id, s.title, s.status, s.stage, s.progress_done, s.progress_total, "
         "s.error, s.model, s.created_at, s.updated_at, "
-        "json_array_length(s.paper_ids) AS papers "
+        "json_array_length(s.paper_ids) AS papers, "
+        # 首篇论文标题——综述标题常是泛称（「文献综述」），列表需要能看出是关于什么的
+        "(SELECT p.title FROM papers p WHERE p.id = json_extract(s.paper_ids, '$[0]')) AS first_paper "
         f"FROM syntheses s{scope} ORDER BY s.updated_at DESC LIMIT {int(limit)}")
     return {"syntheses": [dict(r) for r in rows]}
 

@@ -31,6 +31,21 @@ async function api(path, opts = {}) {
   }
   return r.json();
 }
+/* 相对时间（任务中心用）：刚刚 / N 分钟前 / N 小时前 / N 天前 / 绝对日期 */
+function relTime(s) {
+  if (!s) return '';
+  const iso = String(s).replace(' ', 'T') + (String(s).endsWith('Z') ? '' : 'Z');
+  const t = new Date(iso).getTime();
+  if (!t || isNaN(t)) return fmtTime(s);
+  const d = Date.now() - t;
+  if (d < 0) return fmtTime(s);
+  if (d < 60e3) return '刚刚';
+  if (d < 3600e3) return Math.floor(d / 60e3) + ' 分钟前';
+  if (d < 86400e3) return Math.floor(d / 3600e3) + ' 小时前';
+  if (d < 7 * 86400e3) return Math.floor(d / 86400e3) + ' 天前';
+  return fmtTime(s);
+}
+
 /* 统一时间格式：MM-DD HH:MM（同年内）/ YYYY-MM-DD HH:MM（跨年）；空值 → — */
 function fmtTime(s) {
   if (!s) return '—';
@@ -1657,33 +1672,47 @@ function synPct(s) {
 }
 
 /* ---- 我的综述：历史报告列表（syntheses 表永久记录） ---- */
-async function renderSynList() {
+/* 综述标题兜底：模型常给「文献综述」这类泛称 → 用首篇论文标题拼出可辨识的标题 */
+function synTitleOf(s) {
+  const raw = String(s?.title || '').trim();
+  const vague = !raw || (raw.length <= 12 && /综述|survey|report/i.test(raw));
+  if (!vague) return raw;
+  const first = s?.first_paper ? String(s.first_paper).slice(0, 42) : '';
+  return first ? `综述：${first}` : '综述报告';
+}
+
+async function renderSynList(all) {
   const el = $('#syn-list');
   if (!el) return;
   let items;
-  try { items = (await api('/api/syntheses')).syntheses; }
+  try { items = (await api('/api/syntheses' + (all ? '?limit=100' : ''))).syntheses; }
   catch (e) { el.innerHTML = `<p class="muted" style="padding:8px 16px">加载失败: ${esc(e.message)}</p>`; return; }
   if (!items.length) {
     el.innerHTML = '<p class="muted" style="padding:8px 16px">还没有综述报告——在「文库管理」勾选 2 篇以上已解析论文，点批量条「生成综述报告」</p>';
     return;
   }
-  el.innerHTML = items.map(s => {
+  const shown = all ? items : items.slice(0, 5);
+  el.innerHTML = shown.map(s => {
     const pct = synPct(s);
     return `<div class="syn-item" data-sid="${esc(s.id)}">
       ${synBadge(s.status)}
       <span class="syn-item-main">
-        <b>${esc(s.title)}</b>
-        <span class="muted" style="font-size:11px">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc(fmtTime(s.updated_at))}</span>
+        <b title="${esc(synTitleOf(s))}">${esc(synTitleOf(s))}</b>
+        <span class="muted" style="font-size:11px">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc(relTime(s.updated_at))}</span>
         ${s.status === 'running' ? `<div class="up-bar parse" style="max-width:280px"><i style="width:${pct}%"></i></div>` : ''}
         ${s.status === 'failed' && s.error ? `<div class="bpanel-err">${esc(s.error.slice(0, 120))}</div>` : ''}
       </span>
       <span class="spacer"></span>
       ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
-        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">MD</button>
-        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">CSV</button>` : ''}
+        <button class="btn small" title="导出 Markdown" data-syn-dl="${esc(s.id)}" data-fmt="md">${icon('doc')} MD</button>
+        <button class="btn small" title="导出对比矩阵 CSV" data-syn-dl="${esc(s.id)}" data-fmt="csv">${icon('chart')} CSV</button>` : ''}
       <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
     </div>`;
   }).join('');
+  if (items.length > 5) {
+    el.insertAdjacentHTML('beforeend', `<div style="padding:4px 0 2px"><button class="btn small" id="syn-more">展开全部 ${items.length} 条</button></div>`);
+    $('#syn-more').onclick = async () => { el.innerHTML = ''; await renderSynList(true); };
+  }
 }
 $('#page-tasks').addEventListener('click', async e => {
   const sv = e.target.closest('#syn-list [data-syn-view]');
@@ -1771,10 +1800,35 @@ async function renderTasksPage() {
 const taskStatusOf = j => ['queued', 'pending_gate', 'running'].includes(j.status) ? 'active'
   : j.status === 'done' ? 'done' : j.status === 'failed' ? 'failed' : 'other';
 
+/* 任务错误友好化：后端 error 是技术原文（"MinerU failed: Client error '404 Not Found' for url ..."），
+   转成「发生了什么 + 可做什么」，URL 与堆栈细节截断 */
+function taskErr(msg) {
+  const raw = String(msg || '').replace(/https?:\/\/\S+/g, '').trim();
+  if (/404/.test(raw)) return '源文件不可访问（404）——检查链接是否有效';
+  if (/403/.test(raw)) return '访问被拒（403）——可能需要登录或已失效';
+  if (/timeout|timed out|超时/i.test(raw)) return '请求超时——目标服务未响应，可稍后重试';
+  if (/connection|refused|reset/i.test(raw)) return '连接失败——目标服务未启动';
+  if (/budget|余额|额度|insufficient/i.test(raw)) return '模型额度不足——请检查 API key 或提高预算';
+  if (/invalid|认证|unauthorized|401/i.test(raw)) return '认证失败——请检查 API key';
+  const short = raw.replace(/^MinerU failed:\s*/i, '').replace(/^\w+ failed:\s*/i, '').slice(0, 72);
+  return short || '任务失败';
+}
+
 function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN, doneN) {
   const f = state._taskFilter;
   const stMap = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
                  failed: '失败', canceled: '已取消'};
+  /* 单篇任务按论文聚合：同一篇的 解析/导读/元数据/索引回填 合并成一行
+     （原先每任务一行 → 同一标题刷屏 N 次，看不出是同一篇） */
+  const groupByPaper = jobs => {
+    const map = new Map();
+    for (const j of jobs) {
+      const key = j.paper_id || ('job-' + j.id);
+      if (!map.has(key)) map.set(key, {key, title: j.title || j.paper_id || '（无标题）', items: []});
+      map.get(key).items.push(j);
+    }
+    return [...map.values()];
+  };
   const row = j => {
     const tt = taskType(j.job_type);
     const bar = j.progress_total > 1
@@ -1784,11 +1838,37 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
       <span class="task-main">
         <span class="task-title">${esc(j.title || j.paper_id || '（无标题）')}</span>
         ${bar}
-        ${j.error ? `<span class="bpanel-err" style="padding:0">${esc(j.error.slice(0, 140))}</span>` : ''}
+        ${j.error ? `<span class="bpanel-err" style="padding:0">${esc(taskErr(j.error))}</span>` : ''}
       </span>
       <span class="muted" style="font-size:11px;white-space:nowrap">${stMap[j.status] || esc(j.status)}${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
       ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
       ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
+    </div>`;
+  };
+  /* 聚合行：一篇论文一行 + 各任务类型徽章组 + 汇总状态 */
+  const paperRow = g => {
+    const items = g.items;
+    const failed = items.filter(x => x.status === 'failed');
+    const live = items.filter(x => ['queued', 'pending_gate', 'running'].includes(x.status));
+    const badgeSet = [...new Map(items.map(x => [x.job_type, x])).values()]
+      .map(x => { const t = taskType(x.job_type);
+        return `<span class="tt ${t.cls}" title="${esc(t.label)}">${icon(t.icon, 11)}</span>`; }).join('');
+    const prog = items.filter(x => x.progress_total > 1)
+      .map(x => `<div class="up-bar task"><i style="width:${Math.min(100, Math.round(100 * (x.progress_done || 0) / x.progress_total))}%"></i></div>`).join('');
+    const state = failed.length ? ['err', `${failed.length} 个失败`]
+      : live.length ? ['run', '进行中'] : ['ok', '已完成'];
+    const t0 = items.map(x => x.updated_at || x.created_at).filter(Boolean).sort().pop();
+    return `<div class="task-row task-paper">
+      <span class="task-badges">${badgeSet}</span>
+      <span class="task-main">
+        <span class="task-title">${esc(g.title)}</span>
+        ${prog}
+        ${failed.map(x => `<span class="bpanel-err" style="padding:0">${esc(taskErr(x.error))}</span>`).join('')}
+      </span>
+      <span class="task-state"><span class="badge ${state[0]}">${state[1]}</span>
+        <span class="muted" style="font-size:11px">${esc(relTime(t0))}</span></span>
+      ${failed.length ? `<button class="btn small" data-retry="${failed[0].id}">重试</button>` : ''}
+      ${live.length ? `<button class="btn small danger" data-cancel="${live[0].id}">取消</button>` : ''}
     </div>`;
   };
   const batchCard = b => {
@@ -1802,7 +1882,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         <span class="tt ${tt.cls}">${tt.icon} ${tt.label}</span>
         <span class="muted">${b.done}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}${b.canceled ? ` · ${b.canceled} 取消` : ''}</span>
         <span class="spacer"></span>
-        <span class="muted" style="font-size:11px">${esc(fmtTime(b.updated_at))}</span>
+        <span class="muted" style="font-size:11px">${esc(relTime(b.updated_at))}</span>
         <span class="ic">${icon('chevD')}</span>
       </div>
       <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
@@ -1814,14 +1894,17 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
   if (!f.status || f.status === 'active') {
     html += sec(`进行中${activeN ? `（${activeN}）` : ''}`,
       (activeBatches.map(batchCard).join('') || '') +
-      (looseActive.length ? `<div class="bpanel-batch">${looseActive.map(row).join('')}</div>` : ''),
+      (looseActive.length ? `<div class="bpanel-batch">${groupByPaper(looseActive).map(paperRow).join('')}</div>` : ''),
       '没有进行中的任务——发起批量操作或上传论文后，这里实时显示进度');
   }
   if (!f.status || f.status === 'done' || f.status === 'failed') {
-    html += sec(`已结束${doneN ? `（${doneN}）` : ''}`,
-      (settledBatches.map(batchCard).join('') || '') +
-      (looseDone.length ? `<div class="bpanel-batch">${looseDone.map(row).join('')}</div>` : ''),
-      '暂无已结束任务');
+    // 已结束默认折叠（历史任务量大，默认铺开会淹没进行中的）
+    const doneInner = (settledBatches.map(batchCard).join('') || '') +
+      (looseDone.length ? `<div class="bpanel-batch">${groupByPaper(looseDone).map(paperRow).join('')}</div>` : '');
+    const doneBlock = (doneInner || `<p class="muted" style="padding:2px 0 8px">暂无已结束任务</p>`);
+    html += f.status
+      ? sec(`已结束${doneN ? `（${doneN}）` : ''}`, doneBlock, '')
+      : `<details class="task-done-fold"><summary class="bp-sec-title">已结束${doneN ? `（${doneN}）` : ''} —— 点击展开</summary>${doneBlock}</details>`;
   }
   return html;
 }
@@ -2310,8 +2393,8 @@ async function renderSynJob(sid, box) {
       ${synBadge(s.status)}
       <span style="flex:1;min-width:0">${esc(s.title)} · ${esc(stageTxt)}${s.status === 'running' ? ` ${s.progress_done}/${s.progress_total}` : ''}</span>
       ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
-        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="md">MD</button>
-        <button class="btn small" data-syn-dl="${esc(s.id)}" data-fmt="csv">CSV</button>` : ''}
+        <button class="btn small" title="导出 Markdown" data-syn-dl="${esc(s.id)}" data-fmt="md">${icon('doc')} MD</button>
+        <button class="btn small" title="导出对比矩阵 CSV" data-syn-dl="${esc(s.id)}" data-fmt="csv">${icon('chart')} CSV</button>` : ''}
       <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
     </div>
     ${s.status === 'running' ? `<div class="up-bar parse" style="margin:0 12px 10px"><i style="width:${pct}%"></i></div>` : ''}
