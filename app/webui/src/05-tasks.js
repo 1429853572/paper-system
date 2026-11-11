@@ -2,11 +2,11 @@
    由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
    请勿直接改 app/webui/viewer.js（构建产物）。 */
 const TASK_TYPES = {
-  parse:          {label: '解析',    icon: '🔍', cls: 'tt-parse'},
+  parse:          {label: '解析',    icon: 'search', cls: 'tt-parse'},
   translate:      {label: '翻译',    icon: 'globe2', cls: 'tt-translate'},
   summary:        {label: '导读',    icon: 'brain', cls: 'tt-summary'},
   meta:           {label: '元数据',  icon: 'tag2', cls: 'tt-meta'},
-  embed_backfill: {label: '索引回填', icon: '🧲', cls: 'tt-embed'},
+  embed_backfill: {label: '索引回填', icon: 'stack', cls: 'tt-embed'},
   synthesis:      {label: '综述',    icon: 'doc', cls: 'tt-synthesis'},
   acquire:        {label: '采集下载', icon: 'inbox', cls: 'tt-acquire'},
 };
@@ -146,7 +146,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
     return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
       <div class="bpanel-row head" data-tb="${esc(b.batch_id)}">
         <span class="badge ${badge[0]}">${badge[1]}</span>
-        <span class="tt ${tt.cls}">${tt.icon} ${tt.label}</span>
+        <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
         <span class="muted">${b.done}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}${b.canceled ? ` · ${b.canceled} 取消` : ''}</span>
         <span class="spacer"></span>
         <span class="muted" style="font-size:11px">${esc(relTime(b.updated_at))}</span>
@@ -271,14 +271,6 @@ $('#page-tasks').addEventListener('click', async e => {
     else { state._batchOpen.add(bid); renderBatchJobs(bid, box); }
   }
 });
-
-/* 勾选变化后同步全部计数（卡头/已选定视图/操作卡置灰）——单一数据源，无滞后 */
-function syncBpCount() {
-  updateBatchOpsState();
-}
-
-/* 批量操作卡已移除（统一走文库批量条）——保留空实现以免调用点报错 */
-function updateBatchOpsState() {}
 
 
 

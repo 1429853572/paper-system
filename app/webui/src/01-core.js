@@ -325,7 +325,7 @@ function renderHealthPop() {
     row('数据库', h.db) +
     row('解析服务（MinerU GPU）', h.mineru) +
     row('语义检索（embedding/rerank）', h.ai, (h.models || []).join(' / ')) +
-    `<div class="muted" style="font-size:11px;margin-top:6px">检测于 ${new Date().toLocaleTimeString()}</div>`;
+    `<div class="muted" style="font-size:var(--fs-xs);margin-top:6px">刚刚检测</div>`;
   $('#hp-recheck').onclick = e => { e.stopPropagation(); pop.hidden = true; pollHealth(); };
 }
 $('#health-dot').onclick = e => {

@@ -483,14 +483,6 @@ window.createLibFromPage = async () => {
     toast('已创建'); await refreshLib();
   } catch (e) { toast(friendlyError(e, '创建失败，请重试')); }
 };
-window.movePaper = async (pid, v, sel) => {
-  if (!v) return;
-  const cid = v === '__none__' ? null : v;
-  try {
-    await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: cid})});
-    toast('已移动'); await refreshLib();
-  } catch (e) { toast(friendlyError(e, '移动失败，请重试')); }
-};
 window.delPaperFromLib = async pid => {
   const p = (state.papers || []).find(x => x.id === pid) || (state._libScopePapers || []).find(x => x.id === pid);
   if (p?.visibility === 'shared' && state.me?.role !== 'admin') { toast('共享论文仅管理员可删除'); return; }

@@ -35,7 +35,6 @@ const DATA = {
   '/api/admin/users': USERS,
   '/api/admin/pool': {enabled: false},
   '/api/admin/audit': {rows: []},
-  '/api/presets': {questions: [], compare: []},
   '/api/chat/sessions': {sessions: []},
   '/api/collections': {total: 2, collections: [{id: 'c1', name: '默认文献库', parent_id: null, papers: 2, papers_total: 2}]},
   '/api/papers': {total: 2, papers: [

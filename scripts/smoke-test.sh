@@ -47,7 +47,7 @@ LOGIN=$(curl -sf -c "$CJ" -X POST "$BASE/api/login" -H 'Content-Type: applicatio
 echo "$LOGIN" | grep -q '"role":"admin"' && ok "login: admin" || bad "login 失败: $LOGIN"
 
 # 4. 关键只读端点（带 cookie）
-for ep in "/api/papers" "/api/collections" "/api/statuses" "/api/presets" "/api/jobs" "/api/glossary"; do
+for ep in "/api/papers" "/api/collections" "/api/statuses" "/api/jobs" "/api/glossary"; do
     CODE=$(curl -sf -b "$CJ" -o /dev/null -w '%{http_code}' "$BASE$ep")
     [[ "$CODE" == 200 ]] && ok "GET $ep" || bad "GET $ep HTTP $CODE"
 done

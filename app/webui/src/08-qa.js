@@ -156,8 +156,6 @@ async function renderSumBubble() {
   const paper = (state.qaAllPapers || state.papers).find(x => x.id === pid) || state.current || {};
   const title = paper.title || pid;
   const multi = state.qaPapers.size > 1;
-  // 悬浮提示而非常驻文字（优雅优先；多篇警示仅在生成按钮气泡里出现一次）
-  state._sumTip = `针对：${title}` + (multi ? `（已选 ${state.qaPapers.size} 篇，导读仅第一篇）` : '');
   state._sumHead = multi ? `<div class="muted" style="font-size:11px;margin-bottom:4px">已选 ${state.qaPapers.size} 篇 · 导读针对第一篇</div>` : '';
   const cached = state._sumCache?.[pid];
   if (cached) { drawSummary(cached.summary, pid, '#qa-sum-bubble', true); return; }
@@ -193,24 +191,10 @@ window.genSumBubble = async pid => {
     const jobId = d.job_id;
     state._sumPending = state._sumPending || {};
     state._sumPending[pid] = jobId;
-    // 轮询不因切换论文中断——生成在后台跑完，切回来直接显示（此前切走即 return，
-    // 任务中心显示「完成」但气泡仍是旧内容，只能手动刷新）
-    for (let i = 0; i < 300; i++) {          // 最多 10 分钟（导读单并发，排队可能久）
-      await new Promise(r => setTimeout(r, 2000));
-      const js = await api(`/api/jobs/${jobId}`).catch(() => null);
-      if (!js) continue;
-      if (js.status === 'done') { await refreshSummaryFor(pid, 'done', true); return; }
-      if (js.status === 'failed') throw new Error(js.error || '生成失败');
-      if (js.status === 'canceled') {
-        delete state._sumPending[pid];
-        if (state.current?.id === pid)
-          el.innerHTML = (state._sumHead || '') + '<p class="muted">导读生成已取消。</p>';
-        return;
-      }
-    }
-    // 超时未完成：后台继续跑，完成后由 SSE 事件补渲染
+    // 完成检测走 SSE（watchJobs 监听 summary 事件 → refreshSummaryFor 重拉重绘）；
+    // 此前这里还轮询 GET /api/jobs/{id}——后端从无该路由，catch 恒 null 空转 10 分钟，已删。
     el.innerHTML = (state._sumHead || '') + `<div class="msg assistant"><div class="bubble">
-      导读仍在生成（队列中）——完成后会自动显示，也可到「任务中心」查看进度</div></div>`;
+      导读正在生成——完成后会自动显示，也可到「任务中心」查看进度</div></div>`;
   } catch (e) {
     el.innerHTML = (state._sumHead || '') + `<div class="msg assistant"><div class="bubble">生成失败: ${esc(e.message)} <button class="btn small" onclick="genSumBubble('${pid}')">重试</button></div></div>`;
   }

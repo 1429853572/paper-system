@@ -23,7 +23,6 @@ const CSL_JSON = {
 };
 const DATA = {
   '/api/me': {id: 1, username: 'admin', role: 'admin', llm_configured: {chat: true, translate: true}},
-  '/api/presets': {questions: [], compare: []},
   '/api/chat/sessions': {sessions: []},
   '/api/collections': {total: 1, collections: []},
   '/api/papers': {total: 1, papers: [{id: 'p1', title: 'T', parse_status: 'parsed', visibility: 'shared', owner_id: 1, page_count: 10, file_size: 1024}]},

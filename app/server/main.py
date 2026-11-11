@@ -660,29 +660,6 @@ def paper_pdf(paper_id: str, request: Request):
                                  'inline; filename="paper.' + path.name.rsplit(".", 1)[-1] + '"'})
 
 
-@app.get("/api/papers/{paper_id}/markdown")
-def paper_markdown(paper_id: str, request: Request, run: str = ""):
-    u = require(request)
-    p = _get_paper_or_404(paper_id, u)
-    if not run:
-        r = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
-                   "ORDER BY created_at DESC LIMIT 1", (paper_id,))
-        if r is None:
-            raise HTTPException(404, "尚未解析完成")
-        run = r["id"]
-    elif db.one("SELECT id FROM parse_runs WHERE paper_id=? AND id=?", (paper_id, run)) is None:
-        raise HTTPException(404, "解析版本不存在")   # 防路径穿越：run 必须属于该论文
-    path = ingest.PAPERS_DIR / paper_id / "parse" / run / "markdown.md"
-    if not path.exists():
-        raise HTTPException(404, "markdown 不存在")
-    from urllib.parse import quote
-    from core.meta import canonical_name
-    name = canonical_name(p)
-    return FileResponse(path, media_type="text/markdown",
-                        headers={"Content-Disposition":
-                                 'attachment; filename="paper.md"; filename*=UTF-8\'\'' + quote(name + ".md")})
-
-
 @app.get("/api/papers/{paper_id}/images/{name}")
 def paper_image(paper_id: str, name: str, request: Request):
     u = require(request)
@@ -1554,11 +1531,9 @@ def delete_collection(cid: str, request: Request):
         audit(u["id"], "batch-delete", p["title"])
         n += 1
     from core.retrieval import invalidate_vec_cache
-    invalidate_vec_cache()
+    invalidate_vec_cache()   # 删库会连带进回收站论文的可见性，向量缓存统一在末尾失效一次
     with db.write() as c:
         c.execute(f"DELETE FROM collections WHERE id IN ({ph})", ids)
-    from core.retrieval import invalidate_vec_cache
-    invalidate_vec_cache()
     return {"ok": True, "libs": len(ids), "trashed": n}
 
 
@@ -1837,39 +1812,6 @@ def _md_response(md: str, filename: str) -> Response:
     )
 
 
-@app.get("/api/papers/{paper_id}/export/translation")
-def export_translation(paper_id: str, request: Request, lang: str = "both", cache_key: str = ""):
-    """译文导出：lang=both 双语对照 | zh 纯中文。"""
-    u = require(request)
-    p = db.one("SELECT id, title, authors, year, owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
-    if p is None:
-        raise HTTPException(404, "论文不存在")
-    _require_visible(u, p)
-    from core.translator import bilingual_pairs
-    run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
-                 "ORDER BY created_at DESC LIMIT 1", (paper_id,))
-    if run is None:
-        raise HTTPException(404, "尚未解析")
-    pairs = [x for x in bilingual_pairs(paper_id, run["id"], cache_key or None) if x["zh"]]
-    if not pairs:
-        raise HTTPException(404, "尚无译文")
-    title = p["title"] or paper_id
-    lines = [f"# {title} · {'双语对照' if lang == 'both' else '中文翻译'}", ""]
-    cur_section = ""
-    for x in pairs:
-        if x["section_path"] and x["section_path"] != cur_section:
-            cur_section = x["section_path"]
-            lines += [f"## {cur_section}", ""]
-        if lang == "both":
-            lines += [x["en"], "", f"> {x['zh']}", ""]
-        else:
-            lines += [x["zh"], ""]
-    md = "\n".join(lines)
-    from core.meta import canonical_name
-    suffix = "双语对照" if lang == "both" else "中文翻译"
-    return _md_response(md, f"{canonical_name(p)}-{suffix}.md")
-
-
 @app.get("/api/chat/sessions/{session_id}/export")
 def export_session(session_id: str, request: Request):
     """对话记录导出 Markdown（含引用与证据页码）。"""
@@ -1900,37 +1842,6 @@ def export_session(session_id: str, request: Request):
             from core.meta import canonical_name
             fname = f"{canonical_name(p)}_discussion.md"
     return _md_response("\n".join(lines), fname)
-
-
-@app.get("/api/papers/{paper_id}/export/summary")
-def export_summary(paper_id: str, request: Request):
-    """导读导出 Markdown（9 字段 + 证据页码）。"""
-    u = require(request)
-    p = _get_paper_or_404(paper_id, u)
-    s = db.one("SELECT * FROM summaries WHERE paper_id=? ORDER BY created_at DESC LIMIT 1", (paper_id,))
-    if s is None:
-        raise HTTPException(404, "尚未生成导读")
-    data = json.loads(s["content"])
-    names = {"problem": "研究问题", "core_idea": "核心思想", "method": "方法",
-             "datasets": "数据集", "baselines": "基线", "metrics": "评价指标",
-             "ablation": "消融", "complexity": "复杂度", "limitations": "局限"}
-    ev_by_id = {e["evidence_id"]: e for e in (data.get("evidence") or [])}
-    cite_map = data.get("cite_map") or {}
-    lines = [f"# 科研导读 · {p['title']}", "", f"- 模型: {s['model']}", ""]
-    for k, v in (data.get("sections") or {}).items():
-        lines += [f"## {names.get(k, k)}", "", v, ""]
-        # 证据脚注：编号在文件内自解释（此前导出只有裸 [n]，读者无从核对）
-        local = cite_map.get(k) or {}
-        for n, gid in sorted(local.items(), key=lambda kv: int(kv[0])):
-            ev = ev_by_id.get(gid)
-            if ev is None:
-                continue
-            lines.append(f"> [{n}] 第{ev['page_index'] + 1}页 · {(ev.get('text') or '').strip()[:300]}")
-        if local:
-            lines.append("")
-    lines += ["", f"（由 paper-system 生成 · {s['created_at'][:16]}）"]
-    from core.meta import canonical_name
-    return _md_response("\n".join(lines), f"{canonical_name(p)}_reading-guide.md")
 
 
 @app.post("/api/papers/export-zip")
@@ -3321,12 +3232,6 @@ def chat_messages(session_id: str, request: Request):
     rows = db.all("SELECT role, content, evidence, created_at FROM chat_messages "
                   "WHERE session_id=? ORDER BY id", (session_id,))
     return {"session": dict(s), "messages": [dict(r) for r in rows]}
-
-
-@app.get("/api/presets")
-def presets(request: Request):
-    require(request)
-    return {"questions": qa.PRESET_QUESTIONS, "compare": qa.COMPARE_QUESTIONS}
 
 
 # ---------------- 导读 ----------------

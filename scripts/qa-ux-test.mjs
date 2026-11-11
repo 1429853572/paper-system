@@ -15,7 +15,6 @@ const js = fs.readFileSync(path.join(UI, 'viewer.js'), 'utf8');
 
 const DATA = {
   '/api/me': { id: 1, username: 'tester', role: 'admin', llm_configured: { chat: true, translate: true } },
-  '/api/presets': { questions: [] },
   '/api/chat/sessions': { sessions: [] },
   '/api/collections': { total: 1, collections: [{ id: 'c1', name: '默认文献库', parent_id: null, papers: 1, papers_total: 1 }] },
   '/api/papers': { total: 1, papers: [{ id: 'p1', title: 'Test Paper', parse_status: 'parsed', visibility: 'shared', owner_id: 1, page_count: 10, file_size: 1024 }] },

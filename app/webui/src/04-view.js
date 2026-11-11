@@ -258,7 +258,6 @@ setInterval(refreshQueueBadge, 8000);
    圈定（勾选/当前列表/按库）→ 操作卡发起一批同型任务（后端 /api/batch/{action}）
    → 批次进度面板按 batch_id 聚合跟踪（轮询 + SSE），失败项单独重试。 */
 state._batchOpen = new Set();   // 进度面板里展开的批次
-state._batchPreset = null;      // 从文库批量条带过来的圈定
 state._batchPapers = [];        // 圈定来源论文缓存（供明细显示标题）
 
 // 批量导读/翻译/元数据/重解析/BibTeX/删除卡已移除——与文库管理页批量条逐一重复（收敛到单一入口）

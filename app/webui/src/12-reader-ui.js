@@ -548,7 +548,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   let closed = false;
   for (const sel of ['#acc-pop', '#filter-pop', '#upload-pop', '#download-pop',
-                     '#discover-pop', '#col-new-form', '#health-pop', '#sort-pop']) {
+                     '#discover-pop', '#col-new-form', '#health-pop']) {
     const el = document.querySelector(sel);
     if (el && !el.hidden) { el.hidden = true; closed = true; }
   }

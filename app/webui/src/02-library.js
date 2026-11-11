@@ -485,10 +485,6 @@ function markFilterMenu() {
       it.classList.toggle('on', on);
     });
   }
-  const spop = $('#sort-pop');
-  if (spop) {
-    $$('.tp-item', spop).forEach(it => it.classList.toggle('on', it.dataset.s === state.sortBy));
-  }
   const arrow = $('#filter-arrow');
   if (!arrow) return;
   const fn = FILTERS.find(f => f[0] === state.filter)?.[1] || '全部';

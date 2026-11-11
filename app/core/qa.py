@@ -18,12 +18,6 @@ from .retrieval import search
 
 _CITE = re.compile(r"\[(\d{1,4})\]")   # 全文直读模式证据可达数百条
 
-PRESET_QUESTIONS = [
-    "这篇论文的核心贡献是什么？",
-    "方法的关键机制和整体流程是怎样的？",
-    "实验用了哪些数据集、基线和评价指标？主要结果如何？",
-    "论文承认的局限性有哪些？",
-]
 
 
 def _paper_blocks(paper_id: str) -> list[dict]:
@@ -183,12 +177,6 @@ COMPARE_ADDENDUM = (
     "7. 涉及效果比较时基于各自报告的数值，注明实验环境差异，不做无依据的优劣判断"
 )
 
-COMPARE_QUESTIONS = [
-    "对比所选论文的核心方法有何异同？",
-    "对比它们使用的数据集、评价指标与主要结果，哪篇效果更好？",
-    "它们的研究结论是否一致？有哪些共识与分歧？",
-    "如果要把它们的方法结合起来，可行的思路是什么？",
-]
 
 
 def answer(user: dict, question: str, paper_ids: list[str], mode: str = "auto") -> dict:

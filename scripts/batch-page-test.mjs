@@ -15,7 +15,6 @@ const js = fs.readFileSync(path.join(UI, 'viewer.js'), 'utf8');
 
 const DATA = {
   '/api/me': { id: 1, username: 'tester', role: 'admin', llm_configured: { chat: true, translate: true } },
-  '/api/presets': { questions: [] },
   '/api/chat/sessions': { sessions: [] },
   '/api/collections': { total: 2, collections: [
     { id: 'c1', name: '默认文献库', parent_id: null, papers: 2, papers_total: 2 },
@@ -145,7 +144,7 @@ process.on('unhandledRejection', (r) => {
 });
 
 try {
-  window.eval(js + '\n;window.__T = { state, switchPage, syncBpCount, renderTaskPanel, renderCollectionsPage };');
+  window.eval(js + '\n;window.__T = { state, switchPage, renderTaskPanel, renderCollectionsPage };');
 } catch (e) {
   errors.push('eval: ' + e.stack.split('\n').slice(0, 3).join(' | '));
 }

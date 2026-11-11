@@ -27,7 +27,6 @@ const EVIDENCE = [
 
 const DATA = {
   '/api/me': {id: 1, username: 'tester', role: 'admin', llm_configured: {chat: true, translate: true}},
-  '/api/presets': {questions: []},
   '/api/chat/sessions': {sessions: []},
   '/api/collections': {total: 1, collections: []},
   '/api/papers': {total: 1, papers: [{id: 'p1', title: 'Test Paper', parse_status: 'parsed', visibility: 'shared', owner_id: 1, page_count: 13, file_size: 1024}]},

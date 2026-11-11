@@ -330,7 +330,7 @@ function renderHealthPop() {
     row('数据库', h.db) +
     row('解析服务（MinerU GPU）', h.mineru) +
     row('语义检索（embedding/rerank）', h.ai, (h.models || []).join(' / ')) +
-    `<div class="muted" style="font-size:11px;margin-top:6px">检测于 ${new Date().toLocaleTimeString()}</div>`;
+    `<div class="muted" style="font-size:var(--fs-xs);margin-top:6px">刚刚检测</div>`;
   $('#hp-recheck').onclick = e => { e.stopPropagation(); pop.hidden = true; pollHealth(); };
 }
 $('#health-dot').onclick = e => {
@@ -835,10 +835,6 @@ function markFilterMenu() {
       const on = it.dataset.f !== undefined ? it.dataset.f === state.filter : it.dataset.s === state.sortBy;
       it.classList.toggle('on', on);
     });
-  }
-  const spop = $('#sort-pop');
-  if (spop) {
-    $$('.tp-item', spop).forEach(it => it.classList.toggle('on', it.dataset.s === state.sortBy));
   }
   const arrow = $('#filter-arrow');
   if (!arrow) return;
@@ -1647,7 +1643,6 @@ setInterval(refreshQueueBadge, 8000);
    圈定（勾选/当前列表/按库）→ 操作卡发起一批同型任务（后端 /api/batch/{action}）
    → 批次进度面板按 batch_id 聚合跟踪（轮询 + SSE），失败项单独重试。 */
 state._batchOpen = new Set();   // 进度面板里展开的批次
-state._batchPreset = null;      // 从文库批量条带过来的圈定
 state._batchPapers = [];        // 圈定来源论文缓存（供明细显示标题）
 
 // 批量导读/翻译/元数据/重解析/BibTeX/删除卡已移除——与文库管理页批量条逐一重复（收敛到单一入口）
@@ -1769,11 +1764,11 @@ $('#page-tasks').addEventListener('click', async e => {
    由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
    请勿直接改 app/webui/viewer.js（构建产物）。 */
 const TASK_TYPES = {
-  parse:          {label: '解析',    icon: '🔍', cls: 'tt-parse'},
+  parse:          {label: '解析',    icon: 'search', cls: 'tt-parse'},
   translate:      {label: '翻译',    icon: 'globe2', cls: 'tt-translate'},
   summary:        {label: '导读',    icon: 'brain', cls: 'tt-summary'},
   meta:           {label: '元数据',  icon: 'tag2', cls: 'tt-meta'},
-  embed_backfill: {label: '索引回填', icon: '🧲', cls: 'tt-embed'},
+  embed_backfill: {label: '索引回填', icon: 'stack', cls: 'tt-embed'},
   synthesis:      {label: '综述',    icon: 'doc', cls: 'tt-synthesis'},
   acquire:        {label: '采集下载', icon: 'inbox', cls: 'tt-acquire'},
 };
@@ -1913,7 +1908,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
     return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
       <div class="bpanel-row head" data-tb="${esc(b.batch_id)}">
         <span class="badge ${badge[0]}">${badge[1]}</span>
-        <span class="tt ${tt.cls}">${tt.icon} ${tt.label}</span>
+        <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
         <span class="muted">${b.done}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}${b.canceled ? ` · ${b.canceled} 取消` : ''}</span>
         <span class="spacer"></span>
         <span class="muted" style="font-size:11px">${esc(relTime(b.updated_at))}</span>
@@ -2038,14 +2033,6 @@ $('#page-tasks').addEventListener('click', async e => {
     else { state._batchOpen.add(bid); renderBatchJobs(bid, box); }
   }
 });
-
-/* 勾选变化后同步全部计数（卡头/已选定视图/操作卡置灰）——单一数据源，无滞后 */
-function syncBpCount() {
-  updateBatchOpsState();
-}
-
-/* 批量操作卡已移除（统一走文库批量条）——保留空实现以免调用点报错 */
-function updateBatchOpsState() {}
 
 
 
@@ -3289,8 +3276,6 @@ async function renderSumBubble() {
   const paper = (state.qaAllPapers || state.papers).find(x => x.id === pid) || state.current || {};
   const title = paper.title || pid;
   const multi = state.qaPapers.size > 1;
-  // 悬浮提示而非常驻文字（优雅优先；多篇警示仅在生成按钮气泡里出现一次）
-  state._sumTip = `针对：${title}` + (multi ? `（已选 ${state.qaPapers.size} 篇，导读仅第一篇）` : '');
   state._sumHead = multi ? `<div class="muted" style="font-size:11px;margin-bottom:4px">已选 ${state.qaPapers.size} 篇 · 导读针对第一篇</div>` : '';
   const cached = state._sumCache?.[pid];
   if (cached) { drawSummary(cached.summary, pid, '#qa-sum-bubble', true); return; }
@@ -3326,24 +3311,10 @@ window.genSumBubble = async pid => {
     const jobId = d.job_id;
     state._sumPending = state._sumPending || {};
     state._sumPending[pid] = jobId;
-    // 轮询不因切换论文中断——生成在后台跑完，切回来直接显示（此前切走即 return，
-    // 任务中心显示「完成」但气泡仍是旧内容，只能手动刷新）
-    for (let i = 0; i < 300; i++) {          // 最多 10 分钟（导读单并发，排队可能久）
-      await new Promise(r => setTimeout(r, 2000));
-      const js = await api(`/api/jobs/${jobId}`).catch(() => null);
-      if (!js) continue;
-      if (js.status === 'done') { await refreshSummaryFor(pid, 'done', true); return; }
-      if (js.status === 'failed') throw new Error(js.error || '生成失败');
-      if (js.status === 'canceled') {
-        delete state._sumPending[pid];
-        if (state.current?.id === pid)
-          el.innerHTML = (state._sumHead || '') + '<p class="muted">导读生成已取消。</p>';
-        return;
-      }
-    }
-    // 超时未完成：后台继续跑，完成后由 SSE 事件补渲染
+    // 完成检测走 SSE（watchJobs 监听 summary 事件 → refreshSummaryFor 重拉重绘）；
+    // 此前这里还轮询 GET /api/jobs/{id}——后端从无该路由，catch 恒 null 空转 10 分钟，已删。
     el.innerHTML = (state._sumHead || '') + `<div class="msg assistant"><div class="bubble">
-      导读仍在生成（队列中）——完成后会自动显示，也可到「任务中心」查看进度</div></div>`;
+      导读正在生成——完成后会自动显示，也可到「任务中心」查看进度</div></div>`;
   } catch (e) {
     el.innerHTML = (state._sumHead || '') + `<div class="msg assistant"><div class="bubble">生成失败: ${esc(e.message)} <button class="btn small" onclick="genSumBubble('${pid}')">重试</button></div></div>`;
   }
@@ -4191,7 +4162,7 @@ async function renderTrash() {
   $('#page-trash').innerHTML = `<div class="card"><h2 style="display:flex;gap:10px;align-items:center">回收站（${state.health.trash_days || 30} 天后自动清理）
     <button class="btn small danger" style="margin-left:auto" onclick="emptyTrash()">${icon('trash')} 清空回收站</button></h2>
     <table class="list"><tr><th>标题</th><th>删除时间</th><th></th></tr>
-    ${d.papers.map(p => `<tr><td>${esc(p.title)}</td><td class="muted">${fmtTime(p.deleted_at)}</td>
+    ${d.papers.map(p => `<tr><td>${esc(p.title)}</td><td class="muted">${relTime(p.deleted_at)}</td>
       <td class="row-actions"><button class="btn small" onclick="restorePaper('${p.id}')">恢复</button>
       </td></tr>`).join('') || '<tr><td colspan="3" class="muted">回收站为空——删除的论文在此保留 30 天，可随时恢复</td></tr>'}</table></div>`;
 }
@@ -5270,14 +5241,6 @@ window.createLibFromPage = async () => {
     toast('已创建'); await refreshLib();
   } catch (e) { toast(friendlyError(e, '创建失败，请重试')); }
 };
-window.movePaper = async (pid, v, sel) => {
-  if (!v) return;
-  const cid = v === '__none__' ? null : v;
-  try {
-    await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: cid})});
-    toast('已移动'); await refreshLib();
-  } catch (e) { toast(friendlyError(e, '移动失败，请重试')); }
-};
 window.delPaperFromLib = async pid => {
   const p = (state.papers || []).find(x => x.id === pid) || (state._libScopePapers || []).find(x => x.id === pid);
   if (p?.visibility === 'shared' && state.me?.role !== 'admin') { toast('共享论文仅管理员可删除'); return; }
@@ -5897,7 +5860,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   let closed = false;
   for (const sel of ['#acc-pop', '#filter-pop', '#upload-pop', '#download-pop',
-                     '#discover-pop', '#col-new-form', '#health-pop', '#sort-pop']) {
+                     '#discover-pop', '#col-new-form', '#health-pop']) {
     const el = document.querySelector(sel);
     if (el && !el.hidden) { el.hidden = true; closed = true; }
   }
