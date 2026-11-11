@@ -4840,7 +4840,7 @@ async function renderCollectionsPage(preset = null) {
       : tj?.status === 'failed' ? "<span class=\"badge err\">译" + icon('close') + "</span>" : '<span class="muted">—</span>';
     const owner = d.collections.find(c => c.id === p.collection_id);
     return `<tr class="lib-paper-row" onclick="viewPaper('${p.id}')">
-        <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${state.selected.has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
+        <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${selBucket(scopeKey).has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
           ${esc(p.title || p.id)}
           ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size:11px"> · ${esc(owner.name)}</span>` : ''}
@@ -4913,7 +4913,7 @@ async function renderCollectionsPage(preset = null) {
     state._libScopeKey = scopeKey;
     state._libScopePapers = papers;
     const scopeN = $('#exp-scope-n'), selN = $('#exp-sel-n'), selItem = $('#exp-sel-item');
-    if (scopeN) scopeN.textContent = papers.length;
+    if (scopeN) scopeN.textContent = total;   // 范围总数（非当前页 25 篇）
     const selCnt = libSelected(scopeKey).length;
     if (selN) selN.textContent = selCnt;
     if (selItem) selItem.hidden = !selCnt;
@@ -4921,7 +4921,7 @@ async function renderCollectionsPage(preset = null) {
   // 搜索框：输入去抖后重渲染，并恢复焦点与光标（否则每敲一个字就失焦）
   // 勾选状态持久化在 state.selected（与侧栏/批量中心共享）——重渲染后恢复批量条
   {
-    const pre = libSelected(scopeKey);
+    const pre = libSelected(scopeKey);   // 跨页累计（同一范围内勾选不因翻页丢失）
     const bar = $('#lb-' + scopeKey);
     if (bar) { bar.hidden = !pre.length; $('#lb-count-' + scopeKey).textContent = pre.length; }
   }
@@ -5000,13 +5000,24 @@ document.addEventListener('click', async e => {
   }
 });
 
+/* 勾选按【范围】分桶：同一范围内跨页累积（翻页不丢），不同库互不串。
+   真值不再查 DOM（DOM 只有当前页 → 翻页后计数与批量操作会丢）。 */
+state._selByScope = state._selByScope || {};
+function selBucket(cid) {
+  const key = cid ?? state.libSel ?? 'all';
+  state._selByScope[key] = state._selByScope[key] || new Set();
+  return state._selByScope[key];
+}
 function libSelected(cid) {
-  return $$('.lib-ck').filter(x => x.dataset.cid === cid && x.checked).map(x => x.dataset.pid);
+  return [...selBucket(cid)];
 }
 window.libCk = cid => {
-  // 勾选状态与全站共享（侧栏批量条 / 批量中心「我的勾选」同一集合）
-  $$(`.lib-ck[data-cid="${cid}"]`).forEach(x =>
-    x.checked ? state.selected.add(x.dataset.pid) : state.selected.delete(x.dataset.pid));
+  // 勾选状态与全站共享（侧栏批量条 / 批量中心「我的勾选」同一集合）+ 范围分桶真值
+  const bucket = selBucket(cid);
+  $$(`.lib-ck[data-cid="${cid}"]`).forEach(x => {
+    if (x.checked) { bucket.add(x.dataset.pid); state.selected.add(x.dataset.pid); }
+    else { bucket.delete(x.dataset.pid); state.selected.delete(x.dataset.pid); }
+  });
   const n = libSelected(cid).length;
   $('#lb-' + cid).hidden = !n;
   $('#lb-count-' + cid).textContent = n;
@@ -5018,9 +5029,25 @@ window.libCk = cid => {
     all.indeterminate = n > 0 && !all.checked;
   }
 };
-window.libCkAll = (cid, on) => {
+window.libCkAll = async (cid, on) => {
+  const bucket = selBucket(cid);
+  if (on) {
+    // 全选【当前范围】的全部论文（跨页）——后端 all=1 返回范围内所有 id
+    try {
+      const scope = cid === 'all' ? '' : `collection_id=${encodeURIComponent(cid)}`;
+      const d = await api(`/api/papers?all=1${scope ? '&' + scope : ''}`);
+      (d.papers || []).forEach(p => { bucket.add(p.id); state.selected.add(p.id); });
+    } catch (e) { toast(friendlyError(e, '全选失败')); return; }
+  } else {
+    bucket.forEach(id => state.selected.delete(id));
+    bucket.clear();
+  }
   $$(`.lib-ck[data-cid="${cid}"]`).forEach(x => x.checked = on);
-  libCk(cid);
+  const n = libSelected(cid).length;
+  $('#lb-' + cid).hidden = !n;
+  $('#lb-count-' + cid).textContent = n;
+  const all = document.querySelector(`.lib-ck-all[data-cid="${cid}"]`);
+  if (all) { all.checked = on; all.indeterminate = false; }
 };
 window.libBatchTranslate = async cid => {
   const ids = libSelected(cid);

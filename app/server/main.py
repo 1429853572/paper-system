@@ -557,7 +557,7 @@ async def set_parse_filter(request: Request):
 
 @app.get("/api/papers")
 def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
-                collection_id: str = "", page: int = 0, page_size: int = 0):
+                collection_id: str = "", page: int = 0, page_size: int = 0, all: int = 0):
     u = require(request)
     is_admin = u["role"] == "admin"
     vis = "" if is_admin else " AND (visibility='shared' OR owner_id=?)"
@@ -579,12 +579,17 @@ def list_papers(request: Request, q: str = "", status: str = "", trash: int = 0,
     offset = max(0, (page - 1)) * limit if page else 0
     # 列表裁剪：abstract/keywords/file_hash 前端列表不用（详情页返回），
     # 89 篇 × abstract 1-2KB ≈ 90% 传输浪费；owner_name 供 shared 论文归属标识
-    rows = db.all(f"SELECT p.id,p.owner_id,p.visibility,p.title,p.authors,p.year,p.page_count,"
-                  f"p.file_size,p.parse_status,p.collection_id,p.journal,p.created_at,p.deleted_at,"
-                  f"u.username AS owner_name "
-                  f"FROM papers p LEFT JOIN users u ON u.id=p.owner_id "
-                  f"WHERE {cond}{vis} ORDER BY p.created_at DESC LIMIT {limit} OFFSET {offset}",
-                  tuple(args))
+    sel = (f"SELECT p.id,p.owner_id,p.visibility,p.title,p.authors,p.year,p.page_count,"
+           f"p.file_size,p.parse_status,p.collection_id,p.journal,p.created_at,p.deleted_at,"
+           f"u.username AS owner_name "
+           f"FROM papers p LEFT JOIN users u ON u.id=p.owner_id "
+           f"WHERE {cond}{vis} ORDER BY p.created_at DESC")
+    if all:
+        # 范围内全部 id（跨页「全选」用；不分页）
+        rows = db.all(sel, tuple(args))
+        return {"papers": [dict(r) for r in rows], "page": 1, "has_more": False,
+                "total": len(rows)}
+    rows = db.all(sel + f" LIMIT {limit} OFFSET {offset}", tuple(args))
     total = db.one(f"SELECT COUNT(*) AS n FROM papers WHERE {cond}{vis}", tuple(args))["n"]
     return {"papers": [dict(r) for r in rows], "page": page, "has_more": len(rows) == limit,
             "total": total}
