@@ -110,18 +110,21 @@ const ok = (name, cond, extra = '') => {
   if (!cond) errors.push(`${name}${extra ? ': ' + extra : ''}`);
 };
 
-// 1) 批量中心入口卡存在
-window.__T.switchPage('batch');
-await new Promise((r) => setTimeout(r, 400));
-const acts = [...doc.querySelectorAll('.batch-card')].map(c => c.dataset.act);
-ok('批量中心含 采集文献 入口', acts.includes('acquire'), acts.join(','));
-ok('批量中心含 专题采集 入口', acts.includes('topics'), acts.join(','));
-ok('采集入口有 #acq-btn 锚点（openAcquirePop 依赖）', !!doc.querySelector('#acq-btn'));
+// 1) 采集入口在文库管理工具条（批量页已取消，采集并入文库）
+window.__T.switchPage('collections');
+await new Promise((r) => setTimeout(r, 500));
+const collectBtn = [...doc.querySelectorAll('button')].find(b => b.textContent.includes('采集文献'));
+ok('文库工具条有「采集文献」入口', !!collectBtn);
+ok('不再有独立「批量」顶级页', !doc.querySelector('.topnav button[data-page="batch"]'));
 
-// 2) 点采集入口 → 弹层渲染
-const acqCard = doc.querySelector('.batch-card[data-act="acquire"]');
-acqCard.click();
-await new Promise((r) => setTimeout(r, 200));
+// 2) 点采集入口 → 浮层（快速采集 / 专题跟踪）→ 采集弹层渲染
+window.openCollectPanel && window.openCollectPanel();   // jsdom 不执行内联 onclick
+await new Promise((r) => setTimeout(r, 400));
+ok('采集浮层打开', !!doc.querySelector('.collect-panel'));
+ok('浮层含快速采集与专题跟踪', !!doc.querySelector('#acq-btn') && !!doc.querySelector('#cp-topics'));
+const acqCard = doc.querySelector('#acq-btn');
+acqCard?.onclick && acqCard.onclick();
+await new Promise((r) => setTimeout(r, 300));
 const pop = doc.querySelector('#acq-pop');
 ok('采集弹层打开', pop && !pop.hidden);
 ok('采集弹层有检索输入与按钮', !!doc.querySelector('#acq-q') && !!doc.querySelector('#acq-go'));
@@ -136,12 +139,13 @@ await new Promise((r) => setTimeout(r, 300));
 ok('检索调用了 /api/acquire/search', calls.some(c => c.startsWith('/api/acquire/search')));
 ok('候选渲染', doc.querySelectorAll('.acq-item').length >= 1);
 
-// 4) 专题入口 → 列表
+// 4) 专题入口 → 采集浮层内点「专题跟踪」→ 列表
 doc.querySelector('#acq-pop').hidden = true;
-window.__T.switchPage('batch');
-await new Promise((r) => setTimeout(r, 300));
-doc.querySelector('.batch-card[data-act="topics"]').click();
+window.openCollectPanel && window.openCollectPanel();
 await new Promise((r) => setTimeout(r, 400));
+const tpBtn = doc.querySelector('#cp-topics');
+tpBtn?.onclick && tpBtn.onclick();
+await new Promise((r) => setTimeout(r, 500));
 ok('专题列表渲染', doc.querySelectorAll('.tp-row').length >= 1);
 ok('专题列表显示标题', doc.body.textContent.includes('中文预印本专题'));
 ok('新建专题按钮存在', !!doc.querySelector('#tp-new'));

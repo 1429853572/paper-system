@@ -199,7 +199,7 @@ try {
   const barVisible = bar && !bar.hidden;
   results.push(`文库批量条: ${barVisible ? 'OK' : '未显示'}`);
   if (!barVisible) errors.push('文库批量条: 勾选后未显示');
-  for (const label of ['翻译', '导读', '元数据', '重解析', '综述', 'BibTeX', '批量中心']) {
+  for (const label of ['翻译', '导读', '元数据', '重解析', '综述', 'BibTeX', '去任务中心']) {
     if (!bar || !bar.textContent.includes(label)) errors.push(`文库批量条缺少: ${label}`);
   }
   // 勾选状态共享：state.selected 应含该论文；重渲染后复选框保持

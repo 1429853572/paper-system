@@ -27,6 +27,9 @@ const DATA = {
   '/api/statuses': { statuses: {} },
   '/api/mcp/pending': { pending: [] },
   '/api/health': { db: true, mineru: true, ai: true, trash_days: 30 },
+  '/api/acq-tasks': { tasks: [{ id: 'atk1', title: '测试专题', query: '3DGS', site: 'chinaxiv',
+      status: 'running', cand_total: 3, cand_selected: 1, cand_done: 1, papers: 1,
+      created_at: '2026-11-10', updated_at: '2026-11-10' }] },
   '/api/batches': { batches: [
     { batch_id: 'live1', job_type: 'translate', total: 2, done: 0, failed: 0, canceled: 0, active: 2,
       started_at: '2026-11-07 12:00:00', updated_at: '2026-11-07 12:01:00' },
@@ -140,7 +143,7 @@ process.on('unhandledRejection', (r) => {
 });
 
 try {
-  window.eval(js + '\n;window.__T = { state, switchPage, renderBatchPage, syncBpCount };');
+  window.eval(js + '\n;window.__T = { state, switchPage, syncBpCount, renderTaskPanel, renderCollectionsPage };');
 } catch (e) {
   errors.push('eval: ' + e.stack.split('\n').slice(0, 3).join(' | '));
 }
@@ -158,24 +161,10 @@ const ok = (name, cond, extra = '') => {
   if (!cond) errors.push(`${name}${extra ? ': ' + extra : ''}`);
 };
 
-// 1) 顶栏「批量」页签存在且可切换
-const btn = doc.querySelector('.topnav button[data-page="batch"]');
-ok('批量页签按钮存在', !!btn);
-if (btn) {
-  btn.click();
-  await new Promise((r) => setTimeout(r, 300));
-  const pg = doc.querySelector('#page-batch');
-  ok('批量页显示', pg && pg.style.display !== 'none');
-  ok('页面标题', doc.querySelector('#page-title').textContent === '批量中心');
-}
-
-// 2) 结构（圈定面板已移除——综述圈定唯一入口在文库管理勾选）
-ok('圈定器已移除（避免与文库勾选双 UI）', !doc.querySelector('#page-batch .batch-pick'));
-ok('操作卡=2（专题跟踪/快速采集——综述报告引导卡已删，唯一入口在文库批量条）',
-   doc.querySelectorAll('#page-batch .batch-card').length === 2,
-   `实际 ${doc.querySelectorAll('#page-batch .batch-card').length}`);
-ok('综述报告引导卡已移除（综述走文库批量条）',
-   !doc.querySelector('#page-batch .batch-card[data-act="review"]'));
+// 1) 顶级导航已精简为 阅读/文库/任务（批量页取消，采集并入文库、综述历史并入任务）
+ok('不再有独立「批量」顶级页', !doc.querySelector('.topnav button[data-page="batch"]'));
+ok('导航保留 阅读/文库/任务', ['reader', 'collections', 'tasks']
+   .every(p => !!doc.querySelector(`.topnav button[data-page="${p}"]`)));
 ok('任务中心页签存在', !!doc.querySelector('.topnav button[data-page="tasks"]'));
 
 // 5) 任务中心：独立页 + 类型徽章 + 分区
@@ -225,30 +214,21 @@ if (libCk) {
   ok('勾选同步 state.selected', window.__T.state.selected.has(libCk.dataset.pid));
   window.libToBatchCenter();
   await new Promise((r) => setTimeout(r, 400));
-  ok('批量中心按钮切页', doc.querySelector('#page-batch').style.display !== 'none');
-  ok('勾选全站共享（文库页勾选批量中心可见）', window.__T.state.selected.size === 1);
+  ok('「去任务中心」按钮切页', doc.querySelector('#page-tasks').style.display !== 'none');
+  ok('勾选全站共享（文库页勾选任务中心可见）', window.__T.state.selected.size === 1);
   window.__T.state.selected.clear();
 }
 
-// 6.5) 勾选面板（常驻）：库树形分组 / 搜索 / 年份 / 整组全选 / 已选定视图
-window.__T.switchPage('batch');
-window.__T.state.selected.clear();   // 清掉步骤6 勾选
-await new Promise((r) => setTimeout(r, 500));   // renderBatchPage 进页即 loadBpPicker（全量拉取）
-ok('未圈定时操作卡置灰（采集/专题除外）', (() => {
-  const cards = [...doc.querySelectorAll('#page-batch .batch-card')];
-  const ops = cards.filter(c => !['acquire', 'topics'].includes(c.dataset.act));
-  const free = cards.filter(c => ['acquire', 'topics'].includes(c.dataset.act));
-  return ops.every(c => c.classList.contains('off')) && free.every(c => !c.classList.contains('off'));
-})());
-const acts = [...doc.querySelectorAll('.batch-card')].map(c => c.dataset.act);
-ok('批量卡含 采集/专题入口（无综述卡）',
-   acts.includes('acquire') && acts.includes('topics') && !acts.includes('review'), acts.join(','));
-ok('采集卡均为独立入口（无 primary 综述卡）',
-   ![...doc.querySelectorAll('.batch-card')].some(c => c.dataset.act === 'review'));
-
+// 6.5) 采集浮层（批量页取消后，采集入口并入文库管理）
+window.__T.switchPage('collections');
+await new Promise((r) => setTimeout(r, 400));
+window.openCollectPanel && window.openCollectPanel();
+await new Promise((r) => setTimeout(r, 400));
+ok('采集浮层打开', !!doc.querySelector('.collect-panel'));
+ok('浮层含快速采集与专题跟踪', !!doc.querySelector('#acq-btn') && !!doc.querySelector('#cp-topics'));
+ok('浮层内含专题列表', doc.querySelectorAll('.tp-row').length >= 1);
 // 7) 综述流：文库批量条「综述」发起（综述唯一入口）→ 预估确认 → 批次面板综述行 → 报告视图
-ok('综述报告引导卡已移除（唯一入口=文库批量条）',
-   !doc.querySelector('#page-batch .batch-card[data-act="review"]'));
+
 // 切到文库管理页第二层，用页面复选框勾选 2 篇（走真实勾选路径），再点批量条「综述」
 window.__T.state.libLevel = 2; window.__T.state.libSel = '';
 window.__T.switchPage('collections');
@@ -300,7 +280,8 @@ if (synPop) {
        doc.querySelector('.syn-refs .badge.ok'));
     doc.querySelector('#syn-back').click();
     await new Promise((r) => setTimeout(r, 250));
-    ok('返回批量页', !!doc.querySelector('.batch-ops'));
+    ok('返回任务中心（综述报告并入任务页）', !!doc.querySelector('#task-body') &&
+       !doc.querySelector('.syn-report'));
   }
 }
 
