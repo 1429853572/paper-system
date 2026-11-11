@@ -200,6 +200,25 @@ if (head) {
   ok('再点收起', doc.querySelector('[data-jobs="bt1"]').hidden);
 }
 
+// 5a2) 综述删除单次触发（此前三重委托叠加：synDel 会弹两个确认、DELETE 两次）
+{
+  await window.__T.renderTaskPanel();
+  await new Promise((r) => setTimeout(r, 250));
+  calls.length = 0;
+  const del = doc.querySelector('#syn-list [data-syn-del]');
+  ok('syn-list 有删除按钮', !!del);
+  if (del) {
+    del.click();
+    await new Promise((r) => setTimeout(r, 250));
+    const confirmPops = doc.querySelectorAll('.ui-pop').length;   // anchor 模式无 backdrop，pop 直接挂 body
+    doc.querySelector('.ui-pop [data-ok]')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const delCalls = calls.filter(c => c.includes('/api/syntheses/') && c.includes('DELETE')).length;
+    ok('删除综述只弹一个确认框', confirmPops === 1, '确认框=' + confirmPops);
+    ok('删除综述只发一次 DELETE', delCalls === 1, 'DELETE=' + delCalls);
+  }
+}
+
 // 5b) 已结束区有「清理记录」入口（任务日志会无限堆积）
 {
   await window.__T.renderTaskPanel();

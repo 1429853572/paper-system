@@ -221,12 +221,7 @@ window.backToSynthesis = async () => {
 /* ---------------- 任务中心（合并进批量中心 ③ 区块） ----------------
    顶栏「队列」按钮 = 角标提醒；点击跳批量中心任务进度区。批次任务、无批次的
    单篇任务、MCP 待确认写操作、批量暂停/恢复 全部在 ③ 区块内统一展示与操作。 */
-let _badgeAt = 0;
-async function refreshQueueBadge() {
-  if (Date.now() - _badgeAt < 3000) return;   // SSE 事件风暴节流（3s）
-  _badgeAt = Date.now();
-  await _refreshQueueBadge();
-}
+const refreshQueueBadge = throttle(async () => { await _refreshQueueBadge(); }, 3000);   // SSE 事件风暴节流（3s）
 async function _refreshQueueBadge() {
   if (document.hidden) return;   // 后台标签页暂停轮询（回来时 visibilitychange 立即刷一次）
   try {
@@ -269,8 +264,7 @@ state._batchPapers = [];        // 圈定来源论文缓存（供明细显示标
 window.openCollectPanel = async () => {
   const old = document.querySelector('#collect-panel');
   if (old) old.remove();
-  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
-  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop collect-panel'});
+  const {pop, close} = openPop('collect-panel');
   pop.innerHTML = `<div class="ui-pop-title">采集文献
       <span class="muted" style="font-weight:400;font-size: var(--fs-xs)">按关键词检索中文文献（知网 / 中科院预印本）并入库</span>
       <span class="spacer"></span><button class="btn small" data-cp-close title="关闭">${icon('close')}</button></div>
@@ -279,12 +273,6 @@ window.openCollectPanel = async () => {
       <button class="btn" id="cp-topics">${icon('stack')} 专题跟踪<span class="muted">持久化任务 · 可中断可恢复 · 一键综述</span></button>
     </div>
     <div id="cp-body"></div>`;
-  backdrop.appendChild(pop);
-  document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  document.addEventListener('keydown', onKey, true);
-  backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-cp-close]').onclick = close;
   pop.querySelector('[data-cancel], .ui-pop-foot [data-ok]')?.remove();
   const body = pop.querySelector('#cp-body');
@@ -344,7 +332,7 @@ async function renderSynList(all) {
       <span class="syn-item-main">
         <b title="${esc(synTitleOf(s))}">${esc(synTitleOf(s))}</b>
         <span class="muted" style="font-size: var(--fs-xs)">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc(relTime(s.updated_at))}</span>
-        ${s.status === 'running' ? `<div class="up-bar parse" style="max-width:280px"><i style="width:${pct}%"></i></div>` : ''}
+        ${s.status === 'running' ? progressBar(pct, false, 'up-bar parse', 'max-width:280px') : ''}
         ${s.status === 'failed' && s.error ? `<div class="bpanel-err">${esc(s.error.slice(0, 120))}</div>` : ''}
       </span>
       <span class="spacer"></span>
@@ -359,21 +347,6 @@ async function renderSynList(all) {
     $('#syn-more').onclick = async () => { el.innerHTML = ''; await renderSynList(true); };
   }
 }
-$('#page-tasks').addEventListener('click', async e => {
-  const sv = e.target.closest('#syn-list [data-syn-view]');
-  if (sv) { showSynthesisReport(sv.dataset.synView); return; }
-  const sd = e.target.closest('#syn-list [data-syn-dl]');
-  if (sd) { location.href = `/api/syntheses/${encodeURIComponent(sd.dataset.synDl)}/export?fmt=${sd.dataset.fmt}`; return; }
-  const sdl = e.target.closest('#syn-list [data-syn-del]');
-  if (sdl) {
-    if (await uiConfirm('删除这篇综述？（报告与矩阵一并删除；进行中的任务同时取消）',
-                        {title: '删除综述', danger: true, anchor: sdl})) {
-      try { await api('/api/syntheses/' + encodeURIComponent(sdl.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
-      renderSynList();
-      renderTaskPanel();
-    }
-  }
-});
 
 
 /* ================= 任务中心（独立页） =================

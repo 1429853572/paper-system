@@ -55,6 +55,53 @@ function fmtTime(s) {
   const t = s.slice(0, 16).replace('T', ' ');
   return t.length >= 16 ? t.slice(5, 16) : t;
 }
+/* 弹窗基座：ui-backdrop + ui-pop 脚手架（Esc / 点外关闭统一；原先 8 处手写同款）。
+   返回 {pop, close}，内容由调用方填充。 */
+function openPop(className = '') {
+  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
+  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop' + (className ? ' ' + className : '')});
+  backdrop.appendChild(pop);
+  document.body.appendChild(backdrop);
+  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
+  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  document.addEventListener('keydown', onKey, true);
+  backdrop.onclick = e => { if (e.target === backdrop) close(); };
+  return { pop, close };
+}
+/* 弹层锚定到按钮下方（fixed 定位——工具条 overflow-x:auto 会裁掉 absolute 弹层） */
+function anchorPop(pop, btn, gap = 6) {
+  const r = btn.getBoundingClientRect();
+  pop.style.position = 'fixed';
+  pop.style.top = (r.bottom + gap) + 'px';
+  pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
+  pop.style.left = 'auto';
+}
+/* 点外关闭浮层：点 pop 与任一触发钮之外 → hidden=true（原先 9 处手写同款监听） */
+function outsideClose(pop, ...btns) {
+  document.addEventListener('click', e => {
+    if (pop.hidden || pop.contains(e.target) || btns.some(b => b && b.contains(e.target))) return;
+    pop.hidden = true;
+  });
+}
+/* POST 下载 blob 并触发保存（BibTeX/ZIP 导出共用） */
+async function downloadBlob(url, payload, filename, okMsg) {
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify(payload)});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const blob = await r.blob();
+  const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(blob), download: filename});
+  a.click(); URL.revokeObjectURL(a.href);
+  if (okMsg) toast(okMsg);
+}
+/* 进度细条（上传/解析/任务行共用，warn=true 转警示色） */
+function progressBar(pct, warn = false, cls = 'up-bar', style = '') {
+  return `<div class="${cls}"${style ? ` style="${style}"` : ''}><i style="width:${Math.min(100, pct || 0)}%${warn ? ';background:var(--warn)' : ''}"></i></div>`;
+}
+/* 前沿节流：ms 内只放行第一次调用（SSE 事件风暴/轮询兜底共用） */
+function throttle(fn, ms = 2000) {
+  let last = 0;
+  return (...args) => { const now = Date.now(); if (now - last < ms) return; last = now; fn(...args); };
+}
 /* 公共防抖（原先 7 处各自 clearTimeout+setTimeout 手写，行为微妙不一致） */
 function debounce(fn, ms = 300) {
   let t = 0;

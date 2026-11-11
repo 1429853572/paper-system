@@ -95,9 +95,7 @@ window.toggleToc = () => {
     t = document.createElement('div');
     t.id = 'toc-panel'; t.hidden = true;
     $('.pane-right').appendChild(t);
-    document.addEventListener('click', e => {
-      if (!t.hidden && !t.contains(e.target) && e.target.id !== 'toc-btn') t.hidden = true;
-    });
+    outsideClose(t, $('#toc-btn'));
   }
   if (t.hidden) {
     const seen = new Set(); const items = [];
@@ -328,7 +326,7 @@ applyRpaneCollapse();
   const zi = $('#zoom-in'), zo = $('#zoom-out');
   if (zi) zi.addEventListener('click', () => state.fitWidth = false);
   if (zo) zo.addEventListener('click', () => state.fitWidth = false);
-  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => {
+  window.addEventListener('resize', debounce(() => {
     applyVsplit();
     // ≤1100 自动收起侧栏（缩放/分屏场景；仅自动收放，不改写用户手动偏好）
     const narrow = innerWidth < 1100;
@@ -337,7 +335,7 @@ applyRpaneCollapse();
     } else if (!narrow && state._autoFolded) {
       state._autoFolded = false; state.sidebarCollapsed = false; applySidebarCollapse();
     }
-  }, 250); });
+  }, 250));
   // PDF 栏宽变化 → 重绘页面与全部覆盖层（布局框/高亮/文字层随尺寸走）
   if (window.ResizeObserver) {
     let rw;
@@ -734,17 +732,11 @@ window.setLibView = v => { state.libView = v; renderCollectionsPage(); };
     pop.hidden = !pop.hidden;
     if (!pop.hidden) {
       loadDlOptions();
-      // 浮动定位（fixed）：工具条 overflow-x:auto 会把 absolute 弹层裁掉——原先整框被剪到不可见
-      const r = btn.getBoundingClientRect();
-      pop.style.position = 'fixed';
-      pop.style.top = (r.bottom + 6) + 'px';
-      pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
-      pop.style.left = 'auto';
+      // fixed 定位：工具条 overflow-x:auto 会把 absolute 弹层裁掉——原先整框被剪到不可见
+      anchorPop(pop, btn);
     }
   });
-  document.addEventListener('click', e => {
-    if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) pop.hidden = true;
-  });
+  outsideClose(pop, btn);
   $$('#download-pop .tp-item[data-dl]').forEach(it => it.addEventListener('click', () => {
     const fmt = it.dataset.dl;
     const pid = state.current?.id;

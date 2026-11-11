@@ -435,13 +435,7 @@ async function populateQaPicker() {
     };
   }
   const fl = $('#qa-pick-filter');
-  if (fl) {
-    let t = 0;
-    fl.oninput = () => {   // 防抖：大库逐键全量重渲染会卡
-      clearTimeout(t);
-      t = setTimeout(() => renderPickList(fl.value.toLowerCase()), 200);
-    };
-  }
+  if (fl) fl.oninput = debounce(() => renderPickList(fl.value.toLowerCase()), 200);   // 防抖：大库逐键全量重渲染会卡
   const toggle = $('#qa-pick-toggle');
   if (!toggle) return;
   $('#qa-pick-count').textContent = state.qaPapers.size;
@@ -681,8 +675,7 @@ async function executeTag(tag) {
 
 function editTagDialog(tag) {
   const isCustom = !!tag.custom;
-  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
-  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop'});
+  const {pop, close} = openPop();
   pop.innerHTML = `
     <div class="ui-pop-title">${isCustom && !tag._new ? '编辑标签' : tag._new ? '新建标签' : '内置标签 → 存为自定义'}</div>
     <input class="ui-pop-input" id="tag-label" value="${esc(tag.label || '')}" placeholder="按钮名称（如 📐 分析公式）" style="margin-bottom:8px">
@@ -693,12 +686,6 @@ function editTagDialog(tag) {
       <button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>保存</button>
     </div>`;
-  backdrop.appendChild(pop);
-  document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  document.addEventListener('keydown', onKey, true);
-  backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-cancel]').onclick = close;
   pop.querySelector('[data-ok]').onclick = () => {
     saveTag(tag, pop.querySelector('#tag-label').value.trim(), pop.querySelector('#tag-prompt').value);

@@ -60,6 +60,53 @@ function fmtTime(s) {
   const t = s.slice(0, 16).replace('T', ' ');
   return t.length >= 16 ? t.slice(5, 16) : t;
 }
+/* 弹窗基座：ui-backdrop + ui-pop 脚手架（Esc / 点外关闭统一；原先 8 处手写同款）。
+   返回 {pop, close}，内容由调用方填充。 */
+function openPop(className = '') {
+  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
+  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop' + (className ? ' ' + className : '')});
+  backdrop.appendChild(pop);
+  document.body.appendChild(backdrop);
+  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
+  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  document.addEventListener('keydown', onKey, true);
+  backdrop.onclick = e => { if (e.target === backdrop) close(); };
+  return { pop, close };
+}
+/* 弹层锚定到按钮下方（fixed 定位——工具条 overflow-x:auto 会裁掉 absolute 弹层） */
+function anchorPop(pop, btn, gap = 6) {
+  const r = btn.getBoundingClientRect();
+  pop.style.position = 'fixed';
+  pop.style.top = (r.bottom + gap) + 'px';
+  pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
+  pop.style.left = 'auto';
+}
+/* 点外关闭浮层：点 pop 与任一触发钮之外 → hidden=true（原先 9 处手写同款监听） */
+function outsideClose(pop, ...btns) {
+  document.addEventListener('click', e => {
+    if (pop.hidden || pop.contains(e.target) || btns.some(b => b && b.contains(e.target))) return;
+    pop.hidden = true;
+  });
+}
+/* POST 下载 blob 并触发保存（BibTeX/ZIP 导出共用） */
+async function downloadBlob(url, payload, filename, okMsg) {
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify(payload)});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const blob = await r.blob();
+  const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(blob), download: filename});
+  a.click(); URL.revokeObjectURL(a.href);
+  if (okMsg) toast(okMsg);
+}
+/* 进度细条（上传/解析/任务行共用，warn=true 转警示色） */
+function progressBar(pct, warn = false, cls = 'up-bar', style = '') {
+  return `<div class="${cls}"${style ? ` style="${style}"` : ''}><i style="width:${Math.min(100, pct || 0)}%${warn ? ';background:var(--warn)' : ''}"></i></div>`;
+}
+/* 前沿节流：ms 内只放行第一次调用（SSE 事件风暴/轮询兜底共用） */
+function throttle(fn, ms = 2000) {
+  let last = 0;
+  return (...args) => { const now = Date.now(); if (now - last < ms) return; last = now; fn(...args); };
+}
 /* 公共防抖（原先 7 处各自 clearTimeout+setTimeout 手写，行为微妙不一致） */
 function debounce(fn, ms = 300) {
   let t = 0;
@@ -362,13 +409,8 @@ async function loadCollections(preset = null) {
   state.sharedLibs = d.shared_libs || [];     // 他人库中的共享论文
   renderCollections();
 }
-function colDescendants(cid) {
-  const out = [];
-  const walk = id => {
-    state.collections.filter(c => c.parent_id === id).forEach(c => { out.push(c.id); walk(c.id); });
-  };
-  walk(cid);
-  return out;
+function colDescendants(cid) {   // 不含自身的子孙 id（真身 libDescendants 在 11-libmgr，拼接同作用域）
+  return libDescendants(cid).filter(id => id !== cid);
 }
 function renderCollections() {
   const el = $('#collections');
@@ -560,7 +602,7 @@ function renderPapers() {
       <div class="info">
         <div class="name">${esc(name)}</div>
         <div class="meta"><span class="up-pct">${u.phase === 'saving' ? '保存中…' : '上传中 ' + (u.pct || 0) + '%'}</span>
-          <div class="up-bar"><i style="width:${u.pct || 0}%"></i></div></div>
+          ${progressBar(u.pct || 0)}</div>
       </div>
     </div>`).join('');
   if (!state.papers.length && !ups) {
@@ -575,7 +617,7 @@ function renderPapers() {
   const listHtml = sortPapers(state.papers).map(p => {
     const pr = (state.parseProg || {})[p.id];
     const bar = p.parse_status === 'parsing' && pr?.total
-      ? `<div class="up-bar parse"><i style="width:${Math.min(100, Math.round(100 * pr.done / pr.total))}%"></i></div>` : '';
+      ? `${progressBar(Math.round(100 * pr.done / pr.total), false, 'up-bar parse')}` : '';
     return `
     <div class="paper-item ${state.current?.id === p.id ? 'sel' : ''}" data-id="${p.id}">
       <div class="info">
@@ -647,9 +689,7 @@ $('#upload-arrow')?.addEventListener('click', e => {
   if (!upPop.hidden) refreshQuotaHint();
 });
 $('#upload-file-btn').onclick = () => { upPop.hidden = true; $('#file-input').click(); };
-document.addEventListener('click', e => {
-  if (!upPop.hidden && !e.target.closest('#upload-pop') && !e.target.closest('#upload-arrow')) upPop.hidden = true;
-});
+outsideClose(upPop, $('#upload-arrow'), $('#upload-file-btn'));
 $('#file-input').onchange = e => { uploadFiles(e.target.files); e.target.value = ''; };
 $('#url-import-btn').onclick = async () => {
   const url = $('#url-import-input').value.trim();
@@ -865,10 +905,7 @@ $('#filter-pop').onclick = e => {
   markFilterMenu();
   loadPapers();
 };
-document.addEventListener('click', e => {
-  const pop = $('#filter-pop');
-  if (pop && !pop.hidden && !e.target.closest('#filter-pop') && !e.target.closest('#filter-arrow')) pop.hidden = true;
-});
+outsideClose($('#filter-pop'), $('#filter-arrow'));
 markFilterMenu();
 
 /* ---- 侧栏折叠 / 展开（MinerU 风格浮动箭头）---- */
@@ -898,12 +935,10 @@ if (innerWidth < 1100 && !state.sidebarCollapsed) {
    侧栏回归纯导航。state.selected 仍由文库页复选框维护（全站共享）。 */
 
 /* 搜索 + 快捷范围 chips */
-let _libSearchTimer = 0;
-$('#lib-search').oninput = e => {   // 300ms 防抖：大库逐键触发全文检索会请求风暴
+$('#lib-search').oninput = debounce(e => {   // 300ms 防抖：大库逐键触发全文检索会请求风暴
   state.q = e.target.value;
-  clearTimeout(_libSearchTimer);
-  _libSearchTimer = setTimeout(loadPapers, 300);
-};
+  loadPapers();
+}, 300);
 $$('#scope-chips .chip-btn').forEach(b => b.addEventListener('click', () => {
   const s = b.dataset.scope;
   state.scope = state.scope === s ? '' : s;      // 再点取消
@@ -1608,12 +1643,7 @@ window.backToSynthesis = async () => {
 /* ---------------- 任务中心（合并进批量中心 ③ 区块） ----------------
    顶栏「队列」按钮 = 角标提醒；点击跳批量中心任务进度区。批次任务、无批次的
    单篇任务、MCP 待确认写操作、批量暂停/恢复 全部在 ③ 区块内统一展示与操作。 */
-let _badgeAt = 0;
-async function refreshQueueBadge() {
-  if (Date.now() - _badgeAt < 3000) return;   // SSE 事件风暴节流（3s）
-  _badgeAt = Date.now();
-  await _refreshQueueBadge();
-}
+const refreshQueueBadge = throttle(async () => { await _refreshQueueBadge(); }, 3000);   // SSE 事件风暴节流（3s）
 async function _refreshQueueBadge() {
   if (document.hidden) return;   // 后台标签页暂停轮询（回来时 visibilitychange 立即刷一次）
   try {
@@ -1656,8 +1686,7 @@ state._batchPapers = [];        // 圈定来源论文缓存（供明细显示标
 window.openCollectPanel = async () => {
   const old = document.querySelector('#collect-panel');
   if (old) old.remove();
-  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
-  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop collect-panel'});
+  const {pop, close} = openPop('collect-panel');
   pop.innerHTML = `<div class="ui-pop-title">采集文献
       <span class="muted" style="font-weight:400;font-size: var(--fs-xs)">按关键词检索中文文献（知网 / 中科院预印本）并入库</span>
       <span class="spacer"></span><button class="btn small" data-cp-close title="关闭">${icon('close')}</button></div>
@@ -1666,12 +1695,6 @@ window.openCollectPanel = async () => {
       <button class="btn" id="cp-topics">${icon('stack')} 专题跟踪<span class="muted">持久化任务 · 可中断可恢复 · 一键综述</span></button>
     </div>
     <div id="cp-body"></div>`;
-  backdrop.appendChild(pop);
-  document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  document.addEventListener('keydown', onKey, true);
-  backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-cp-close]').onclick = close;
   pop.querySelector('[data-cancel], .ui-pop-foot [data-ok]')?.remove();
   const body = pop.querySelector('#cp-body');
@@ -1731,7 +1754,7 @@ async function renderSynList(all) {
       <span class="syn-item-main">
         <b title="${esc(synTitleOf(s))}">${esc(synTitleOf(s))}</b>
         <span class="muted" style="font-size: var(--fs-xs)">${s.papers ?? '—'} 篇 · ${esc(s.model || '')} · ${esc(relTime(s.updated_at))}</span>
-        ${s.status === 'running' ? `<div class="up-bar parse" style="max-width:280px"><i style="width:${pct}%"></i></div>` : ''}
+        ${s.status === 'running' ? progressBar(pct, false, 'up-bar parse', 'max-width:280px') : ''}
         ${s.status === 'failed' && s.error ? `<div class="bpanel-err">${esc(s.error.slice(0, 120))}</div>` : ''}
       </span>
       <span class="spacer"></span>
@@ -1746,21 +1769,6 @@ async function renderSynList(all) {
     $('#syn-more').onclick = async () => { el.innerHTML = ''; await renderSynList(true); };
   }
 }
-$('#page-tasks').addEventListener('click', async e => {
-  const sv = e.target.closest('#syn-list [data-syn-view]');
-  if (sv) { showSynthesisReport(sv.dataset.synView); return; }
-  const sd = e.target.closest('#syn-list [data-syn-dl]');
-  if (sd) { location.href = `/api/syntheses/${encodeURIComponent(sd.dataset.synDl)}/export?fmt=${sd.dataset.fmt}`; return; }
-  const sdl = e.target.closest('#syn-list [data-syn-del]');
-  if (sdl) {
-    if (await uiConfirm('删除这篇综述？（报告与矩阵一并删除；进行中的任务同时取消）',
-                        {title: '删除综述', danger: true, anchor: sdl})) {
-      try { await api('/api/syntheses/' + encodeURIComponent(sdl.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
-      renderSynList();
-      renderTaskPanel();
-    }
-  }
-});
 
 
 /* ================= 任务中心（独立页） =================
@@ -1866,7 +1874,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
   const row = j => {
     const tt = taskType(j.job_type);
     const bar = j.progress_total > 1
-      ? `<div class="up-bar task"><i style="width:${Math.min(100, Math.round(100 * (j.progress_done || 0) / j.progress_total))}%"></i></div>` : '';
+      ? `${progressBar(Math.round(100 * (j.progress_done || 0) / j.progress_total), false, 'up-bar task')}` : '';
     return `<div class="task-row">
       <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
       <span class="task-main">
@@ -1888,7 +1896,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
       .map(x => { const t = taskType(x.job_type);
         return `<span class="tt ${t.cls}" title="${esc(t.label)}">${icon(t.icon, 11)}</span>`; }).join('');
     const prog = items.filter(x => x.progress_total > 1)
-      .map(x => `<div class="up-bar task"><i style="width:${Math.min(100, Math.round(100 * (x.progress_done || 0) / x.progress_total))}%"></i></div>`).join('');
+      .map(x => progressBar(Math.round(100 * (x.progress_done || 0) / x.progress_total), false, 'up-bar task')).join('');
     const state = failed.length ? ['err', `${failed.length} 个失败`]
       : live.length ? ['run', '进行中'] : ['ok', '已完成'];
     const t0 = items.map(x => x.updated_at || x.created_at).filter(Boolean).sort().pop();
@@ -1995,7 +2003,9 @@ async function renderTaskPanel() {
   }
 }
 
-// 任务页事件委托：批次展开/收起 + 单篇任务重试/取消
+/* 任务页唯一点击委托。此前三处重叠监听同一容器（本文件的批次委托 +
+   06-topic 的任务页委托 + 04-view 的 syn-list 委托）：综述删除会弹两个
+   确认框、DELETE 发两次；MCP 行头在 06-topic 分支会 null.dataset 抛错。 */
 $('#page-tasks').addEventListener('click', async e => {
   // 清理已结束任务记录（任务日志可清，论文/综述不受影响）
   const jclear = e.target.closest('[data-jobs-clear]');
@@ -2016,6 +2026,7 @@ $('#page-tasks').addEventListener('click', async e => {
   const cancel = e.target.closest('[data-cancel]');
   if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); return; }
   // 综述批次的 查看报告/MD/CSV/删除（renderSynJob 的按钮渲染在任务页；分支曾只挂在批量页容器上）
+  // 综述行：查看报告 / 导出 / 删除（syn-list 与批次内渲染共用 data-* 键）
   const synView = e.target.closest('[data-syn-view]');
   if (synView) { showSynthesisReport(synView.dataset.synView); return; }
   const synDl = e.target.closest('[data-syn-dl]');
@@ -2025,6 +2036,7 @@ $('#page-tasks').addEventListener('click', async e => {
     if (await uiConfirm('删除这篇综述？（报告与矩阵将一并删除，进行中的任务同时取消）',
                         {title: '删除综述', danger: true, anchor: synDel})) {
       try { await api('/api/syntheses/' + encodeURIComponent(synDel.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
+      renderSynList();
       renderTaskPanel();
     }
     return;
@@ -2045,16 +2057,8 @@ $('#page-tasks').addEventListener('click', async e => {
    圈定 → 成本预估确认（缺导读自动补齐 + 组内比对 + 跨组综合 = N 次调用）
    → synthesis job 进批次面板（四阶段进度）→ 完成后查看报告/导出 MD·CSV */
 function downloadBibtex(ids) {
-  fetch('/api/papers/export/bibtex', {method: 'POST',
-    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paper_ids: ids})})
-    .then(async r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const blob = await r.blob();
-      const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(blob), download: 'references.bib'});
-      a.click(); URL.revokeObjectURL(a.href);
-      toast(`已导出 ${ids.length} 篇 BibTeX`);
-    })
-    .catch(e => toast('导出失败: ' + e.message));
+  downloadBlob('/api/papers/export/bibtex', {paper_ids: ids}, 'references.bib',
+               `已导出 ${ids.length} 篇 BibTeX`).catch(e => toast('导出失败: ' + e.message));
 }
 
 /* ---- 专题采集任务：列表 → 详情（候选勾选 → 下载入库 → 综述） ---- */
@@ -2240,13 +2244,9 @@ function openAcquirePop(anchorEl) {
   if (!pop) return;
   pop.hidden = false;
   const el = anchorEl || $('#acq-btn');
-  pop.style.position = 'fixed';
-  if (el) {
-    const r = el.getBoundingClientRect();
-    pop.style.top = (r.bottom + 6) + 'px';
-    pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
-    pop.style.left = 'auto';
-  } else {                       // 无锚点（入口在浮层里，浮层已关闭）→ 靠右固定
+  if (el) anchorPop(pop, el);
+  else {                         // 无锚点（入口在浮层里，浮层已关闭）→ 靠右固定
+    pop.style.position = 'fixed';
     pop.style.top = '96px';
     pop.style.right = '24px';
     pop.style.left = 'auto';
@@ -2354,8 +2354,7 @@ async function runSynthesis(anchor, ids = null) {
   } catch (e) { toast(friendlyError(e, '估算失败——请确认已勾选 ≥2 篇已解析论文')); return; }
 
   // 参数弹窗（survey-writer 五问的落地：轴最关键；quick 可空轴）
-  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
-  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop syn-launch'});
+  const {pop, close} = openPop('syn-launch');
   const extra = {quick: 0, standard: 8, deep: 14};
   // 费用预估：按历史均摊单价 × 调用数（priced=false 表示没有历史样本，不编造数字）
   const cost = est.cost || {};
@@ -2389,13 +2388,7 @@ async function runSynthesis(anchor, ids = null) {
     <div class="muted" style="font-size: var(--fs-xs);margin:4px 0">预计 <b id="syn-calls">${est.calls}</b> 次 LLM 调用；${costLine(est.calls)}；引用键表自动核验，机器校验通过才交付</div>
     <div class="ui-pop-foot"><button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>开始综述</button></div>`;
-  backdrop.appendChild(pop);
-  document.body.appendChild(backdrop);
   $$('input[name=syn-tier]', pop).forEach(r => r.onchange = updCalls);
-  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  document.addEventListener('keydown', onKey, true);
-  backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-cancel]').onclick = close;
   const okBtn = pop.querySelector('[data-ok]');
   okBtn.onclick = async () => {
@@ -2457,7 +2450,7 @@ async function renderSynJob(sid, box) {
         <button class="btn small" title="导出对比矩阵 CSV" data-syn-dl="${esc(s.id)}" data-fmt="csv">${icon('chart')} CSV</button>` : ''}
       <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
     </div>
-    ${s.status === 'running' ? `<div class="up-bar parse" style="margin:0 12px 10px"><i style="width:${pct}%"></i></div>` : ''}
+    ${s.status === 'running' ? progressBar(pct, false, 'up-bar parse', 'margin:0 12px 10px') : ''}
     ${s.error ? `<div class="bpanel-err">${esc(s.error)}</div>` : ''}`;
 }
 
@@ -2598,43 +2591,16 @@ async function showSynthesisReport(sid) {
   });
 }
 
-$('#page-tasks').addEventListener('click', async e => {
-  const retry = e.target.closest('[data-retry]');
-  if (retry) { await api(`/api/jobs/${retry.dataset.retry}/retry`, {method: 'POST'}); renderTaskPanel(); return; }
-  const cancel = e.target.closest('[data-cancel]');
-  if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderTaskPanel(); return; }
-  const inSynList = !!e.target.closest('#syn-list');   // 「我的综述」列表有自己的委托（上方监听器）——否则删除会弹两个确认、DELETE 两次
-  const synView = e.target.closest('[data-syn-view]');
-  if (synView && !inSynList) { showSynthesisReport(synView.dataset.synView); return; }
-  const synDl = e.target.closest('[data-syn-dl]');
-  if (synDl && !inSynList) { location.href = `/api/syntheses/${encodeURIComponent(synDl.dataset.synDl)}/export?fmt=${synDl.dataset.fmt}`; return; }
-  const synDel = e.target.closest('[data-syn-del]');
-  if (synDel && !inSynList) {
-    if (await uiConfirm('删除这篇综述？（报告与矩阵将一并删除，进行中的任务同时取消）',
-                        {title: '删除综述', danger: true, anchor: synDel})) {
-      try { await api('/api/syntheses/' + encodeURIComponent(synDel.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
-      renderTaskPanel();
-    }
-    return;
-  }
-  const head = e.target.closest('.bpanel-row.head');
-  if (head) {
-    const batchEl = head.closest('[data-batch]');
-    const bid = batchEl.dataset.batch;
-    const box = batchEl.querySelector('[data-jobs]');
-    box.hidden = !box.hidden;
-    if (box.hidden) state._batchOpen.delete(bid);
-    else { state._batchOpen.add(bid); renderBatchJobs(bid, box); }
-  }
-});
+
 // 批量页可见时轮询进度（SSE 也会触发，双保险；面板不存在时静默跳过）
 setInterval(() => {
   const pg = $('#page-tasks');
   if (pg && pg.style.display !== 'none') { renderTaskPanel(); renderSynList(); }
 }, 6000);
 
-let _batchSseAt = 0;
-let _sidebarAt = 0;   // 侧栏计数节流（上传/导入高峰每篇都会 +1）
+// SSE 事件风暴节流动作（throttle 前沿放行：风暴期首事件生效，其余丢弃）
+const refreshTaskOnBatchSse = throttle(() => { renderTaskPanel(); renderSynList(); }, 2000);
+const refreshSidebarOnParse = throttle(() => loadCollections().catch(() => {}), 3000);
 
 /* ---------------- 找相关（Semantic Scholar 三模式排卡，llm-for-zotero /discover_related 式） ----
    推荐/参考文献/引证三页签；勾选一键导入（DOI/标题自动查重，无公开 PDF 不可导）。 */
@@ -2652,11 +2618,7 @@ async function openDiscover() {
   const pop = $('#discover-pop');
   pop.hidden = !pop.hidden;
   if (pop.hidden) return;
-  const r = $('#discover-btn').getBoundingClientRect();
-  pop.style.position = 'fixed';
-  pop.style.top = (r.bottom + 6) + 'px';
-  pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
-  pop.style.left = 'auto';
+  anchorPop(pop, $('#discover-btn'));
   state._discSel = new Set();
   renderDiscover();
   await loadDiscover();
@@ -2756,8 +2718,17 @@ document.addEventListener('click', e => {
 });
 
 /* SSE 实时进度 */
-let _sseCollectionsAt = 0;   // 批量任务事件风暴节流（3s 内只重建一次文库页）
-let _qaPapersAt = 0;         // parse done/failed → qaAllPapers 重拉节流
+const refreshCollectionsOnSse = throttle(() => renderCollectionsPage(), 3000);
+const refreshQaPapersOnParse = throttle(ev => {
+  api('/api/papers').then(d => {
+    state.qaAllPapers = d.papers;
+    if (state.view === 'qa') {
+      renderPickList($('#qa-pick-filter')?.value.toLowerCase() || '');
+      renderQaScope();
+      if (ev.status === 'done') toast(`《${(d.papers.find(x => x.id === ev.paper_id) || {}).title || ''}》解析完成，可以提问了`);
+    }
+  });
+}, 3000);
 async function watchJobs() {
   const es = new EventSource('/api/jobs/stream');
   es.onmessage = e => {
@@ -2778,39 +2749,16 @@ async function watchJobs() {
       loadPapers();
     }
     if (ev.job_type === 'parse' && (ev.status === 'done' || ev.status === 'failed')) {
-      // 侧栏计数节流刷新（导入/上传高峰期数字跟着跳，不用手动刷新页面）
-      if (Date.now() - _sidebarAt > 3000) {
-        _sidebarAt = Date.now();
-        loadCollections().catch(() => {});
-      }
-      if (Date.now() - _qaPapersAt > 3000) {   // 逐篇事件风暴节流（批量导入 90 篇=90 次全量拉）
-        _qaPapersAt = Date.now();
-        api('/api/papers').then(d => {
-        state.qaAllPapers = d.papers;
-        if (state.view === 'qa') {
-          renderPickList($('#qa-pick-filter')?.value.toLowerCase() || '');
-          renderQaScope();
-          if (ev.status === 'done') toast(`《${(d.papers.find(x => x.id === ev.paper_id) || {}).title || ''}》解析完成，可以提问了`);
-        }
-      });
-      }
+      refreshSidebarOnParse(ev);   // 侧栏计数节流刷新（导入/上传高峰期数字跟着跳）
+      refreshQaPapersOnParse(ev);  // 逐篇事件风暴节流（批量导入 90 篇=90 次全量拉）
     }
     refreshQueueBadge();
     // 批量中心打开时，批次事件实时刷新进度面板（2s 节流，避免逐篇事件风暴全量重建）
-    if (ev.batch_id && ($('#page-tasks')?.style.display !== 'none'
-        ) && Date.now() - _batchSseAt > 2000) {
-      _batchSseAt = Date.now();
-      renderTaskPanel();
-      renderSynList();
-    }
+    if (ev.batch_id && $('#page-tasks')?.style.display !== 'none') refreshTaskOnBatchSse();
     // 文库管理页打开时同步行内状态（批量导入时每块一事件，全量重建需节流）
     const cp = $('#page-collections');
     const qIn = document.activeElement?.id === 'lib-mgr-q';   // 正在文库管理页搜索框输入
-    if (cp && cp.style.display !== 'none' && !qIn &&
-        Date.now() - _sseCollectionsAt > 3000) {
-      _sseCollectionsAt = Date.now();
-      renderCollectionsPage();
-    }
+    if (cp && cp.style.display !== 'none' && !qIn) refreshCollectionsOnSse();
   };
 }
 
@@ -2912,11 +2860,9 @@ async function renderMeta() {
     notes.tags = v; renderMeta();
   };
   // 备注自动保存
-  let noteTimer;
-  $('#m-notes').oninput = e => {
-    clearTimeout(noteTimer);
-    noteTimer = setTimeout(() => api(`/api/papers/${pid}/notes`, {method: 'PUT', body: JSON.stringify({...notes, notes: e.target.value})}).then(() => toast('已保存', 1000)), 800);
-  };
+  $('#m-notes').oninput = debounce(e =>
+    api(`/api/papers/${pid}/notes`, {method: 'PUT', body: JSON.stringify({...notes, notes: e.target.value})})
+      .then(() => toast('已保存', 1000)), 800);
   // 参考文献渲染+搜索
   const renderRefs = q => {
     const list = refs.references.filter(r => !q || r.text.toLowerCase().includes(q));
@@ -2982,8 +2928,7 @@ window.cnkiCalibrate = async (pid) => {
     cands = await api('/api/meta/cnki-search?title=' + encodeURIComponent(cur.title));
   } catch (e) { toast('知网检索失败: ' + e.message); return; }
   if (!cands.candidates.length) { toast('知网未找到候选，可试「联网校准」的 CrossRef 中文分支'); return; }
-  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
-  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop'});
+  const {pop, close} = openPop();
   pop.innerHTML = `
     <div class="ui-pop-title">中文源候选（知网）——选最匹配的一条</div>
     <div class="cnki-list">${cands.candidates.map((c, i) => `
@@ -2993,10 +2938,6 @@ window.cnkiCalibrate = async (pid) => {
     <div class="ui-pop-foot">
       <button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>写入</button></div>`;
-  backdrop.appendChild(pop);
-  document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); };
-  backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-cancel]').onclick = close;
   pop.querySelector('[data-ok]').onclick = async () => {
     const pick = pop.querySelector('input[name=cnki]:checked');
@@ -3562,13 +3503,7 @@ async function populateQaPicker() {
     };
   }
   const fl = $('#qa-pick-filter');
-  if (fl) {
-    let t = 0;
-    fl.oninput = () => {   // 防抖：大库逐键全量重渲染会卡
-      clearTimeout(t);
-      t = setTimeout(() => renderPickList(fl.value.toLowerCase()), 200);
-    };
-  }
+  if (fl) fl.oninput = debounce(() => renderPickList(fl.value.toLowerCase()), 200);   // 防抖：大库逐键全量重渲染会卡
   const toggle = $('#qa-pick-toggle');
   if (!toggle) return;
   $('#qa-pick-count').textContent = state.qaPapers.size;
@@ -3808,8 +3743,7 @@ async function executeTag(tag) {
 
 function editTagDialog(tag) {
   const isCustom = !!tag.custom;
-  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
-  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop'});
+  const {pop, close} = openPop();
   pop.innerHTML = `
     <div class="ui-pop-title">${isCustom && !tag._new ? '编辑标签' : tag._new ? '新建标签' : '内置标签 → 存为自定义'}</div>
     <input class="ui-pop-input" id="tag-label" value="${esc(tag.label || '')}" placeholder="按钮名称（如 📐 分析公式）" style="margin-bottom:8px">
@@ -3820,12 +3754,6 @@ function editTagDialog(tag) {
       <button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>保存</button>
     </div>`;
-  backdrop.appendChild(pop);
-  document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  document.addEventListener('keydown', onKey, true);
-  backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-cancel]').onclick = close;
   pop.querySelector('[data-ok]').onclick = () => {
     saveTag(tag, pop.querySelector('#tag-label').value.trim(), pop.querySelector('#tag-prompt').value);
@@ -4468,8 +4396,7 @@ function openQuotaDialog(uid) {
   const f = (suf, key, label, ph, min) => `<label class="adm-q-row"><span>${label}</span>
     <input id="q-${uid}-${suf}" type="number" min="${min}" style="width:100px;font-size: var(--fs-sm)"
       value="${ov[key] ?? ''}" placeholder="${ph}"></label>`;
-  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
-  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop adm-quota-pop'});
+  const {pop, close} = openPop('adm-quota-pop');
   pop.innerHTML = `
     <div class="ui-pop-title">编辑限额 <span class="muted" style="font-weight:400">留空 = 使用默认值</span></div>
     <div class="adm-q-grid">
@@ -4484,10 +4411,6 @@ function openQuotaDialog(uid) {
       <button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>保存</button>
     </div>`;
-  backdrop.appendChild(pop);
-  document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); };
-  backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-cancel]').onclick = close;
   pop.querySelector('[data-ok]').onclick = async () => { await saveQuota(uid); close(); };
 }
@@ -4819,21 +4742,21 @@ function libMgrToolbarHtml(d) {
     </div>`;
 }
 
-function bindLibMgrToolbar() {
+/* 文库管理搜索框：两处渲染路径共用一份防抖逻辑（原先两份几乎逐行相同的闭包） */
+function bindLibMgrQ() {
   const qIn = $('#lib-mgr-q');
-  if (qIn) {
-    qIn.oninput = e => {
-      state.libQuery = e.target.value;
-      state._libPage = 1;              // 换搜索词回到第一页
-      clearTimeout(state._libQTimer);
-      state._libQTimer = setTimeout(async () => {
-        if (state.libLevel === 1) { renderCollectionsPage(); }
-        else { await renderCollectionsPage(); }
-        const n = $('#lib-mgr-q');
-        if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
-      }, 300);
-    };
-  }
+  if (!qIn) return;
+  qIn.oninput = debounce(async e => {
+    state.libQuery = e.target.value;
+    state._libPage = 1;              // 换搜索词回到第一页
+    await renderCollectionsPage();   // 等重渲染完成再恢复焦点，否则焦点落在被替换的旧节点上
+    const n = $('#lib-mgr-q');
+    if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
+  }, 300);
+}
+
+function bindLibMgrToolbar() {
+  bindLibMgrQ();
 }
 
 async function renderCollectionsPage(preset = null) {
@@ -4924,7 +4847,7 @@ async function renderCollectionsPage(preset = null) {
 
   // ---- 组装 ----
   const selName = sel ? (d.collections.find(c => c.id === sel)?.name || '') : '';
-  const selNameArg = selName.replace(/'/g, "\\'");   // 塞进内联 onclick 的单引号参数
+  const selNameArg = jsArg(selName);   // 塞进内联 onclick 的参数（引号/&/双引号全兜）
   el.innerHTML = libMgrToolbarHtml(d) + `
     <div class="lib-crumb">
       ${state.libLevel === 2 ? `<a href="#" onclick="libGoL1();return false">← 全部库</a> <span class="muted">›</span> ` : '<span class="muted">位置：</span>'}
@@ -4996,19 +4919,7 @@ async function renderCollectionsPage(preset = null) {
     const bar = $('#lb-' + scopeKey);
     if (bar) { bar.hidden = !pre.length; $('#lb-count-' + scopeKey).textContent = pre.length; }
   }
-  const qIn = $('#lib-mgr-q');
-  if (qIn) {
-    qIn.oninput = e => {
-      state.libQuery = e.target.value;
-      state._libPage = 1;              // 换搜索词回到第一页
-      clearTimeout(state._libQTimer);
-      state._libQTimer = setTimeout(async () => {
-        await renderCollectionsPage();          // 等重渲染完成再恢复焦点，否则焦点落在被替换的旧节点上
-        const n = $('#lib-mgr-q');
-        if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
-      }, 300);
-    };
-  }
+  bindLibMgrQ();
   // 拖 PDF 到右栏 → 上传到当前库
   const main = $('#lib-main-drop');
   if (main) {
@@ -5027,13 +4938,7 @@ document.addEventListener('click', async e => {
   if (btn && pop) {
     e.stopPropagation();
     pop.hidden = !pop.hidden;
-    if (!pop.hidden) {
-      const r = btn.getBoundingClientRect();
-      pop.style.position = 'fixed';
-      pop.style.top = (r.bottom + 6) + 'px';
-      pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
-      pop.style.left = 'auto';
-    }
+    if (!pop.hidden) anchorPop(pop, btn);
     return;
   }
   const zip = e.target.closest?.('#export-zip-btn');
@@ -5053,14 +4958,9 @@ document.addEventListener('click', async e => {
       } else {
         url = '/api/papers/export-zip'; payload = {paper_ids: ids, fmts};
       }
-      const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                  body: JSON.stringify(payload)});
-      if (!r.ok) throw new Error((await r.json()).detail || 'HTTP ' + r.status);
-      const blob = await r.blob();
-      const a = Object.assign(document.createElement('a'),
-        {href: URL.createObjectURL(blob), download: fmts.length === 1 && fmts[0] === 'bibtex' ? 'references.bib' : '论文导出.zip'});
-      a.click(); URL.revokeObjectURL(a.href);
-      toast(`已导出 ${ids.length} 篇`);
+      await downloadBlob(url, payload,
+        fmts.length === 1 && fmts[0] === 'bibtex' ? 'references.bib' : '论文导出.zip',
+        `已导出 ${ids.length} 篇`);
       pop.hidden = true;
     } catch (err) { toast('导出失败: ' + err.message); }
     zip.disabled = false; zip.innerHTML = icon('download') + ' 导出 ZIP';
@@ -5412,9 +5312,7 @@ window.toggleToc = () => {
     t = document.createElement('div');
     t.id = 'toc-panel'; t.hidden = true;
     $('.pane-right').appendChild(t);
-    document.addEventListener('click', e => {
-      if (!t.hidden && !t.contains(e.target) && e.target.id !== 'toc-btn') t.hidden = true;
-    });
+    outsideClose(t, $('#toc-btn'));
   }
   if (t.hidden) {
     const seen = new Set(); const items = [];
@@ -5645,7 +5543,7 @@ applyRpaneCollapse();
   const zi = $('#zoom-in'), zo = $('#zoom-out');
   if (zi) zi.addEventListener('click', () => state.fitWidth = false);
   if (zo) zo.addEventListener('click', () => state.fitWidth = false);
-  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => {
+  window.addEventListener('resize', debounce(() => {
     applyVsplit();
     // ≤1100 自动收起侧栏（缩放/分屏场景；仅自动收放，不改写用户手动偏好）
     const narrow = innerWidth < 1100;
@@ -5654,7 +5552,7 @@ applyRpaneCollapse();
     } else if (!narrow && state._autoFolded) {
       state._autoFolded = false; state.sidebarCollapsed = false; applySidebarCollapse();
     }
-  }, 250); });
+  }, 250));
   // PDF 栏宽变化 → 重绘页面与全部覆盖层（布局框/高亮/文字层随尺寸走）
   if (window.ResizeObserver) {
     let rw;
@@ -6051,17 +5949,11 @@ window.setLibView = v => { state.libView = v; renderCollectionsPage(); };
     pop.hidden = !pop.hidden;
     if (!pop.hidden) {
       loadDlOptions();
-      // 浮动定位（fixed）：工具条 overflow-x:auto 会把 absolute 弹层裁掉——原先整框被剪到不可见
-      const r = btn.getBoundingClientRect();
-      pop.style.position = 'fixed';
-      pop.style.top = (r.bottom + 6) + 'px';
-      pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
-      pop.style.left = 'auto';
+      // fixed 定位：工具条 overflow-x:auto 会把 absolute 弹层裁掉——原先整框被剪到不可见
+      anchorPop(pop, btn);
     }
   });
-  document.addEventListener('click', e => {
-    if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) pop.hidden = true;
-  });
+  outsideClose(pop, btn);
   $$('#download-pop .tp-item[data-dl]').forEach(it => it.addEventListener('click', () => {
     const fmt = it.dataset.dl;
     const pid = state.current?.id;

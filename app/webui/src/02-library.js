@@ -9,13 +9,8 @@ async function loadCollections(preset = null) {
   state.sharedLibs = d.shared_libs || [];     // 他人库中的共享论文
   renderCollections();
 }
-function colDescendants(cid) {
-  const out = [];
-  const walk = id => {
-    state.collections.filter(c => c.parent_id === id).forEach(c => { out.push(c.id); walk(c.id); });
-  };
-  walk(cid);
-  return out;
+function colDescendants(cid) {   // 不含自身的子孙 id（真身 libDescendants 在 11-libmgr，拼接同作用域）
+  return libDescendants(cid).filter(id => id !== cid);
 }
 function renderCollections() {
   const el = $('#collections');
@@ -207,7 +202,7 @@ function renderPapers() {
       <div class="info">
         <div class="name">${esc(name)}</div>
         <div class="meta"><span class="up-pct">${u.phase === 'saving' ? '保存中…' : '上传中 ' + (u.pct || 0) + '%'}</span>
-          <div class="up-bar"><i style="width:${u.pct || 0}%"></i></div></div>
+          ${progressBar(u.pct || 0)}</div>
       </div>
     </div>`).join('');
   if (!state.papers.length && !ups) {
@@ -222,7 +217,7 @@ function renderPapers() {
   const listHtml = sortPapers(state.papers).map(p => {
     const pr = (state.parseProg || {})[p.id];
     const bar = p.parse_status === 'parsing' && pr?.total
-      ? `<div class="up-bar parse"><i style="width:${Math.min(100, Math.round(100 * pr.done / pr.total))}%"></i></div>` : '';
+      ? `${progressBar(Math.round(100 * pr.done / pr.total), false, 'up-bar parse')}` : '';
     return `
     <div class="paper-item ${state.current?.id === p.id ? 'sel' : ''}" data-id="${p.id}">
       <div class="info">
@@ -294,9 +289,7 @@ $('#upload-arrow')?.addEventListener('click', e => {
   if (!upPop.hidden) refreshQuotaHint();
 });
 $('#upload-file-btn').onclick = () => { upPop.hidden = true; $('#file-input').click(); };
-document.addEventListener('click', e => {
-  if (!upPop.hidden && !e.target.closest('#upload-pop') && !e.target.closest('#upload-arrow')) upPop.hidden = true;
-});
+outsideClose(upPop, $('#upload-arrow'), $('#upload-file-btn'));
 $('#file-input').onchange = e => { uploadFiles(e.target.files); e.target.value = ''; };
 $('#url-import-btn').onclick = async () => {
   const url = $('#url-import-input').value.trim();
@@ -512,10 +505,7 @@ $('#filter-pop').onclick = e => {
   markFilterMenu();
   loadPapers();
 };
-document.addEventListener('click', e => {
-  const pop = $('#filter-pop');
-  if (pop && !pop.hidden && !e.target.closest('#filter-pop') && !e.target.closest('#filter-arrow')) pop.hidden = true;
-});
+outsideClose($('#filter-pop'), $('#filter-arrow'));
 markFilterMenu();
 
 /* ---- 侧栏折叠 / 展开（MinerU 风格浮动箭头）---- */
@@ -545,12 +535,10 @@ if (innerWidth < 1100 && !state.sidebarCollapsed) {
    侧栏回归纯导航。state.selected 仍由文库页复选框维护（全站共享）。 */
 
 /* 搜索 + 快捷范围 chips */
-let _libSearchTimer = 0;
-$('#lib-search').oninput = e => {   // 300ms 防抖：大库逐键触发全文检索会请求风暴
+$('#lib-search').oninput = debounce(e => {   // 300ms 防抖：大库逐键触发全文检索会请求风暴
   state.q = e.target.value;
-  clearTimeout(_libSearchTimer);
-  _libSearchTimer = setTimeout(loadPapers, 300);
-};
+  loadPapers();
+}, 300);
 $$('#scope-chips .chip-btn').forEach(b => b.addEventListener('click', () => {
   const s = b.dataset.scope;
   state.scope = state.scope === s ? '' : s;      // 再点取消

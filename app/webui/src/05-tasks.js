@@ -98,7 +98,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
   const row = j => {
     const tt = taskType(j.job_type);
     const bar = j.progress_total > 1
-      ? `<div class="up-bar task"><i style="width:${Math.min(100, Math.round(100 * (j.progress_done || 0) / j.progress_total))}%"></i></div>` : '';
+      ? `${progressBar(Math.round(100 * (j.progress_done || 0) / j.progress_total), false, 'up-bar task')}` : '';
     return `<div class="task-row">
       <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
       <span class="task-main">
@@ -120,7 +120,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
       .map(x => { const t = taskType(x.job_type);
         return `<span class="tt ${t.cls}" title="${esc(t.label)}">${icon(t.icon, 11)}</span>`; }).join('');
     const prog = items.filter(x => x.progress_total > 1)
-      .map(x => `<div class="up-bar task"><i style="width:${Math.min(100, Math.round(100 * (x.progress_done || 0) / x.progress_total))}%"></i></div>`).join('');
+      .map(x => progressBar(Math.round(100 * (x.progress_done || 0) / x.progress_total), false, 'up-bar task')).join('');
     const state = failed.length ? ['err', `${failed.length} 个失败`]
       : live.length ? ['run', '进行中'] : ['ok', '已完成'];
     const t0 = items.map(x => x.updated_at || x.created_at).filter(Boolean).sort().pop();
@@ -227,7 +227,9 @@ async function renderTaskPanel() {
   }
 }
 
-// 任务页事件委托：批次展开/收起 + 单篇任务重试/取消
+/* 任务页唯一点击委托。此前三处重叠监听同一容器（本文件的批次委托 +
+   06-topic 的任务页委托 + 04-view 的 syn-list 委托）：综述删除会弹两个
+   确认框、DELETE 发两次；MCP 行头在 06-topic 分支会 null.dataset 抛错。 */
 $('#page-tasks').addEventListener('click', async e => {
   // 清理已结束任务记录（任务日志可清，论文/综述不受影响）
   const jclear = e.target.closest('[data-jobs-clear]');
@@ -248,6 +250,7 @@ $('#page-tasks').addEventListener('click', async e => {
   const cancel = e.target.closest('[data-cancel]');
   if (cancel) { await api(`/api/jobs/${cancel.dataset.cancel}/cancel`, {method: 'POST'}); renderTaskPanel(); refreshQueueBadge(); return; }
   // 综述批次的 查看报告/MD/CSV/删除（renderSynJob 的按钮渲染在任务页；分支曾只挂在批量页容器上）
+  // 综述行：查看报告 / 导出 / 删除（syn-list 与批次内渲染共用 data-* 键）
   const synView = e.target.closest('[data-syn-view]');
   if (synView) { showSynthesisReport(synView.dataset.synView); return; }
   const synDl = e.target.closest('[data-syn-dl]');
@@ -257,6 +260,7 @@ $('#page-tasks').addEventListener('click', async e => {
     if (await uiConfirm('删除这篇综述？（报告与矩阵将一并删除，进行中的任务同时取消）',
                         {title: '删除综述', danger: true, anchor: synDel})) {
       try { await api('/api/syntheses/' + encodeURIComponent(synDel.dataset.synDel), {method: 'DELETE'}); } catch { /* ignore */ }
+      renderSynList();
       renderTaskPanel();
     }
     return;
@@ -277,16 +281,8 @@ $('#page-tasks').addEventListener('click', async e => {
    圈定 → 成本预估确认（缺导读自动补齐 + 组内比对 + 跨组综合 = N 次调用）
    → synthesis job 进批次面板（四阶段进度）→ 完成后查看报告/导出 MD·CSV */
 function downloadBibtex(ids) {
-  fetch('/api/papers/export/bibtex', {method: 'POST',
-    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paper_ids: ids})})
-    .then(async r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const blob = await r.blob();
-      const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(blob), download: 'references.bib'});
-      a.click(); URL.revokeObjectURL(a.href);
-      toast(`已导出 ${ids.length} 篇 BibTeX`);
-    })
-    .catch(e => toast('导出失败: ' + e.message));
+  downloadBlob('/api/papers/export/bibtex', {paper_ids: ids}, 'references.bib',
+               `已导出 ${ids.length} 篇 BibTeX`).catch(e => toast('导出失败: ' + e.message));
 }
 
 /* ---- 专题采集任务：列表 → 详情（候选勾选 → 下载入库 → 综述） ---- */

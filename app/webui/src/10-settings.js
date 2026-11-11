@@ -283,8 +283,7 @@ function openQuotaDialog(uid) {
   const f = (suf, key, label, ph, min) => `<label class="adm-q-row"><span>${label}</span>
     <input id="q-${uid}-${suf}" type="number" min="${min}" style="width:100px;font-size: var(--fs-sm)"
       value="${ov[key] ?? ''}" placeholder="${ph}"></label>`;
-  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
-  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop adm-quota-pop'});
+  const {pop, close} = openPop('adm-quota-pop');
   pop.innerHTML = `
     <div class="ui-pop-title">编辑限额 <span class="muted" style="font-weight:400">留空 = 使用默认值</span></div>
     <div class="adm-q-grid">
@@ -299,10 +298,6 @@ function openQuotaDialog(uid) {
       <button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>保存</button>
     </div>`;
-  backdrop.appendChild(pop);
-  document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); };
-  backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-cancel]').onclick = close;
   pop.querySelector('[data-ok]').onclick = async () => { await saveQuota(uid); close(); };
 }

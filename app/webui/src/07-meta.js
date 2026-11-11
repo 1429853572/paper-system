@@ -95,11 +95,9 @@ async function renderMeta() {
     notes.tags = v; renderMeta();
   };
   // 备注自动保存
-  let noteTimer;
-  $('#m-notes').oninput = e => {
-    clearTimeout(noteTimer);
-    noteTimer = setTimeout(() => api(`/api/papers/${pid}/notes`, {method: 'PUT', body: JSON.stringify({...notes, notes: e.target.value})}).then(() => toast('已保存', 1000)), 800);
-  };
+  $('#m-notes').oninput = debounce(e =>
+    api(`/api/papers/${pid}/notes`, {method: 'PUT', body: JSON.stringify({...notes, notes: e.target.value})})
+      .then(() => toast('已保存', 1000)), 800);
   // 参考文献渲染+搜索
   const renderRefs = q => {
     const list = refs.references.filter(r => !q || r.text.toLowerCase().includes(q));
@@ -165,8 +163,7 @@ window.cnkiCalibrate = async (pid) => {
     cands = await api('/api/meta/cnki-search?title=' + encodeURIComponent(cur.title));
   } catch (e) { toast('知网检索失败: ' + e.message); return; }
   if (!cands.candidates.length) { toast('知网未找到候选，可试「联网校准」的 CrossRef 中文分支'); return; }
-  const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
-  const pop = Object.assign(document.createElement('div'), {className: 'ui-pop'});
+  const {pop, close} = openPop();
   pop.innerHTML = `
     <div class="ui-pop-title">中文源候选（知网）——选最匹配的一条</div>
     <div class="cnki-list">${cands.candidates.map((c, i) => `
@@ -176,10 +173,6 @@ window.cnkiCalibrate = async (pid) => {
     <div class="ui-pop-foot">
       <button class="btn small" data-cancel>取消</button>
       <button class="btn small primary" data-ok>写入</button></div>`;
-  backdrop.appendChild(pop);
-  document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); };
-  backdrop.onclick = e => { if (e.target === backdrop) close(); };
   pop.querySelector('[data-cancel]').onclick = close;
   pop.querySelector('[data-ok]').onclick = async () => {
     const pick = pop.querySelector('input[name=cnki]:checked');

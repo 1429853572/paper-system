@@ -56,21 +56,21 @@ function libMgrToolbarHtml(d) {
     </div>`;
 }
 
-function bindLibMgrToolbar() {
+/* 文库管理搜索框：两处渲染路径共用一份防抖逻辑（原先两份几乎逐行相同的闭包） */
+function bindLibMgrQ() {
   const qIn = $('#lib-mgr-q');
-  if (qIn) {
-    qIn.oninput = e => {
-      state.libQuery = e.target.value;
-      state._libPage = 1;              // 换搜索词回到第一页
-      clearTimeout(state._libQTimer);
-      state._libQTimer = setTimeout(async () => {
-        if (state.libLevel === 1) { renderCollectionsPage(); }
-        else { await renderCollectionsPage(); }
-        const n = $('#lib-mgr-q');
-        if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
-      }, 300);
-    };
-  }
+  if (!qIn) return;
+  qIn.oninput = debounce(async e => {
+    state.libQuery = e.target.value;
+    state._libPage = 1;              // 换搜索词回到第一页
+    await renderCollectionsPage();   // 等重渲染完成再恢复焦点，否则焦点落在被替换的旧节点上
+    const n = $('#lib-mgr-q');
+    if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
+  }, 300);
+}
+
+function bindLibMgrToolbar() {
+  bindLibMgrQ();
 }
 
 async function renderCollectionsPage(preset = null) {
@@ -161,7 +161,7 @@ async function renderCollectionsPage(preset = null) {
 
   // ---- 组装 ----
   const selName = sel ? (d.collections.find(c => c.id === sel)?.name || '') : '';
-  const selNameArg = selName.replace(/'/g, "\\'");   // 塞进内联 onclick 的单引号参数
+  const selNameArg = jsArg(selName);   // 塞进内联 onclick 的参数（引号/&/双引号全兜）
   el.innerHTML = libMgrToolbarHtml(d) + `
     <div class="lib-crumb">
       ${state.libLevel === 2 ? `<a href="#" onclick="libGoL1();return false">← 全部库</a> <span class="muted">›</span> ` : '<span class="muted">位置：</span>'}
@@ -233,19 +233,7 @@ async function renderCollectionsPage(preset = null) {
     const bar = $('#lb-' + scopeKey);
     if (bar) { bar.hidden = !pre.length; $('#lb-count-' + scopeKey).textContent = pre.length; }
   }
-  const qIn = $('#lib-mgr-q');
-  if (qIn) {
-    qIn.oninput = e => {
-      state.libQuery = e.target.value;
-      state._libPage = 1;              // 换搜索词回到第一页
-      clearTimeout(state._libQTimer);
-      state._libQTimer = setTimeout(async () => {
-        await renderCollectionsPage();          // 等重渲染完成再恢复焦点，否则焦点落在被替换的旧节点上
-        const n = $('#lib-mgr-q');
-        if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
-      }, 300);
-    };
-  }
+  bindLibMgrQ();
   // 拖 PDF 到右栏 → 上传到当前库
   const main = $('#lib-main-drop');
   if (main) {
@@ -264,13 +252,7 @@ document.addEventListener('click', async e => {
   if (btn && pop) {
     e.stopPropagation();
     pop.hidden = !pop.hidden;
-    if (!pop.hidden) {
-      const r = btn.getBoundingClientRect();
-      pop.style.position = 'fixed';
-      pop.style.top = (r.bottom + 6) + 'px';
-      pop.style.right = Math.max(8, innerWidth - r.right) + 'px';
-      pop.style.left = 'auto';
-    }
+    if (!pop.hidden) anchorPop(pop, btn);
     return;
   }
   const zip = e.target.closest?.('#export-zip-btn');
@@ -290,14 +272,9 @@ document.addEventListener('click', async e => {
       } else {
         url = '/api/papers/export-zip'; payload = {paper_ids: ids, fmts};
       }
-      const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                  body: JSON.stringify(payload)});
-      if (!r.ok) throw new Error((await r.json()).detail || 'HTTP ' + r.status);
-      const blob = await r.blob();
-      const a = Object.assign(document.createElement('a'),
-        {href: URL.createObjectURL(blob), download: fmts.length === 1 && fmts[0] === 'bibtex' ? 'references.bib' : '论文导出.zip'});
-      a.click(); URL.revokeObjectURL(a.href);
-      toast(`已导出 ${ids.length} 篇`);
+      await downloadBlob(url, payload,
+        fmts.length === 1 && fmts[0] === 'bibtex' ? 'references.bib' : '论文导出.zip',
+        `已导出 ${ids.length} 篇`);
       pop.hidden = true;
     } catch (err) { toast('导出失败: ' + err.message); }
     zip.disabled = false; zip.innerHTML = icon('download') + ' 导出 ZIP';
