@@ -339,7 +339,7 @@ async function renderSynList(all) {
       ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
         <button class="btn small" title="导出 Markdown" data-syn-dl="${esc(s.id)}" data-fmt="md">${icon('doc')} MD</button>
         <button class="btn small" title="导出对比矩阵 CSV" data-syn-dl="${esc(s.id)}" data-fmt="csv">${icon('chart')} CSV</button>` : ''}
-      <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
+      <button class="btn small danger hover-only" title="删除综述" data-syn-del="${esc(s.id)}">${icon('trash')}</button>
     </div>`;
   }).join('');
   if (items.length > 5) {

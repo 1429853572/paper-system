@@ -156,7 +156,7 @@ async function renderCollectionsPage(preset = null) {
         <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
-          <button class="btn small danger hover-only" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">删</button>
+          <button class="btn small danger hover-only" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">${icon('trash')}</button>
         </td></tr>`;}).join('');
 
   // ---- 组装 ----

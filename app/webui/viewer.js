@@ -1761,7 +1761,7 @@ async function renderSynList(all) {
       ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
         <button class="btn small" title="导出 Markdown" data-syn-dl="${esc(s.id)}" data-fmt="md">${icon('doc')} MD</button>
         <button class="btn small" title="导出对比矩阵 CSV" data-syn-dl="${esc(s.id)}" data-fmt="csv">${icon('chart')} CSV</button>` : ''}
-      <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
+      <button class="btn small danger hover-only" title="删除综述" data-syn-del="${esc(s.id)}">${icon('trash')}</button>
     </div>`;
   }).join('');
   if (items.length > 5) {
@@ -2095,7 +2095,7 @@ async function showTopicsView(container, onBack, hideBack) {
               ${t.error ? `<span class="bpanel-err" style="padding:0">${esc(t.error.slice(0, 120))}</span>` : ''}
             </span>
             <button class="btn small primary" data-tp-open="${esc(t.id)}">打开</button>
-            <button class="btn small danger" data-tp-del="${esc(t.id)}">删除</button>
+            <button class="btn small danger hover-only" title="删除专题" data-tp-del="${esc(t.id)}">${icon('trash')}</button>
           </div>`).join('') : `<div class="empty-state"><p class="t">还没有专题</p><p>专题跟踪会定期按关键词检索，新论文可勾选入库、一键综述</p><button class="btn primary" onclick="newTopicDialog()">${icon('plus')} 新建专题</button></div>`}
       </div>
     </div>`;
@@ -2448,7 +2448,7 @@ async function renderSynJob(sid, box) {
       ${['done', 'needs_fix'].includes(s.status) ? `<button class="btn small primary" data-syn-view="${esc(s.id)}">查看报告</button>
         <button class="btn small" title="导出 Markdown" data-syn-dl="${esc(s.id)}" data-fmt="md">${icon('doc')} MD</button>
         <button class="btn small" title="导出对比矩阵 CSV" data-syn-dl="${esc(s.id)}" data-fmt="csv">${icon('chart')} CSV</button>` : ''}
-      <button class="btn small danger" data-syn-del="${esc(s.id)}">删除</button>
+      <button class="btn small danger hover-only" title="删除综述" data-syn-del="${esc(s.id)}">${icon('trash')}</button>
     </div>
     ${s.status === 'running' ? progressBar(pct, false, 'up-bar parse', 'margin:0 12px 10px') : ''}
     ${s.error ? `<div class="bpanel-err">${esc(s.error)}</div>` : ''}`;
@@ -4843,7 +4843,7 @@ async function renderCollectionsPage(preset = null) {
         <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
-          <button class="btn small danger hover-only" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">删</button>
+          <button class="btn small danger hover-only" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">${icon('trash')}</button>
         </td></tr>`;}).join('');
 
   // ---- 组装 ----

@@ -101,19 +101,23 @@ check('点按钮本体同样走确认→DELETE', calls.some(c => c.startsWith('D
 // 触屏兜底 @media(hover:none) 常驻——本断言管「类与 CSS 双在」，真机行为另有 CDP 验证）
 {
   const css = fs.readFileSync(path.join(UI, 'styles.css'), 'utf8');
+  // [名, 开标签正则]——onclick 直调与 data-* 委托两种写法都要覆盖；全部命中处须带 hover-only
   const mustHaveClass = [
-    ['L2 论文表行内 删', 'delPaperFromLib'],
-    ['L2 库头 删除库', 'delLib'],
-    ['问答会话 删除', 'delSess'],
-    ['术语表 ×', 'delGlossary'],
+    ['L2 论文表行内 删', '<button [^>]*onclick="delPaperFromLib\\('],
+    ['L2 库头 删除库', '<button [^>]*onclick="delLib\\('],
+    ['问答会话 删除', '<button [^>]*onclick="[^"]*delSess\\('],
+    ['术语表 ×', '<button [^>]*onclick="delGlossary\\('],
+    ['综述删除（列表+批次内）', '<button [^>]*data-syn-del='],
+    ['专题列表 删除', '<button [^>]*data-tp-del='],
   ];
-  for (const [name, fn] of mustHaveClass) {
-    const m = [...js.matchAll(new RegExp('<button ([^>]*?)\\s?onclick="[^"]*' + fn + '\\(', 'g'))].pop();
-    check(name + ' 按钮带 hover-only', !!m && /hover-only/.test(m[1]),
-          m ? m[1].slice(0, 60) : '未找到按钮');
+  for (const [name, pat] of mustHaveClass) {
+    const ms = [...js.matchAll(new RegExp(pat, 'g'))];
+    check(name + ' 按钮带 hover-only', ms.length >= 1 && ms.every(m => /hover-only/.test(m[0])),
+          ms.length ? '命中 ' + ms.length + ' 处' : '未找到按钮');
   }
   check('CSS 悬停显形规则在', css.includes('tr:hover .hover-only') &&
-        css.includes('.qa-sess-item:hover .hover-only') && css.includes('.chip:hover .hover-only'));
+        css.includes('.qa-sess-item:hover .hover-only') && css.includes('.chip:hover .hover-only') &&
+        css.includes('.syn-item:hover .hover-only') && css.includes('.tp-row:hover .hover-only'));
   check('CSS 触屏兜底在（hover:none 常驻）', css.includes('@media (hover: none)') &&
         css.includes('pointer-events: auto'));
 }
