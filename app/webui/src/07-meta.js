@@ -47,7 +47,7 @@ async function renderMeta() {
         <button class="btn small" onclick="cancelMeta()">取消</button>`
         : `<button class="btn small" onclick="editMeta('${pid}')">${icon('edit')} 编辑</button>`}
         <button class="btn small" onclick="extractMeta('${pid}')" title="用 AI 补全缺失字段（作者/摘要/关键词）">${icon('bolt')} AI 补全</button>
-        <button class="btn small" onclick="verifyMeta('${pid}')" title="联网校准：arXiv/S2/CrossRef 比对，改前→改后确认后写入">${icon('globe')} 联网校准</button>
+        <button class="btn small" onclick="verifyMeta('${pid}')" title="联网校准：arXiv/S2/CrossRef/OpenAlex/DBLP 比对，改前→改后确认后写入">${icon('globe')} 联网校准</button>
         ${/[\u4e00-\u9fff]/.test(paper.title || '') ? `<button class="btn small" onclick="cnkiCalibrate('${pid}')" title="知网搜索候选，人工确认后写入">🇨🇳 中文源校准</button>` : ''}
       </div>
     </div>
@@ -150,7 +150,7 @@ window.saveMeta = async (pid) => {
   } catch (e) { toast('保存失败: ' + e.message); }
 };
 window.verifyMeta = async (pid) => {
-  toast('联网校准中…（arXiv/S2/CrossRef，只发送标题）');
+  toast('联网校准中…（arXiv/S2/CrossRef/OpenAlex/DBLP，只发送标题）');
   try {
     const r = await api(`/api/papers/${pid}/verify-meta`, {method: 'POST', body: JSON.stringify({})});
     if (!r.verified) { toast('⚠ ' + r.message); return; }

@@ -318,9 +318,64 @@ def _verify_crossref(title: str) -> dict | None:
             "title": cand_title, "match": round(ratio, 2)}
 
 
+def _verify_openalex(title: str) -> dict | None:
+    """OpenAlex 标题检索（免费无 key；覆盖面大，含 CrossRef 缺收的会议/预印本）。"""
+    r = httpx.get("https://api.openalex.org/works",
+                  params={"search": title, "per-page": 1,
+                          "select": "title,publication_year,authorships,primary_location,"
+                                    "doi,biblio"},
+                  headers={"User-Agent": "paper-system/1.0 (mailto:admin@local)"}, timeout=15)
+    if r.status_code != 200:
+        return None
+    results = r.json().get("results") or []
+    if not results:
+        return None
+    it = results[0]
+    cand_title = it.get("title") or ""
+    ratio = _title_ratio(cand_title, title)
+    if ratio < 0.75:
+        return None
+    authors = ", ".join(a["author"]["display_name"] for a in (it.get("authorships") or [])
+                        if a.get("author"))
+    loc = it.get("primary_location") or {}
+    src = (loc.get("source") or {})
+    bib = it.get("biblio") or {}
+    return {"authors": authors[:400], "year": str(it.get("publication_year") or ""),
+            "journal": src.get("display_name") or "",
+            "volume": str(bib.get("volume") or ""), "issue": str(bib.get("issue") or ""),
+            "pages": str(bib.get("first_page") or ""),
+            "doi": (it.get("doi") or "").replace("https://doi.org/", ""),
+            "source": "OpenAlex", "title": cand_title,
+            "match": round(ratio, 2)}
+
+
+def _verify_dblp(title: str) -> dict | None:
+    """DBLP 标题检索（计算机科学会议/期刊元数据最权威，CVPR/ICCV 等年份与 venue 可靠）。"""
+    r = httpx.get("https://dblp.org/search/publ/api",
+                  params={"q": title, "h": 1, "format": "json"}, timeout=15)
+    if r.status_code != 200:
+        return None
+    hits = ((r.json().get("result") or {}).get("hits") or {}).get("hit") or []
+    if not hits:
+        return None
+    it = hits[0].get("info") or {}
+    cand_title = it.get("title") or ""
+    ratio = _title_ratio(cand_title, title)
+    if ratio < 0.75:
+        return None
+    a = it.get("authors") or {}
+    authors = ", ".join(x["text"] for x in (a.get("author") or [])) \
+        if isinstance(a, dict) else ""
+    venue = str(it.get("venue") or "")
+    return {"authors": authors[:400], "year": str(it.get("year") or ""),
+            "journal": venue, "volume": "", "issue": "", "pages": str(it.get("pages") or ""),
+            "doi": it.get("doi") or "", "source": "DBLP", "title": cand_title,
+            "match": round(ratio, 2)}
+
+
 def verify_meta_online(paper_id: str, apply: bool = True,
                        candidate: dict | None = None) -> dict:
-    """联网校准元数据：arXiv 优先（预印本），否则 S2/CrossRef。标题匹配≥0.75 才写入。
+    """联网校准元数据：arXiv 优先（预印本），否则 S2/CrossRef/OpenAlex/DBLP。标题匹配≥0.75 才写入。
 
     apply=False 只出候选不写库（jasminum 式：先看改前→改后，人工确认再落）；
     candidate 传入时跳过外网解析直接用（确认写入的回传路径）。
@@ -350,8 +405,18 @@ def verify_meta_online(paper_id: str, apply: bool = True,
                 candidate = _verify_crossref(title)
             except httpx.HTTPError:
                 candidate = None
+        if candidate is None:
+            try:
+                candidate = _verify_openalex(title)
+            except httpx.HTTPError:
+                candidate = None
+        if candidate is None:
+            try:
+                candidate = _verify_dblp(title)
+            except httpx.HTTPError:
+                candidate = None
     if candidate is None:
-        return {"verified": False, "message": "未在 arXiv/S2/CrossRef 匹配到该论文（标题相似度<0.75），未改动本地元数据"}
+        return {"verified": False, "message": "未在 arXiv/S2/CrossRef/OpenAlex/DBLP 匹配到该论文（标题相似度<0.75），未改动本地元数据"}
 
     if not apply:
         return {"verified": True, "candidate": candidate, "applied": False}
