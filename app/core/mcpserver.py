@@ -348,7 +348,8 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
             with db.write() as c:
                 c.execute("UPDATE papers SET title=COALESCE(NULLIF(title,''),?) WHERE id=?", (title, pid))
                 c.execute("UPDATE papers SET meta_source=COALESCE(meta_source,'acquire') WHERE id=?", (pid,))
-                attach_to_collection(pid, default_cid)
+            attach_to_collection(pid, default_cid)   # 自带写锁——必须在 with 块外（嵌套即自死锁）
+            with db.write() as c:
                 if it.get("authors"):
                     c.execute("UPDATE papers SET authors=? WHERE id=?", (it["authors"][:500], pid))
                 if it.get("year"):

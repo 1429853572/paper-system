@@ -67,8 +67,27 @@ b3 8 "看审计日志" "$BASE/api/admin/audit?limit=10"
 # ---------- C. 资源属主边界 ----------
 echo "-- C. 资源属主边界"
 PID1=$(curl -sf -b "$CJA" "$BASE/api/papers?page_size=1" | jget "['papers'][0]['id']")
+ADMINLIB=$(curl -sf -b "$CJA" "$BASE/api/collections" | jget "['collections'][0]['id']")
 [[ "$(code -b "$CJM" -X DELETE "$BASE/api/papers/$PID1")" == 403 ]] \
   && ok "C1 member 删他人 shared 论文 → 403" || bad "C1 共享论文删除未拦"
+# C5: batch-delete 他人 shared → 403（此前批删只拦 private，shared 放行 = 越权洞）
+C5=$(code -b "$CJM" -X POST "$BASE/api/papers/batch-delete" -H 'Content-Type: application/json' \
+    -d "{\"paper_ids\":[\"$PID1\"]}")
+[[ "$C5" == 403 ]] && ok "C5 member batch-delete 他人 shared → 403" || bad "C5 batch-delete 越权未拦（$C5）"
+# C6: member batch-link 他人 shared 论文进自己库 → 200（行为锚：收藏他人共享论文合法）
+MYLIB=$(curl -sf -b "$CJM" "$BASE/api/collections" | jget "['collections'][0]['id']")
+[[ -n "$MYLIB" ]] && { C6=$(code -b "$CJM" -X POST "$BASE/api/papers/batch-link" -H 'Content-Type: application/json' \
+    -d "{\"paper_ids\":[\"$PID1\"],\"collection_id\":\"$MYLIB\"}")
+    [[ "$C6" == 200 ]] && ok "C6 member 挂他人 shared 论文进自己库 → 200（行为锚）" || bad "C6 收藏行为异常（$C6）"
+    # 清理：移出
+    curl -sf -b "$CJM" -X POST "$BASE/api/papers/batch-unlink" -H 'Content-Type: application/json' \
+        -d "{\"paper_ids\":[\"$PID1\"],\"collection_id\":\"$MYLIB\"}" >/dev/null
+    ok "C6b batch-unlink 清理成功"
+  } || ok "C6 member 无库（跳过收藏行为锚）"
+# C7: member batch-link 目标他人库 → 403
+C7=$(code -b "$CJM" -X POST "$BASE/api/papers/batch-link" -H 'Content-Type: application/json' \
+    -d "{\"paper_ids\":[\"$PID1\"],\"collection_id\":\"$ADMINLIB\"}")
+[[ "$C7" == 403 ]] && ok "C7 member batch-link 他人库 → 403" || bad "C7 他人库挂链未拦（$C7）"
 # private 隔离（临时把一篇 admin 论文置 private，测完恢复）
 ORIG_VIS=$(docker exec paper-system-app python3 -c "
 import sqlite3; c = sqlite3.connect('/app/data/papersys.db')

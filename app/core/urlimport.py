@@ -64,8 +64,8 @@ def import_paper_from_url(user_id: int, url: str, *, visibility: str = "shared",
     paper_id, _ = ingest.create_paper(user_id, file_hash, pages, size, visibility,
                                       title or fname)
     if collection_id:
-        with db.write() as c:
-            attach_to_collection(paper_id, collection_id)
+        # attach 自带写锁——严禁嵌套在 with db.write() 内（非重入锁，嵌套即全站冻结）
+        attach_to_collection(paper_id, collection_id)
     if meta:
         sets, args = [], []
         for k in ("title", "authors", "year", "journal", "doi", "abstract"):

@@ -1411,12 +1411,16 @@ async def import_url(request: Request):
     _assert_public_url(url)
     _enforce_parse_quota(u)
     from core.urlimport import import_paper_from_url
-    r = import_paper_from_url(
+    import anyio
+    import functools
+    # 远程下载（可能数十秒）+ 落库——严禁在事件循环上跑
+    r = await anyio.to_thread.run_sync(functools.partial(
+        import_paper_from_url,
         u["id"], url,
         visibility=body.get("visibility", "shared"),
         collection_id=body.get("collection_id") or get_or_create_default_collection(u["id"]),
         priority="interactive",
-        is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"]))
+        is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"])))
     return {"paper_id": r["paper_id"], "status": r["status"]}
 
 
@@ -1658,10 +1662,13 @@ async def search_api(request: Request):
     query = (body.get("query") or "").strip()
     if not query:
         raise HTTPException(400, "query 必填")
-    hits = retrieval.search(
+    # retrieval.search 含 embed/rerank 外网同步调用——严禁在事件循环上跑（一处阻塞全站卡）
+    import anyio
+    import functools
+    hits = await anyio.to_thread.run_sync(functools.partial(
+        retrieval.search,
         query, user_id=u["id"], is_admin=u["role"] == "admin",
-        paper_ids=body.get("paper_ids"), top_k=int(body.get("top_k", 10)),
-    )
+        paper_ids=body.get("paper_ids"), top_k=int(body.get("top_k", 10))))
     return {"hits": hits}
 
 
@@ -1912,9 +1919,16 @@ def export_session(session_id: str, u: dict = Depends(require)):
 
 @app.post("/api/papers/export-zip")
 async def export_papers_zip(request: Request):
-    """批量导出 ZIP：多论文 × 多格式（复用单篇 build_zip），内含每篇子目录 + 跳过清单。"""
+    """批量导出 ZIP：多论文 × 多格式，逐篇流式输出。
+
+    此前全内存 BytesIO 组装（50 篇 × 多格式可瞬间吃 1GB+ 内存），改为
+    同步生成器 + StreamingResponse：每 4MB 吐一次、内存恒定；且 Starlette
+    对同步生成器走 iterate_in_threadpool——zip 组装的 CPU/IO 在线程池，
+    不阻塞事件循环。
+    """
     import io
     import zipfile
+    from urllib.parse import quote
 
     u = require(request)
     body = await request.json()
@@ -1929,10 +1943,11 @@ async def export_papers_zip(request: Request):
     from core.cite import format_citation
     from core.exporter import _zip_base_name, build_zip
 
-    outer = io.BytesIO()
-    skipped = []
-    with zipfile.ZipFile(outer, "w", zipfile.ZIP_DEFLATED) as z:
-        n = 0
+    def _iter_zip():
+        skipped = []
+        count = 0
+        buf = io.BytesIO()
+        zf = zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED)
         for pid in ids:
             p = db.one("SELECT * FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
             if p is None:
@@ -1943,31 +1958,39 @@ async def export_papers_zip(request: Request):
             except HTTPException:
                 skipped.append(f"{p['title']}: 无权访问")
                 continue
-            n += 1
             base = _zip_base_name(dict(p))
-            folder = f"{n:02d}-{base}"
             if "bibtex" in fmts:
-                z.writestr(f"{folder}/references.bib", format_citation(dict(p), "bibtex"))
+                zf.writestr(f"{base}/references.bib", format_citation(dict(p), "bibtex"))
+                count += 1
             sub = [f for f in fmts if f != "bibtex"]
             if not sub:
                 continue
             try:
-                data, _name = build_zip(pid, sub)
+                data, _name = build_zip(pid, sub)   # 单篇 zip 字节（天然有界）
             except Exception as e:  # noqa: BLE001 —— 单篇失败不拖垮整包
                 skipped.append(f"{base}: {str(e)[:120]}")
                 continue
             with zipfile.ZipFile(io.BytesIO(data)) as sz:
                 for item in sz.infolist():
-                    z.writestr(f"{folder}/{item.filename}", sz.read(item.filename))
+                    zf.writestr(f"{base}/{item.filename}", sz.read(item.filename))
+                    count += 1
+            if buf.tell() > 4 * 1024 * 1024:      # 4MB 一冲——内存只保留增量
+                zf.close()
+                yield buf.getvalue()
+                buf = io.BytesIO()
+                zf = zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED)
         if skipped:
-            z.writestr("跳过清单.txt", "\n".join(skipped))
-        if n == 0 and not any(z.namelist()):
-            raise HTTPException(404, "没有可导出的论文")
-    from urllib.parse import quote
-    return Response(content=outer.getvalue(), media_type="application/zip",
-                    headers={"Content-Disposition":
-                             f"attachment; filename=\"papers-export.zip\"; "
-                             f"filename*=UTF-8''{quote('论文导出.zip')}"})
+            zf.writestr("跳过清单.txt", "\n".join(skipped))
+        zf.close()
+        if count == 0 and not skipped:
+            yield b""                              # 全部不可导出：空包由前端提示
+        yield buf.getvalue()
+
+    from starlette.responses import StreamingResponse
+    return StreamingResponse(_iter_zip(), media_type="application/zip",
+                             headers={"Content-Disposition":
+                                      'attachment; filename="papers-export.zip"; '
+                                      "filename*=UTF-8''" + quote("论文导出.zip")})
 
 
 # ---------------- 目录批量入库（中文文献落地的关键路径） ----------------
@@ -2461,7 +2484,11 @@ async def verify_meta(paper_id: str, request: Request):
     candidate = body.get("candidate") if apply else None
     try:
         from core.meta import verify_meta_online
-        result = verify_meta_online(paper_id, apply=apply, candidate=candidate)
+        import anyio
+        import functools
+        # 五源外网调用（各 15s 超时）+ mutool（60s）——严禁在事件循环上跑
+        result = await anyio.to_thread.run_sync(functools.partial(
+            verify_meta_online, paper_id, apply=apply, candidate=candidate))
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
@@ -2556,8 +2583,12 @@ async def batch_delete_papers(request: Request):
         if p is None:
             continue
         _require_visible(u, p)
+        # 与单删同规则：private 非本人跳过；shared 仅 admin 可删（member 删他人共享论文 = 越权，
+        # 此前只拦 private、shared 放行——与单删端点 403 不对称的权限洞）
         if p["visibility"] == "private" and p["owner_id"] != u["id"] and u["role"] != "admin":
             continue
+        if p["visibility"] == "shared" and p["owner_id"] != u["id"] and u["role"] != "admin":
+            raise HTTPException(403, "他人上传的共享论文仅管理员可删除")
         for j in db.all(f"SELECT * FROM jobs WHERE paper_id=? AND status IN {_ACTIVE_JOBS}", (pid,)):
             if j["remote_task_id"]:
                 mineru.cancel(j["remote_task_id"])
@@ -3105,7 +3136,9 @@ async def chat_stream(request: Request):
         raise HTTPException(400, "question/paper_ids 必填")
 
     try:
-        prepared = qa.answer(u, question, paper_ids, mode)
+        import anyio
+        prepared = await anyio.to_thread.run_sync(
+            functools.partial(qa.answer, u, question, paper_ids, mode))
     except ValueError as e:
         raise HTTPException(400, str(e))
     except NoKeyError as e:
