@@ -535,7 +535,8 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
 
         # ---- 参考文献机械渲染 + 双向校验（survey-writer 防线③：PASS 才交付）----
         def _assemble(body_md: str) -> str:
-            return body_md.rstrip() + "\n\n## 参考文献\n" + ck.render_references(table, style)
+            return _strip_ev_markers(body_md, table, ev_uniq).rstrip() \
+                + "\n\n## 参考文献\n" + ck.render_references(table, style)
 
         report = _assemble(report)
         ver = ck.verify_report(report, table, style, tier)
@@ -603,6 +604,29 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
             c.execute("UPDATE syntheses SET status='failed', error=?, updated_at=datetime('now') "
                       "WHERE id=?", (str(e)[:500], synthesis_id))
         raise
+
+
+# ---------------- E 证据标记剥离（用户口径：正常作者-年份引用即可） ----------------
+_EV_MARK = re.compile(r"[ \t]*【E(\d{1,4})】[ \t]*|[ \t]*\[E(\d{1,4})\][ \t]*")
+
+
+def _strip_ev_markers(body: str, table: list, ev_uniq: list) -> str:
+    """终稿不保留内部证据编号：引用键（作者-年份）已标明出处，[E<n>] 是
+    生成期的接地辅助，属自编号噪音。紧邻（80 字内）已有引用键的标记直接
+    删；孤立的换成该证据对应论文的引用键——保证「显示文献是哪篇」。"""
+    keys = [r.get("key") for r in table if r.get("key")]
+    pid_key = {r.get("id"): r.get("key") for r in table if r.get("id")}
+
+    def repl(m: re.Match) -> str:
+        n = int(m.group(1) or m.group(2))
+        e = ev_uniq[n - 1] if 0 < n <= len(ev_uniq) else None
+        key = pid_key.get((e or {}).get("paper_id")) if e else None
+        window = body[max(0, m.start() - 80): m.start()]
+        if key and not any(k and k in window for k in keys):
+            return f"（{key}）"
+        return ""
+
+    return _EV_MARK.sub(repl, body)
 
 
 # ---------------- 对比矩阵（本地拼装） ----------------

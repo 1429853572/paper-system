@@ -217,6 +217,22 @@ ok("硬删论文级联清挂链", db.one("SELECT COUNT(*) AS n FROM paper_collec
 with db.write() as c:
     c.execute("DELETE FROM collections WHERE id IN ('mmA','mmB','mmA1','mmC')")
 
+print("== 综述 E 标记剥离（_strip_ev_markers）==")
+import re as _re
+from core.synthesis import _strip_ev_markers
+_tab = [{"id": "pa", "key": "Chen & Wang, 2024"}, {"id": "pb", "key": "Liu et al., 2025"}]
+_ev = [{"paper_id": "pa"}, {"paper_id": "pa"}, {"paper_id": "pb"}, {"paper_id": "未知pid"}]
+_strip_cases = [
+    ("重建质量显著退化【E2】。", "重建质量显著退化（Chen & Wang, 2024）。", "孤立→换键（显示是哪篇）"),
+    ("明显短板（Chen & Wang, 2024）【E2】。", "明显短板（Chen & Wang, 2024）。", "窗口有键→删"),
+    ("该方法泛化性有限 [E3]。", "该方法泛化性有限（Liu et al., 2025）。", "半角孤立→换键"),
+    ("未知编号 [E4] 不替换。", "未知编号不替换。", "论文不在键表→删（不编造）"),
+    ("混用形态 [E2] 与【E3】。", "混用形态（Chen & Wang, 2024）与（Liu et al., 2025）。", "两种括号"),
+]
+for _body, _want, _desc in _strip_cases:
+    ok("E 剥离：" + _desc, _strip_ev_markers(_body, _tab, _ev) == _want,
+       repr(_strip_ev_markers(_body, _tab, _ev)))
+
 print("== 恢复查重（restore_clash）==")
 from core.ingest import restore_clash
 with db.write() as c:

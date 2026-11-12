@@ -2547,20 +2547,12 @@ async function showSynthesisReport(sid) {
   // [E3] → 可点击脚注
   const rep = $('#syn-report');
   if (rep) {
-    rep.innerHTML = mdLite((s.report_md || '报告尚未生成').replace(/^# /gm, '## '))
-      .replace(/\[E(\d{1,3})\]/g, (m, n) => {
-        const e = evByN.get(+n);
-        if (!e) return m;   // 未知编号保留原样（诚实：不伪造可点击）
-        return `<span class="ev-cite" data-ev="${n}" title="${esc((e.title || '') + ' · 第' + ((e.page_index || 0) + 1) + '页')}">[E${n}]</span>`;
-      });
-    $$('#syn-report .ev-cite').forEach(sp => sp.onclick = () => {
-      const e = evByN.get(+sp.dataset.ev);
-      if (!e || !e.paper_id) return;
-      switchPage('reader');
-      openPaper(e.paper_id).then(() => jumpEvidence({
-        paper_id: e.paper_id, page_index: e.page_index || 0,
-        block_id: e.block_id, text: e.text }));
-    });
+    // E 证据编号不显示（用户口径：正文已有作者-年份引用，编号是生成期内部产物；
+    // 新报告在生成端已剥离，此处兜底剥旧报告的残留标记）
+    const body = (s.report_md || '报告尚未生成')
+      .replace(/^# /gm, '## ')
+      .replace(/[【\[]E\d{1,4}[】\]]/g, '');
+    rep.innerHTML = mdLite(body);
   }
   // 换框架重写
   $$('#page-tasks [data-fw-rewrite]').forEach(b => b.onclick = async () => {
