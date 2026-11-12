@@ -727,6 +727,11 @@ def restore_paper(paper_id: str, u: dict = Depends(require)):
         raise HTTPException(404, "不在回收站")
     if u["role"] != "admin" and p["owner_id"] != u["id"]:
         raise HTTPException(403, "无权恢复")
+    from core.ingest import restore_clash
+    clash = restore_clash(paper_id)
+    if clash:
+        raise HTTPException(409, f"库中已有相同内容的论文《{(clash['title'] or clash['id'])[:40]}》"
+                                 f"——恢复会造成重复，请先处理重复再恢复")
     with db.write() as c:
         c.execute("UPDATE papers SET deleted_at=NULL WHERE id=?", (paper_id,))
     # 重建 FTS 索引

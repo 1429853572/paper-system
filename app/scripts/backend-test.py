@@ -176,6 +176,20 @@ ok("merge：英文原文让位于翻译", _merge_abstract("An English abstract."
 ok("merge：空 → 翻译", _merge_abstract("", "中文翻译") == "中文翻译")
 ok("merge：翻译缺失 → 保留原文", _merge_abstract("English text", "") == "English text")
 
+print("== 恢复查重（restore_clash）==")
+from core.ingest import restore_clash
+with db.write() as c:
+    c.execute("INSERT INTO papers(id,owner_id,visibility,file_hash,title,parse_status) "
+              "VALUES('pa',1,'shared','hashX','活着的','parsed')")
+    c.execute("INSERT INTO papers(id,owner_id,visibility,file_hash,title,parse_status,deleted_at) "
+              "VALUES('pb',1,'shared','hashX','回收站里的','parsed',datetime('now'))")
+ok("活论文不算冲突（自己 ≠ 自己）", restore_clash("pa") is None)
+c1 = restore_clash("pb")
+ok("回收站行撞同内容活论文 → 报冲突", c1 is not None and c1["id"] == "pa", str(dict(c1) if c1 else None))
+with db.write() as c:
+    c.execute("UPDATE papers SET deleted_at=NULL WHERE id='pa' AND id='zz'")  # no-op
+    c.execute("DELETE FROM papers WHERE id IN ('pa','pb')")
+
 print("== 跨页参考文献合并（get_references）==")
 from core.meta import get_references
 with db.write() as c:

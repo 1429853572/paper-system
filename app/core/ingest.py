@@ -77,6 +77,19 @@ def store_pdf(paper_id: str, data: bytes, name: str = "original.pdf") -> Path:
     return p
 
 
+def restore_clash(paper_id: str) -> dict | None:
+    """恢复回收站论文前的查重：同内容（file_hash）已有未删除论文 → 返回它。
+
+    唯一索引 idx_papers_hash 只约束未删除行——「删 X → 重传得 Y → 恢复 X」
+    会让 X/Y 同时在库，恢复时唯一约束违反直接 500；提前检测给可理解的报错。"""
+    row = db.one("SELECT file_hash FROM papers WHERE id=?", (paper_id,))
+    if row is None:
+        return None
+    return db.one(
+        "SELECT id, title FROM papers WHERE file_hash=? AND deleted_at IS NULL AND id<>?",
+        (row["file_hash"], paper_id))
+
+
 def create_paper(user_id: int, file_hash: str, pages: int, size: int,
                  visibility: str, original_name: str) -> tuple[str, bool]:
     """返回 (paper_id, deduplicated)。同哈希未删除论文 → 复用不重复入库。"""
