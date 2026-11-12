@@ -36,10 +36,12 @@ def extract_abstract_blocks(blocks: list) -> tuple[str, list[str]]:
             # 锚点 A：Abstract 标题块（标准版式）→ 从其后开始收
             if b["type"] == "title" and (re.fullmatch(r"abstract[:\s]*", t, re.I) or is_abs_sec):
                 in_abs = True
-            # 锚点 B：无独立标题的版式——正文块自带 abstract 小节归属 → 直接收
-            elif is_abs_sec and b["type"] == "text":
+            # 锚点 B：无独立标题的版式——正文块自带 abstract 小节归属 → 直收看
+            # 锚点 C：内联标题（"Abstract. 3DGS has..." 无独立标题块）→ 从该块收起
+            elif (is_abs_sec or re.match(r"abstract\b", t, re.I)) and b["type"] == "text":
                 texts.append(t)
                 ids.append(b["block_id"])
+                in_abs = True
             continue
         # 已进入摘要：进入下一节（Introduction/Keywords/编号小节）即结束；
         # 重复的 Abstract 标题（多 run JOIN/版面重复）跳过不 break

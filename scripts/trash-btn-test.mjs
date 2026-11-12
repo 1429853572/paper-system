@@ -97,6 +97,27 @@ okBtn?.click();
 await new Promise(r => setTimeout(r, 200));
 check('点按钮本体同样走确认→DELETE', calls.some(c => c.startsWith('DELETE /api/papers/p1')));
 
+// 破坏性按钮 hover-only 规则（用户决定：垃圾桶/删/× 默认隐藏、悬停行显形；
+// 触屏兜底 @media(hover:none) 常驻——本断言管「类与 CSS 双在」，真机行为另有 CDP 验证）
+{
+  const css = fs.readFileSync(path.join(UI, 'styles.css'), 'utf8');
+  const mustHaveClass = [
+    ['L2 论文表行内 删', 'delPaperFromLib'],
+    ['L2 库头 删除库', 'delLib'],
+    ['问答会话 删除', 'delSess'],
+    ['术语表 ×', 'delGlossary'],
+  ];
+  for (const [name, fn] of mustHaveClass) {
+    const m = [...js.matchAll(new RegExp('<button ([^>]*?)\\s?onclick="[^"]*' + fn + '\\(', 'g'))].pop();
+    check(name + ' 按钮带 hover-only', !!m && /hover-only/.test(m[1]),
+          m ? m[1].slice(0, 60) : '未找到按钮');
+  }
+  check('CSS 悬停显形规则在', css.includes('tr:hover .hover-only') &&
+        css.includes('.qa-sess-item:hover .hover-only') && css.includes('.chip:hover .hover-only'));
+  check('CSS 触屏兜底在（hover:none 常驻）', css.includes('@media (hover: none)') &&
+        css.includes('pointer-events: auto'));
+}
+
 check('无页面错误', !errors.length);
 console.log('\n' + (ok ? '✅ 全部通过' : '❌ 存在失败') + (errors.length ? '\n  ' + errors.slice(0, 5).join('\n  ') : ''));
 process.exit(ok ? 0 : 1);

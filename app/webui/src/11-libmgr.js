@@ -156,7 +156,7 @@ async function renderCollectionsPage(preset = null) {
         <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
-          <button class="btn small danger" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">删</button>
+          <button class="btn small danger hover-only" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">删</button>
         </td></tr>`;}).join('');
 
   // ---- 组装 ----
@@ -181,7 +181,7 @@ async function renderCollectionsPage(preset = null) {
           ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">${icon('upload')} 上传</button>
           <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>${icon('plus')}子库</button>
           <button class="btn small" title="重命名" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
-          <button class="btn small danger" title="删除库（整棵子树进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
+          <button class="btn small danger hover-only" title="删除库（整棵子树进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
         </div>
         ${subLibs.length ? `<div class="lib-subbar">
           <span class="muted" style="font-size: var(--fs-sm)">子库：</span>

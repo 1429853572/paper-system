@@ -343,7 +343,7 @@ async function renderSessList() {
         <div class="muted" style="font-size:var(--fs-xs)">${relTime(x.updated_at)}</div>
       </div>
       <button class="btn small" onclick="event.stopPropagation();renameSess('${x.id}', '${jsArg(x.title || '')}')" title="重命名">${icon('edit', 12)}</button>
-      <button class="btn small danger" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>
+      <button class="btn small danger hover-only" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>
     </div>`).join('') : '<div class="empty-note">当前范围还没有会话</div>';
 }
 window.switchSess = async sid => {

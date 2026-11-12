@@ -3412,7 +3412,7 @@ async function renderSessList() {
         <div class="muted" style="font-size:var(--fs-xs)">${relTime(x.updated_at)}</div>
       </div>
       <button class="btn small" onclick="event.stopPropagation();renameSess('${x.id}', '${jsArg(x.title || '')}')" title="重命名">${icon('edit', 12)}</button>
-      <button class="btn small danger" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>
+      <button class="btn small danger hover-only" onclick="event.stopPropagation();delSess('${x.id}')" title="删除会话">${icon('trash', 12)}</button>
     </div>`).join('') : '<div class="empty-note">当前范围还没有会话</div>';
 }
 window.switchSess = async sid => {
@@ -4509,7 +4509,7 @@ async function loadGlossary() {
   if (!el) return;
   el.innerHTML = d.terms.map(t =>
     `<span class="chip">${esc(t.term)}${t.target === 'trans' ? ' → ' + esc(t.value) : t.target === 'first_both' ? ' ⇄ ' + esc(t.value) : ' (EN)'}
-     <button title="删除该术语" onclick="delGlossary('${jsArg(t.term)}')">${icon('close')}</button></span>`).join('') ||
+     <button class="hover-only" title="删除该术语" onclick="delGlossary('${jsArg(t.term)}')">${icon('close')}</button></span>`).join('') ||
     '<span class="muted" style="font-size: var(--fs-sm)">暂无术语——按需添加以保证全文译名一致</span>';
   $('#gl-add').onclick = async () => {
     const term = $('#gl-term').value.trim();
@@ -4843,7 +4843,7 @@ async function renderCollectionsPage(preset = null) {
         <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
-          <button class="btn small danger" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">删</button>
+          <button class="btn small danger hover-only" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">删</button>
         </td></tr>`;}).join('');
 
   // ---- 组装 ----
@@ -4868,7 +4868,7 @@ async function renderCollectionsPage(preset = null) {
           ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">${icon('upload')} 上传</button>
           <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>${icon('plus')}子库</button>
           <button class="btn small" title="重命名" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
-          <button class="btn small danger" title="删除库（整棵子树进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
+          <button class="btn small danger hover-only" title="删除库（整棵子树进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
         </div>
         ${subLibs.length ? `<div class="lib-subbar">
           <span class="muted" style="font-size: var(--fs-sm)">子库：</span>
