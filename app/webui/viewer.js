@@ -3559,6 +3559,7 @@ function renderPickList(filter) {
       <input type="checkbox" ${state.qaPapers.has(p.id) ? 'checked' : ''} data-id="${p.id}">
       <span class="qp-title">${esc(p.title || p.id)}</span>
       ${p.year ? `<span class="qp-year">${esc(p.year)}</span>` : ''}${st}
+      ${(p.collection_ids || []).length > 1 ? `<span class="muted" style="font-size: var(--fs-xs)" title="${esc((p.collection_ids || []).map(cid => ((state.collections || []).find(c => c.id === cid) || {}).name).join(' · '))}">${esc((p.collection_ids || []).map(cid => ((state.collections || []).find(c => c.id === cid) || {}).name).filter(Boolean).join('/'))}</span>` : ''}
     </label>`;};
   // 按文献库分组；库多时默认折叠（展开状态记忆），搜索时自动全展开（跨组匹配要一眼可见）
   const papers = state.qaAllPapers || state.papers || [];   // boot 早期 qaAllPapers 可能未加载
@@ -4877,12 +4878,15 @@ async function renderCollectionsPage(preset = null) {
     const trBadge = s.translating ? `<span class="badge run">${icon('globe')}${tj ? tj.done + '/' + tj.total : ''}</span>`
       : tj?.status === 'done' ? "<span class=\"badge ok\">译" + icon('check') + "</span>"
       : tj?.status === 'failed' ? "<span class=\"badge err\">译" + icon('close') + "</span>" : '<span class="muted">—</span>';
-    const owner = d.collections.find(c => (p.collection_ids || []).includes(c.id));
+    // 多库归属：显示全部所属库名（挂 N 库一目了然）
+    const ownerNames = (p.collection_ids || [])
+      .map(cid => (d.collections.find(c => c.id === cid) || {}).name)
+      .filter(Boolean);
     return `<tr class="lib-paper-row" onclick="viewPaper('${p.id}')">
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${selBucket(scopeKey).has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
           ${esc(p.title || p.id)}
-          ${owner && scopeIds.length > 1 ? `<span class="muted" style="font-size: var(--fs-xs)"> · ${esc(owner.name)}</span>` : ''}
+          ${ownerNames.length && scopeIds.length > 1 ? `<span class="muted" style="font-size: var(--fs-xs)"> · ${esc(ownerNames.join(' · '))}</span>` : ''}
           ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" style="font-size: var(--fs-xs)" title="上传者"> · ${esc(p.owner_name)}</span>` : ''}</td>
         <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
