@@ -461,8 +461,7 @@ async def upload_papers(request: Request, files: list[UploadFile]):
         visibility = "shared"
     collection_id = request.query_params.get("collection_id") or None
     if collection_id:
-        if db.one("SELECT id FROM collections WHERE id=?", (collection_id,)) is None:
-            raise HTTPException(400, "目标文献库不存在")
+        _safe_collection(u, collection_id)   # 归属校验（此前只验存在——member 可挂进他人库）
     else:
         collection_id = get_or_create_default_collection(u["id"])   # 未选库 → 默认文献库
     batch = len(files) > 3  # >3 篇视为批量 → background
@@ -627,9 +626,9 @@ def paper_detail(paper_id: str, offset: int = 0, limit: int = 0, u: dict = Depen
         "(SELECT json_group_array(pc.collection_id) FROM paper_collections pc "
         "WHERE pc.paper_id=p.id) AS collection_ids "
         "FROM papers p LEFT JOIN users u ON u.id=p.owner_id WHERE p.id=?", (paper_id,))
-    p = _with_collection_ids(dict(p))
     if p is None or p["deleted_at"]:
-        raise HTTPException(404, "论文不存在")
+        raise HTTPException(404, "论文不存在")   # 判空必须先于 dict() 转换（dict(None) 曾 500）
+    p = _with_collection_ids(dict(p))
     _require_visible(u, p)
     # SQL 分页（分页时 total 用 COUNT 单独取，块只读所需行——原先全量读再 Python 切片）
     if limit:
@@ -1390,6 +1389,9 @@ def _assert_public_url(url: str) -> None:
     host = (urlparse(url).hostname or "").lower()
     if not host:
         raise HTTPException(400, "无效 URL")
+    # 整数/十六进制/八进制 IP 形式（http://2130706433/ 解析回 127.0.0.1）——先拦
+    if re.fullmatch(r"\d{8,}|0x[0-9a-f]+|[0-7]{6,}", host):
+        raise HTTPException(400, "不允许的地址形式")
     if host in ("localhost",) or host.endswith(".local") or host.endswith(".internal"):
         raise HTTPException(400, "不允许内网地址")
     try:
@@ -1410,6 +1412,8 @@ async def import_url(request: Request):
         raise HTTPException(400, "无效 URL")
     _assert_public_url(url)
     _enforce_parse_quota(u)
+    cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+    _safe_collection(u, cid)   # 归属校验（此前零校验：他人库可写、伪 id 落幽灵论文）
     from core.urlimport import import_paper_from_url
     import anyio
     import functools
@@ -1418,7 +1422,7 @@ async def import_url(request: Request):
         import_paper_from_url,
         u["id"], url,
         visibility=body.get("visibility", "shared"),
-        collection_id=body.get("collection_id") or get_or_create_default_collection(u["id"]),
+        collection_id=cid,
         priority="interactive",
         is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"])))
     return {"paper_id": r["paper_id"], "status": r["status"]}
@@ -2925,6 +2929,8 @@ async def import_identifier(request: Request):
     if not idents:
         raise HTTPException(400, "未识别到 DOI / arXiv ID / BibTeX 条目")
     out = []
+    cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+    _safe_collection(u, cid)   # 归属校验（此前零校验）
     for ident in idents:
         try:
             meta = resolve_identifier(ident["kind"], ident["value"])
@@ -2943,8 +2949,11 @@ async def import_identifier(request: Request):
             dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL",
                          (title.lower(),))
         if dup:
+            # 与 upload 口径一致：内容已在库（别的库）→ 挂进目标库并提示
+            from core.ingest import attach_to_collection
+            linked = attach_to_collection(dup["id"], cid)
             out.append({"ident": ident, "status": "duplicate", "paper_id": dup["id"],
-                        "metadata": meta})
+                        "linked": linked, "metadata": meta})
             continue
         url = meta.get("pdf_url") or ""
         if not url.startswith(("http://", "https://")):
@@ -2959,7 +2968,7 @@ async def import_identifier(request: Request):
         r = import_paper_from_url(
             u["id"], url,
             visibility=body.get("visibility", "shared"),
-            collection_id=body.get("collection_id") or get_or_create_default_collection(u["id"]),
+            collection_id=cid,
             title=title,
             meta={"authors": meta.get("authors"), "year": meta.get("year"),
                   "journal": meta.get("journal"), "doi": meta.get("doi"),
@@ -3032,6 +3041,8 @@ async def discover_import(request: Request):
     if not items:
         raise HTTPException(400, "items 为空")
     _enforce_parse_quota(u)
+    cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+    _safe_collection(u, cid)   # 归属校验（此前 cid 未定义即用——NameError 风险 + 零校验）
     out = []
     imported = 0
     for it in items:
@@ -3046,7 +3057,10 @@ async def discover_import(request: Request):
             dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL",
                          (title.lower(),))
         if dup:
-            out.append({"title": title, "status": "duplicate", "paper_id": dup["id"]})
+            from core.ingest import attach_to_collection
+            linked = attach_to_collection(dup["id"], cid)
+            out.append({"title": title, "status": "duplicate", "paper_id": dup["id"],
+                        "linked": linked})
             continue
         if not url.startswith(("http://", "https://")):
             out.append({"title": title, "status": "no_pdf"})
@@ -3062,7 +3076,7 @@ async def discover_import(request: Request):
         r = import_paper_from_url(
             u["id"], url,
             visibility=body.get("visibility", "shared"),
-            collection_id=body.get("collection_id") or get_or_create_default_collection(u["id"]),
+            collection_id=cid,
             title=title,
             meta={"authors": it.get("authors"), "year": it.get("year"),
                   "journal": it.get("venue"), "doi": it.get("doi")},

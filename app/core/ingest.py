@@ -77,6 +77,20 @@ def store_pdf(paper_id: str, data: bytes, name: str = "original.pdf") -> Path:
     return p
 
 
+def default_collection(user_id: int) -> str:
+    """用户的默认文献库（无则建）——jobs/MCP 等非 HTTP 上下文挂库的统一定位。
+    （与 server.main.get_or_create_default_collection 同口径；独立实现避免循环导入）"""
+    row = db.one("SELECT id FROM collections WHERE owner_id=? AND name='默认文献库'", (user_id,))
+    if row:
+        return row["id"]
+    import secrets
+    cid = "c" + secrets.token_hex(6)
+    with db.write() as c:
+        c.execute("INSERT INTO collections(id,name,owner_id) VALUES(?,?,?)",
+                  (cid, "默认文献库", user_id))
+    return cid
+
+
 def attach_to_collection(paper_id: str, cid: str | None) -> bool:
     """把论文挂进分库（多对多，幂等）。返回是否新建了挂链。cid 空则忽略。"""
     if not cid:

@@ -34,6 +34,22 @@ if [ -d data/papers ] && [ -n "$(ls -A data/papers 2>/dev/null)" ]; then
   echo "  ✓ 论文归档 $TAR_OUT"
 fi
 
+# 2.5 清单 + 哈希（与容器内 janitor 备份同规格——restore.sh 恢复前校验完整性）
+python3 - "$BACKUP_DIR" "$STAMP" <<'PY2'
+import hashlib, json, sys, pathlib
+bdir = pathlib.Path(sys.argv[1]); stamp = sys.argv[2]
+manifest = {"created": stamp, "files": {}}
+for name in (f"db-{stamp}.db", f"papers-{stamp}.tar.gz"):
+    f = bdir / name
+    if f.exists():
+        manifest["files"][name] = {"sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
+                                   "size": f.stat().st_size}
+if manifest["files"]:
+    (bdir / f"manifest-{stamp}.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1),
+                                                 encoding="utf-8")
+    print(f"  ✓ 备份清单 manifest-{stamp}.json")
+PY2
+
 # 3. 轮转（只保留最近 N 份同名文件）
 for kind in db papers; do
   ls -1t "$BACKUP_DIR/$kind-"*.db "$BACKUP_DIR/$kind-"*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r f; do

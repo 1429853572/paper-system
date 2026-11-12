@@ -659,6 +659,7 @@ class Scheduler:
                                        error=None if visible else "内容与库中他人私有文献重复，未计入")
                 if visible:
                     acqtask.attach_papers(tid, [paper_id])
+                    ingest.attach_to_collection(paper_id, ingest.default_collection(job["user_id"]))
                 done += 1
                 self._update(job["id"], progress_done=done, progress_total=total)
                 continue
@@ -673,6 +674,9 @@ class Scheduler:
                     if val:
                         c2.execute(f"UPDATE papers SET {col}=? WHERE id=?", (str(val)[:3000], paper_id))
             ingest.store_pdf(paper_id, data, "original.pdf")
+            # 挂进用户默认分库（与 /api/acquire/import、MCP acquire_cnki 同口径；
+            # 此前漏挂 → 专题下载的论文全部落「未分库」）
+            ingest.attach_to_collection(paper_id, ingest.default_collection(job["user_id"]))
             self.enqueue(job["user_id"], "parse", paper_id,
                           {"tier": "standard", "original_name": fname or "paper.pdf",
                            "source_url": url, "batch_id": batch_id},
@@ -724,9 +728,12 @@ class Scheduler:
         papers_dir = DATA_DIR / "papers"
         papers_tar = bdir / f"papers-{today}.tar.gz"
         if papers_dir.is_dir() and not papers_tar.exists():
-            # papers/ 文件目录与 DB 必须配套备份——只有 DB 快照无法复原
-            shutil.make_archive(str(papers_tar)[:-7], "gztar", root_dir=DATA_DIR,
-                                base_dir="papers")
+            # papers/ 文件目录与 DB 必须配套备份——只有 DB 快照无法复原。
+            # 归档布局与 backup.sh 一致（data/papers/…，仓库根解包即到位）——
+            # 此前 root_dir=DATA_DIR+base_dir=papers 产出 papers/… 布局，
+            # restore.sh 恢复这份会解错位置（数据没丢但没恢复到位）。
+            shutil.make_archive(str(papers_tar)[:-7], "gztar",
+                                root_dir=DATA_DIR.parent, base_dir="data/papers")
         # 清单 + 哈希：恢复时先验完整性，而不是只看"备份成功"
         import hashlib
         import json

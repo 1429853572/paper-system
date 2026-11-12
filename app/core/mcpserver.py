@@ -137,6 +137,22 @@ def _execute(act: dict) -> dict:
         if db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL", (meta["doi"],)):
             raise ValueError("该 DOI 已在库中")
         from .urlimport import import_paper_from_url
+        # MCP 链路同样过 SSRF 校验（此前仅 3 处 HTTP 端点有——MCP 是漏网入口）
+        from .config import DATA_DIR
+        try:
+            import ipaddress
+            from urllib.parse import urlparse as _up
+            _h = (_up(url).hostname or "").lower()
+            _ip = None
+            try:
+                _ip = ipaddress.ip_address(_h)
+            except ValueError:
+                pass
+            if not _h or _h in ("localhost",) or _h.endswith((".local", ".internal")) \
+                    or (_ip is not None and not _ip.is_global):
+                return {"tool": "import_by_doi", "error": "URL 不允许（内网/环回地址）"}
+        except Exception:  # noqa: BLE001
+            pass
         r = import_paper_from_url(act["user_id"], url, title=meta["title"],
                                   collection_id=ingest_default_collection(act["user_id"]),
                                   meta={"authors": meta.get("authors"), "year": meta.get("year"),

@@ -8,6 +8,8 @@ MinerU 服务端抓取，本地从未存原文件 → 论文永久「无 PDF 预
 """
 from __future__ import annotations
 
+import re
+
 import httpx
 
 from . import ingest
@@ -19,13 +21,37 @@ _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
 
 
 def fetch_remote(url: str, timeout: int = 90) -> tuple[bytes | None, str]:
-    """下载 URL 内容（跟重定向）。返回 (data|None, content_type)；失败 (None, '')。"""
+    """下载 URL 内容。返回 (data|None, content_type)；失败 (None, '')。
+
+    重定向手动逐跳处理并对每跳跑 SSRF 校验——自动 follow_redirects 会被
+    「公网 302 → http://127.0.0.1/」绕过首跳校验（SSRF 纵深）。"""
+    from urllib.parse import urlparse
     try:
-        r = httpx.get(url, headers={"User-Agent": _UA, "Accept": "*/*"},
-                      timeout=timeout, follow_redirects=True)
-        if r.status_code != 200 or not r.content:
-            return None, ""
-        return r.content, (r.headers.get("content-type") or "").lower()
+        current = url
+        for _hop in range(5):                       # 最多 5 跳
+            host = (urlparse(current).hostname or "").lower()
+            if not host or host in ("localhost",) or host.endswith((".local", ".internal")) \
+                    or re.fullmatch(r"\d{8,}|0x[0-9a-f]+", host):
+                return None, ""                     # 每跳都拦内网/变形地址
+            try:
+                import ipaddress
+                ip = ipaddress.ip_address(host)
+                if not ip.is_global:
+                    return None, ""
+            except ValueError:
+                pass                                # 域名交由 DNS（自建内网风险可接受）
+            r = httpx.get(current, headers={"User-Agent": _UA, "Accept": "*/*"},
+                          timeout=timeout, follow_redirects=False)
+            if r.status_code in (301, 302, 303, 307, 308):
+                loc = r.headers.get("location") or ""
+                if not loc:
+                    return None, ""
+                current = str(r.url.join(loc))
+                continue
+            if r.status_code != 200 or not r.content:
+                return None, ""
+            return r.content, (r.headers.get("content-type") or "").lower()
+        return None, ""                             # 重定向超限
     except Exception:  # noqa: BLE001 —— 网络/超时/证书：一律退回 MinerU 代抓
         return None, ""
 

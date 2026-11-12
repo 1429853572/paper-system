@@ -3580,6 +3580,14 @@ function renderPickList(filter) {
     papers: papers.filter(p => !taken.has(p.id) && (p.collection_ids || []).includes(c.id) && match(p)
       ? (taken.add(p.id), true) : false),
   }));
+  // 他人库中的共享论文（state.collections 只含我的库——不补这组会从选文器消失）
+  for (const l of (state.sharedLibs || [])) {
+    groups.push({
+      id: l.id, name: `${l.name}（共享）`,
+      papers: papers.filter(p => !taken.has(p.id) && (p.collection_ids || []).includes(l.id) && match(p)
+        ? (taken.add(p.id), true) : false),
+    });
+  }
   const orphan = papers.filter(p => !(p.collection_ids || []).length && match(p));
   if (orphan.length) groups.push({id: '__orphan', name: '未分库', papers: orphan});
   groups.forEach(g => g.papers.sort(sortFn));
@@ -4955,6 +4963,7 @@ async function renderCollectionsPage(preset = null) {
   {
     state._libScopeKey = scopeKey;
     state._libScopePapers = papers;
+    state._libScopeAll = allIds;   // 范围全量 id（跨页）——导出用，此前误用当前页 papers
     const scopeN = $('#exp-scope-n'), selN = $('#exp-sel-n'), selItem = $('#exp-sel-item');
     if (scopeN) scopeN.textContent = total;   // 范围总数（非当前页 25 篇）
     const selCnt = libSelected(scopeKey).length;
@@ -4995,7 +5004,7 @@ document.addEventListener('click', async e => {
     const scope = document.querySelector('input[name="exp-scope"]:checked')?.value || 'scope';
     const ids = scope === 'sel'
       ? libSelected(state._libScopeKey)
-      : (state._libScopePapers || []).map(p => p.id);
+      : (state._libScopeAll || (state._libScopePapers || []).map(p => p.id));
     const fmts = $$('#export-pop input[data-fmt]').filter(x => x.checked).map(x => x.dataset.fmt);
     if (!ids.length) { toast('当前范围没有论文'); return; }
     if (!fmts.length) { toast('先勾选要导出的内容'); return; }

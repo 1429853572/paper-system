@@ -471,6 +471,14 @@ function renderPickList(filter) {
     papers: papers.filter(p => !taken.has(p.id) && (p.collection_ids || []).includes(c.id) && match(p)
       ? (taken.add(p.id), true) : false),
   }));
+  // 他人库中的共享论文（state.collections 只含我的库——不补这组会从选文器消失）
+  for (const l of (state.sharedLibs || [])) {
+    groups.push({
+      id: l.id, name: `${l.name}（共享）`,
+      papers: papers.filter(p => !taken.has(p.id) && (p.collection_ids || []).includes(l.id) && match(p)
+        ? (taken.add(p.id), true) : false),
+    });
+  }
   const orphan = papers.filter(p => !(p.collection_ids || []).length && match(p));
   if (orphan.length) groups.push({id: '__orphan', name: '未分库', papers: orphan});
   groups.forEach(g => g.papers.sort(sortFn));
