@@ -230,9 +230,13 @@ def build_zip(paper_id: str, items: list[str]) -> tuple[bytes, str]:
             if src.exists():
                 z.write(src, f"{base}.pdf")
         if "md" in items:
-            z.writestr(f"{base}.md", original_md(paper_id))
+            md_text = original_md(paper_id)
+            if md_text.strip():
+                z.writestr(f"{base}.md", md_text)
         if "bilingual_md" in items:
-            z.writestr(f"{base}-双语对照.md", bilingual_md(paper_id))
+            bi_text = bilingual_md(paper_id)
+            if bi_text.strip():   # 未翻译论文此前写 0 字节空文件（解压后一堆无解释空 .md）
+                z.writestr(f"{base}-双语对照.md", bi_text)
         base_dir = _parse_dir(paper_id)
         if "bilingual_pdf" in items:
             z.writestr(f"{base}-中英对照.pdf", bilingual_pdf(paper_id, p.get("title") or base))

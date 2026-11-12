@@ -603,6 +603,19 @@ def list_papers(q: str = "", status: str = "", trash: int = 0,
     if q:
         vis += " AND (title LIKE ? OR authors LIKE ?)"
         args.extend([f"%{q}%", f"%{q}%"])
+        # 全文回退：方法名/正文词不在 title/authors——此前文库管理搜索框搜「方法名」必败
+        # （侧栏 q≥2 字符走 FTS，此处永不走——同一系统两套语义）。FTS 命中 → id 并入。
+        try:
+            from core.db import fts_query
+            fts_ids = [r["paper_id"] for r in db.all(
+                "SELECT paper_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 50",
+                (fts_query(q),))]
+            if fts_ids:
+                ph = ",".join("?" * len(fts_ids))
+                vis += f" OR p.id IN ({ph})"
+                args.extend(fts_ids)
+        except Exception:  # noqa: BLE001 —— FTS 异常退回标题/作者 LIKE
+            pass
     if status:
         vis += " AND parse_status=?"
         args.append(status)
@@ -1962,7 +1975,7 @@ async def export_papers_zip(request: Request):
 
     u = require(request)
     body = await request.json()
-    ids = [x for x in (body.get("paper_ids") or [])][:50]
+    ids = [x for x in (body.get("paper_ids") or [])][:200]
     fmts = [x for x in (body.get("fmts") or [])
             if x in ("pdf", "md", "bilingual_md", "bilingual_pdf", "zh_pdf", "en_pdf", "bibtex")]
     if not ids:

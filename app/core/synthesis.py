@@ -159,6 +159,10 @@ def cluster_papers(digests: list[dict], k: int, topic: str = "") -> list[list[st
 
 # ---------------- 流水线主体（worker 调用） ----------------
 
+class SynthesisCanceled(Exception):
+    """用户删除综述（syntheses 行已删）——各阶段间检查点抛出，已消耗调用不退费。"""
+
+
 def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
         params: dict | None = None) -> None:
     """执行综述流水线。job_update(**fields) 用于同步 jobs 行进度（SSE 面板）。
@@ -172,6 +176,7 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
     """
 
     def progress(done_inc: int = 1, **fields) -> None:
+        _ensure_alive()   # 每次进度更新即检查点（progress 在每篇导读/每组比对/最终写库前调用）
         row = db.one("SELECT progress_done, progress_total FROM syntheses WHERE id=?", (synthesis_id,))
         if row is None:
             return
@@ -182,6 +187,14 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
         if job_update:
             job_update(progress_done=min(done, row["progress_total"] or done), **fields)
 
+    def _ensure_alive() -> None:
+        """取消检查点：syntheses 行被删（用户删除综述）即中止，已消耗调用不退费。
+        此前 run 全程无检查点——删除 running 综述后 LLM 调用继续烧完全部预算，
+        报告写库命中 0 行被静默丢弃，且单线程 worker 被占住数小时。"""
+        if db.one("SELECT 1 FROM syntheses WHERE id=?", (synthesis_id,)) is None:
+            raise SynthesisCanceled(synthesis_id)
+
+    _ensure_alive()
     row = db.one("SELECT * FROM syntheses WHERE id=?", (synthesis_id,))
     if row is None:
         raise ValueError("综述任务不存在")

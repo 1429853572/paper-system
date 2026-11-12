@@ -527,7 +527,15 @@ class Scheduler:
                                   job_update=lambda **f: self._update(job["id"], **f),
                                   topic=payload.get("topic") or "",
                                   params=payload.get("params") or {})
-                    self._update(job["id"], status="done", progress_done=1, progress_total=1)
+                    # 用户删除综述 → syntheses 行已删，SynthesisCanceled 中止：
+                    # 此前 worker 无条件写回 done（假完成），且单线程被「已删任务」占住数小时
+                    if db.one("SELECT 1 FROM syntheses WHERE id=?",
+                              (payload.get("synthesis_id"),)) is None:
+                        self._update(job["id"], status="canceled",
+                                     error="综述已被用户删除，任务中止")
+                        log.info("综述 %s 已删除，任务中止", payload.get("synthesis_id"))
+                    else:
+                        self._update(job["id"], status="done", progress_done=1, progress_total=1)
                     # 专题任务闭环：综述完成 → 专题状态置「已完成」
                     tid = payload.get("task_id")
                     if tid:
@@ -537,6 +545,9 @@ class Scheduler:
                         except Exception as e:  # noqa: BLE001
                             log.warning("专题 %s 状态更新失败: %s", tid, str(e)[:120])
                     log.info("综述完成 %s", payload.get("synthesis_id"))
+                except synthesis.SynthesisCanceled:
+                    self._update(job["id"], status="canceled", error="综述已被用户删除，任务中止")
+                    log.info("综述取消检查点命中 %s", payload.get("synthesis_id"))
                 except Exception as e:  # noqa: BLE001
                     log.exception("synthesis job %s 异常", job["id"])
                     self._update(job["id"], status="failed", error=str(e)[:300])

@@ -175,8 +175,7 @@ def _gbt7714(p: dict) -> list[tuple[str, bool]]:
         seg = seg[:-1]
     out = f"{seg}. {p.get('title') or '（无标题）'}[J]. "
     out += f"{p.get('journal') or ''}"
-    if p.get("year"):
-        out += f", {p['year']}"
+    out += f", {p['year'] or 'n.d.'}"   # 缺年占位（此前年份静默消失，输出无年份引用）
     vol, issue, pages = _vol_issue_pages(p)
     if vol:
         out += f", {vol}" + (f"({issue})" if issue else "")
@@ -268,27 +267,45 @@ def _mla(p: dict) -> list[tuple[str, bool]]:
 
 
 def _bibtex_key(p: dict) -> str:
+    """citekey：拉丁作者姓 + 年 + 标题前缀；中文/无拉丁作者 → anon + 年 + id 尾 4 位
+    （此前纯 anon{year}：同年两篇中文文献 citekey 重复，LaTeX 编译直接报错）。"""
     authors = _split_authors(p.get("authors") or "")
     fam = _name_parts(authors[0])[0] if authors else ""
-    stem = re.sub(r"[^A-Za-z]", "", fam) or "anon"
+    stem = re.sub(r"[^A-Za-z]", "", fam)
+    tail = (p.get("id") or "")[-4:]
+    if not stem:
+        stem = f"anon{tail}"          # 中文等无拉丁姓场景：anon2026_x1y2 唯一化
     return f"{stem.lower()}{p.get('year') or ''}{re.sub(r'[^A-Za-z]', '', (p.get('title') or '')[:16])}"
 
 
 def _bibtex(p: dict) -> list[tuple[str, bool]]:
+    """arXiv 预印本（无 journal）此前硬编码 @article 且 journal 被过滤 → 无刊名的
+    @article；改为 @misc + howpublished=eprint（BibTeX 惯例）。"""
     authors = _split_authors(p.get("authors") or "")
     vol, issue, pages = _vol_issue_pages(p)
+    journal = (p.get("journal") or "").strip()
+    arxiv = ""
+    m = re.search(r"(\d{4}\.\d{4,5}(?:v\d+)?)", p.get("doi") or "")
+    if m:
+        arxiv = m.group(1)
+    entry_type = "article" if journal else "misc"
     fields = [
         ("title", p.get("title") or ""),
         ("author", " and ".join(authors)),
-        ("journal", p.get("journal") or ""),
         ("year", p.get("year") or ""),
-        ("volume", vol),
-        ("number", issue),
-        ("pages", pages.replace("-", "--")),
         ("doi", p.get("doi") or ""),
     ]
+    if entry_type == "article":
+        fields += [("journal", journal), ("volume", vol), ("number", issue),
+                   ("pages", pages.replace("-", "--"))]
+    else:
+        if arxiv:
+            fields.append(("eprint", arxiv))
+            fields.append(("archivePrefix", "arXiv"))
+        elif journal:
+            fields.append(("howpublished", journal))
     body = ",\n".join(f"  {k} = {{{v}}}" for k, v in fields if v)
-    return [(f"@article{{{_bibtex_key(p)},\n{body}\n}}", False)]
+    return [(f"@{entry_type}{{{_bibtex_key(p)},\n{body}\n}}", False)]
 
 
 _FORMATTERS = {"gbt7714": _gbt7714, "apa": _apa, "mla": _mla, "bibtex": _bibtex}

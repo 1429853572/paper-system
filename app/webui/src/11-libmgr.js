@@ -114,7 +114,7 @@ async function renderCollectionsPage(preset = null) {
   const total = pd.total ?? papers.length;
   // 范围全量 id（已译统计/跨页全选用；按 scope 缓存，scope 变则失效）
   state._scopeAllIds = state._scopeAllIds || {};
-  if (!state._scopeAllIds[scopeKey] || state._scopeAllIds._at !== scopeKey + '|' + (state.libSel || '') + '|' + (state.q || '')) {
+  if (!state._scopeAllIds[scopeKey] || state._scopeAllIds._at !== scopeKey + '|' + (state.libSel || '') + '|' + (state.libQuery || '')) {
     const scopeQ = new URLSearchParams();
     if (scopeIds.length) scopeQ.set('collection_id', scopeIds.join(','));
     if (q) scopeQ.set('q', state.libQuery);
@@ -122,7 +122,7 @@ async function renderCollectionsPage(preset = null) {
     try {
       const ad = await api('/api/papers?' + scopeQ.toString());
       state._scopeAllIds[scopeKey] = (ad.papers || []).map(x => x.id);
-      state._scopeAllIds._at = scopeKey + '|' + (state.libSel || '') + '|' + (state.q || '');
+      state._scopeAllIds._at = scopeKey + '|' + (state.libSel || '') + '|' + (state.libQuery || '');
     } catch { state._scopeAllIds[scopeKey] = papers.map(x => x.id); }
   }
   const totalPages = Math.max(1, Math.ceil(total / ps));
@@ -278,7 +278,7 @@ document.addEventListener('click', async e => {
       }
       await downloadBlob(url, payload,
         fmts.length === 1 && fmts[0] === 'bibtex' ? 'references.bib' : '论文导出.zip',
-        `已导出 ${ids.length} 篇`);
+        `已导出 ${ids.length} 篇（跳过项见压缩包内清单）`);
       pop.hidden = true;
     } catch (err) { toast('导出失败: ' + err.message); }
     zip.disabled = false; zip.innerHTML = icon('download') + ' 导出 ZIP';
@@ -304,6 +304,11 @@ function selBucket(cid) {
   const key = cid ?? state.libSel ?? 'all';
   state._selByScope[key] = state._selByScope[key] || new Set();
   return state._selByScope[key];
+}
+// 范围全量 id 缓存失效：所有改变论文集合的动作（挂链/删除/恢复/清空回收站）后调用。
+// 此前只有挂链一处清，批删/恢复/清空回收站后导出仍用旧 id 集（含已删行）。
+function invalidateScopeIds() {
+  state._scopeAllIds = {};
 }
 function libSelected(cid) {
   return [...selBucket(cid)];
@@ -352,6 +357,8 @@ window.libCkAll = async (cid, on) => {
 window.libBatchTranslate = async cid => {
   const ids = libSelected(cid);
   if (!ids.length) { toast('先勾选论文'); return; }
+  if (ids.length >= 10 && !(await uiConfirm(`批量翻译 ${ids.length} 篇？（按篇分批调用 LLM——已有完整译文的自动跳过；预计耗时数分钟）`,
+      {title: '批量翻译'}))) return;
   try {
     const d = await api('/api/batch/translate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
     toast(`已入队 ${d.queued?.length ?? ids.length} 篇${d.skipped?.length ? `，跳过 ${d.skipped.length} 篇` : ''}——批次进度见任务中心`);
@@ -397,6 +404,10 @@ window.libBatchMove = async (cid, v, sel) => {
   const remove = v === '__remove__';
   const target = remove ? scopeLibId(cid) : v;
   if (remove && !target) { toast('当前是「全部文献」视图——请先进某个库再移出'); sel.value = ''; return; }
+  if (remove) {
+    if (!(await uiConfirm(`从本库移出选中的 ${ids.length} 篇？（论文本体不动；移出唯一所属库的论文将落「未归类」）`,
+                          {title: '从本库移出', danger: true}))) { sel.value = ''; return; }
+  }
   await withBusy(sel, async () => {
     sel.value = '';
     try {
@@ -404,7 +415,7 @@ window.libBatchMove = async (cid, v, sel) => {
                 {method: 'POST', body: JSON.stringify({paper_ids: ids, collection_id: target})});
       toast(remove ? `已从本库移出 ${ids.length} 篇（论文本体不动）` : `已加入库 ${ids.length} 篇`);
     } catch (e) { toast(friendlyError(e, '操作失败，请重试')); return; }
-    state._scopeAllIds = {};   // 挂链变更 → 各范围全量 id 缓存失效
+    invalidateScopeIds();   // 挂链变更 → 各范围全量 id 缓存失效
     await refreshLib();
   }, '操作失败，请重试');
 };
@@ -523,11 +534,13 @@ window.quickDelete = async (pid, anchor) => {
                          {title: '移入回收站', anchor}))) return;
   try {
     await api('/api/papers/' + pid, {method: 'DELETE'});
+    invalidateScopeIds();
     toast('已移入回收站', 0, {
       label: '撤销',
       onClick: async () => {
         await api(`/api/papers/${pid}/restore`, {method: 'POST'}).catch(() => {});
         toast('已撤销');
+        invalidateScopeIds();
         await refreshLib();
       },
     });
