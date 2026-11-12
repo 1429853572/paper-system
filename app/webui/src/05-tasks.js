@@ -82,7 +82,7 @@ function taskErr(msg) {
 
 function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN, doneN) {
   const f = state._taskFilter;
-  const stMap = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
+  const stMap = {queued: '排队', pending_gate: '排队等资源', running: '进行中', done: '完成',
                  failed: '失败', canceled: '已取消'};
   /* 单篇任务按论文聚合：同一篇的 解析/导读/元数据/索引回填 合并成一行
      （原先每任务一行 → 同一标题刷屏 N 次，看不出是同一篇） */

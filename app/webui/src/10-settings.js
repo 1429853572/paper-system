@@ -304,7 +304,8 @@ window.createInvite = async () => {
   const days = +($('#invite-days')?.value || 7);
   const d = await api(`/api/admin/invite?days=${days}`, {method: 'POST'});
   const el = $('#invite-out');
-  if (el) el.innerHTML = `邀请码: <code style="font-size: var(--fs-md)">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
+  if (el) el.innerHTML = `邀请码: <code style="font-size: var(--fs-md)">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`
+    + ` <button class="btn small" onclick="copyText('${d.code}', '邀请码已复制，转交给新成员')">复制</button>`;
 };
 window.logoutAll = async () => {
   if (!(await uiConfirm('登出所有设备？其他已登录的会话将全部失效（本设备保持登录）。', {title: '登出所有设备', danger: true}))) return;

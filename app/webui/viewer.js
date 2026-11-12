@@ -656,8 +656,9 @@ function renderPapers() {
 state.uploadPrivate = localStorage.getItem('ps-upload-private') === '1';
 function updateUploadTarget() {
   const el = $('#upload-target');
-  if (el) el.textContent = '上传到：' +
-    (state.currentCollection ? (state.collections.find(c => c.id === state.currentCollection)?.name || '默认文献库') : '全部文献');
+  if (el) el.textContent = '放入：' +
+    (state.currentCollection ? (state.collections.find(c => c.id === state.currentCollection)?.name || '默认文献库')
+     : '默认文献库（可在文库管理移动）');
 }
 function updateVisToggle() {
   const cb = $('#upload-private');
@@ -839,7 +840,11 @@ async function uploadFiles(files, targetCid) {
       if (res.status === 'rejected') { up.phase = 'error'; up.msg = res.reason || '被拒收'; rejN++; }
       else if (res.status === 'duplicate') {
         state.uploads.delete(f.name); dupN++;
-        if (res.linked) { setTimeout(() => toast('该内容已在其他库——已挂进当前库（同一份，不重复占用）'), 400); }
+        if (res.linked) { setTimeout(() => toast('该内容已在其他文献库——已同时放入当前文献库（同一份，不重复占用）'), 400); }
+      }
+      else if (res.status === 'skipped') {
+        state.uploads.delete(f.name); okN++;
+        setTimeout(() => toast(`《${(res.name || '文件').slice(0, 30)}》已入库但超出解析页数上限，未排队解析（可手动重解析）`, 5000), 400);
       }
       else { state.uploads.delete(f.name); okN++; }
       await refreshLib();
@@ -1341,7 +1346,7 @@ function renderProgressStrip(js) {
       <button class="btn small danger" onclick="cancelTranslate()">${icon('stop')} 取消</button>`;
   } else if (pp) {
     strip.hidden = false;
-    strip.innerHTML = `<span>${pp.status === 'queued' ? '解析排队中（GPU 队列）' : pp.status === 'pending_gate' ? '等待 GPU 就绪…' : '解析中'}</span>
+    strip.innerHTML = `<span>${pp.status === 'queued' ? '解析排队中（GPU 队列）' : pp.status === 'pending_gate' ? '排队等待解析资源（通常 1-3 分钟/篇）…' : '解析中'}</span>
       <div class="progress"><i style="width:${pp.total ? Math.round(100 * pp.done / pp.total) : 5}%"></i></div>
       <span class="muted">全部任务见「任务中心」</span>`;
   } else {
@@ -1860,7 +1865,7 @@ function taskErr(msg) {
 
 function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN, doneN) {
   const f = state._taskFilter;
-  const stMap = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
+  const stMap = {queued: '排队', pending_gate: '排队等资源', running: '进行中', done: '完成',
                  failed: '失败', canceled: '已取消'};
   /* 单篇任务按论文聚合：同一篇的 解析/导读/元数据/索引回填 合并成一行
      （原先每任务一行 → 同一标题刷屏 N 次，看不出是同一篇） */
@@ -2412,7 +2417,7 @@ async function runSynthesis(anchor, ids = null) {
     } catch (e) { toast('综述启动失败: ' + e.message); }
   };
 }
-const BATCH_ST = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
+const BATCH_ST = {queued: '排队', pending_gate: '排队等解析资源', running: '进行中', done: '完成',
                   failed: '失败', canceled: '已取消'};
 
 async function renderBatchJobs(bid, box) {
@@ -3719,7 +3724,7 @@ function sendQa() {
           if (origin) live.insertAdjacentHTML('beforeend',
             `<div class="evo-line">证据来源: ${origin}</div>`);
           if (ev.citations?.illegal?.length) toast('⚠ 部分引用编号无效: ' + ev.citations.illegal.join(','));
-          if (ev.truncated) live.insertAdjacentHTML('beforeend', "<div class=\"muted\" style=\"font-size: var(--fs-xs);margin-top:6px\">" + icon('warn') + " 内容过长，已启用检索取证模式</div>");
+          if (ev.truncated) live.insertAdjacentHTML('beforeend', "<div class=\"muted\" style=\"font-size: var(--fs-xs);margin-top:6px\">" + icon('warn') + " 内容较长，已改为按相关段落检索作答</div>");
         }
       }
     }
@@ -4473,7 +4478,8 @@ window.createInvite = async () => {
   const days = +($('#invite-days')?.value || 7);
   const d = await api(`/api/admin/invite?days=${days}`, {method: 'POST'});
   const el = $('#invite-out');
-  if (el) el.innerHTML = `邀请码: <code style="font-size: var(--fs-md)">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`;
+  if (el) el.innerHTML = `邀请码: <code style="font-size: var(--fs-md)">${d.code}</code>（${d.expires_in_days} 天内有效，一次性）`
+    + ` <button class="btn small" onclick="copyText('${d.code}', '邀请码已复制，转交给新成员')">复制</button>`;
 };
 window.logoutAll = async () => {
   if (!(await uiConfirm('登出所有设备？其他已登录的会话将全部失效（本设备保持登录）。', {title: '登出所有设备', danger: true}))) return;
@@ -5096,6 +5102,8 @@ window.libCkAll = async (cid, on) => {
 window.libBatchTranslate = async cid => {
   const ids = libSelected(cid);
   if (!ids.length) { toast('先勾选论文'); return; }
+  if (ids.length >= 10 && !(await uiConfirm(`批量翻译 ${ids.length} 篇？（按篇分批调用 LLM——已有完整译文的自动跳过；预计耗时数分钟）`,
+      {title: '批量翻译'}))) return;
   try {
     const d = await api('/api/batch/translate', {method: 'POST', body: JSON.stringify({paper_ids: ids})});
     toast(`已入队 ${d.queued?.length ?? ids.length} 篇${d.skipped?.length ? `，跳过 ${d.skipped.length} 篇` : ''}——批次进度见任务中心`);
@@ -5141,6 +5149,10 @@ window.libBatchMove = async (cid, v, sel) => {
   const remove = v === '__remove__';
   const target = remove ? scopeLibId(cid) : v;
   if (remove && !target) { toast('当前是「全部文献」视图——请先进某个库再移出'); sel.value = ''; return; }
+  if (remove) {
+    if (!(await uiConfirm(`从本库移出选中的 ${ids.length} 篇？（论文本体不动；移出唯一所属库的论文将落「未归类」）`,
+                          {title: '从本库移出', danger: true}))) { sel.value = ''; return; }
+  }
   await withBusy(sel, async () => {
     sel.value = '';
     try {

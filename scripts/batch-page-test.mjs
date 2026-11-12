@@ -348,7 +348,10 @@ if (synPop) {
   await new Promise((r) => setTimeout(r, 250));
   ok('加入库 → 调 batch-link', calls.some(c => c.includes('/api/papers/batch-link')), calls.slice(-2).join(' | '));
   calls.length = 0;
+  const realConfirm = window.uiConfirm;
+  window.uiConfirm = async () => true;   // 确认框在 jsdom 里等待点击——stub 掉
   await window.libBatchMove('c2', '__remove__', fakeSel);
+  window.uiConfirm = realConfirm;
   await new Promise((r) => setTimeout(r, 250));
   ok('从本库移出 → 调 batch-unlink', calls.some(c => c.includes('/api/papers/batch-unlink')));
 }

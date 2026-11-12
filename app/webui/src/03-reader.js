@@ -391,7 +391,7 @@ function renderProgressStrip(js) {
       <button class="btn small danger" onclick="cancelTranslate()">${icon('stop')} 取消</button>`;
   } else if (pp) {
     strip.hidden = false;
-    strip.innerHTML = `<span>${pp.status === 'queued' ? '解析排队中（GPU 队列）' : pp.status === 'pending_gate' ? '等待 GPU 就绪…' : '解析中'}</span>
+    strip.innerHTML = `<span>${pp.status === 'queued' ? '解析排队中（GPU 队列）' : pp.status === 'pending_gate' ? '排队等待解析资源（通常 1-3 分钟/篇）…' : '解析中'}</span>
       <div class="progress"><i style="width:${pp.total ? Math.round(100 * pp.done / pp.total) : 5}%"></i></div>
       <span class="muted">全部任务见「任务中心」</span>`;
   } else {

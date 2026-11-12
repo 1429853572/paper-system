@@ -258,8 +258,9 @@ function renderPapers() {
 state.uploadPrivate = localStorage.getItem('ps-upload-private') === '1';
 function updateUploadTarget() {
   const el = $('#upload-target');
-  if (el) el.textContent = '上传到：' +
-    (state.currentCollection ? (state.collections.find(c => c.id === state.currentCollection)?.name || '默认文献库') : '全部文献');
+  if (el) el.textContent = '放入：' +
+    (state.currentCollection ? (state.collections.find(c => c.id === state.currentCollection)?.name || '默认文献库')
+     : '默认文献库（可在文库管理移动）');
 }
 function updateVisToggle() {
   const cb = $('#upload-private');
@@ -441,7 +442,11 @@ async function uploadFiles(files, targetCid) {
       if (res.status === 'rejected') { up.phase = 'error'; up.msg = res.reason || '被拒收'; rejN++; }
       else if (res.status === 'duplicate') {
         state.uploads.delete(f.name); dupN++;
-        if (res.linked) { setTimeout(() => toast('该内容已在其他库——已挂进当前库（同一份，不重复占用）'), 400); }
+        if (res.linked) { setTimeout(() => toast('该内容已在其他文献库——已同时放入当前文献库（同一份，不重复占用）'), 400); }
+      }
+      else if (res.status === 'skipped') {
+        state.uploads.delete(f.name); okN++;
+        setTimeout(() => toast(`《${(res.name || '文件').slice(0, 30)}》已入库但超出解析页数上限，未排队解析（可手动重解析）`, 5000), 400);
       }
       else { state.uploads.delete(f.name); okN++; }
       await refreshLib();

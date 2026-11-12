@@ -609,7 +609,7 @@ function sendQa() {
           if (origin) live.insertAdjacentHTML('beforeend',
             `<div class="evo-line">证据来源: ${origin}</div>`);
           if (ev.citations?.illegal?.length) toast('⚠ 部分引用编号无效: ' + ev.citations.illegal.join(','));
-          if (ev.truncated) live.insertAdjacentHTML('beforeend', "<div class=\"muted\" style=\"font-size: var(--fs-xs);margin-top:6px\">" + icon('warn') + " 内容过长，已启用检索取证模式</div>");
+          if (ev.truncated) live.insertAdjacentHTML('beforeend', "<div class=\"muted\" style=\"font-size: var(--fs-xs);margin-top:6px\">" + icon('warn') + " 内容较长，已改为按相关段落检索作答</div>");
         }
       }
     }

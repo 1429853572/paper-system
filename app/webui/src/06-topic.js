@@ -346,7 +346,7 @@ async function runSynthesis(anchor, ids = null) {
     } catch (e) { toast('综述启动失败: ' + e.message); }
   };
 }
-const BATCH_ST = {queued: '排队', pending_gate: '等GPU', running: '进行中', done: '完成',
+const BATCH_ST = {queued: '排队', pending_gate: '排队等解析资源', running: '进行中', done: '完成',
                   failed: '失败', canceled: '已取消'};
 
 async function renderBatchJobs(bid, box) {
