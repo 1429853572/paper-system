@@ -77,6 +77,24 @@ def store_pdf(paper_id: str, data: bytes, name: str = "original.pdf") -> Path:
     return p
 
 
+def attach_to_collection(paper_id: str, cid: str | None) -> bool:
+    """把论文挂进分库（多对多，幂等）。返回是否新建了挂链。cid 空则忽略。"""
+    if not cid:
+        return False
+    with db.write() as c:
+        cur = c.execute(
+            "INSERT OR IGNORE INTO paper_collections(paper_id, collection_id) VALUES(?,?)",
+            (paper_id, cid))
+        return cur.rowcount > 0
+
+
+def linked_collections(paper_id: str) -> list[str]:
+    """论文当前挂着的全部分库 id。"""
+    return [r["collection_id"] for r in db.all(
+        "SELECT collection_id FROM paper_collections WHERE paper_id=? ORDER BY created_at, collection_id",
+        (paper_id,))]
+
+
 def restore_clash(paper_id: str) -> dict | None:
     """恢复回收站论文前的查重：同内容（file_hash）已有未删除论文 → 返回它。
 

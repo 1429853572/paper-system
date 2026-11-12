@@ -473,7 +473,7 @@ function renderCollections() {
     e.stopPropagation();
     const cid = e.target.closest('.col-item').dataset.id;
     const name = state.collections.find(c => c.id === cid)?.name || '';
-    if (!(await uiConfirm(`删除文献库「${name}」？其子库与库内论文将一并移入回收站（30 天内可恢复）`,
+    if (!(await uiConfirm(`删除文献库「${name}」？其子库一并删除；论文移出该库，不再属于任何库的论文进回收站（30 天内可恢复）`,
                            {title: '删除文献库', anchor: e.currentTarget}))) return;
     await api('/api/collections/' + cid, {method: 'DELETE'});
     if (state.currentCollection === cid) state.currentCollection = '';
@@ -720,7 +720,7 @@ $('#ident-btn').onclick = async () => {
     const nopdf = d.results.filter(x => x.status === 'no_pdf').length;
     const nf = d.results.filter(x => x.status === 'not_found').length;
     let msg = q ? `已导入 ${q} 篇并开始解析` : '没有可导入的条目';
-    if (dup) msg += `，${dup} 篇已在库跳过`;
+    if (dup) msg += `，${dup} 篇已在库——已挂进当前库`;
     if (nopdf) msg += `，${nopdf} 篇无公开 PDF`;
     if (nf) msg += `，${nf} 条未识别`;
     toast(msg, 4000);
@@ -839,7 +839,10 @@ async function uploadFiles(files, targetCid) {
       });
       const res = (d.results || [])[0] || {};
       if (res.status === 'rejected') { up.phase = 'error'; up.msg = res.reason || '被拒收'; rejN++; }
-      else if (res.status === 'duplicate') { state.uploads.delete(f.name); dupN++; }
+      else if (res.status === 'duplicate') {
+        state.uploads.delete(f.name); dupN++;
+        if (res.linked) { setTimeout(() => toast('该内容已在其他库——已挂进当前库（同一份，不重复占用）'), 400); }
+      }
       else { state.uploads.delete(f.name); okN++; }
       await refreshLib();
       if (up.phase === 'error') renderPapers();
@@ -2833,17 +2836,29 @@ async function renderMeta() {
     <div class="card"><h3>References (${refs.references.length}) <input id="ref-search" placeholder="搜索…" style="width:140px; font-size: var(--fs-sm); margin-left:8px; display:inline-block"></h3>
       <div class="ref-list" id="ref-list"></div></div>
     <div class="card"><h3>${icon('folder')} 分库</h3>
-      <select id="m-collection" style="max-width:240px"><option value="">未分库</option></select></div>`;
+      <div id="m-collection-chips" class="chip-row"></div>
+      <select id="m-collection-add" style="max-width:200px;font-size: var(--fs-sm)"></select></div>`;
 
   renderCiteCard();
 
-  // 分库下拉
-  const colSel = $('#m-collection');
-  state.collections.forEach(c2 => colSel.insertAdjacentHTML('beforeend',
-    `<option value="${c2.id}" ${paper.collection_id === c2.id ? 'selected' : ''}>${esc(c2.name)}</option>`));
-  colSel.onchange = async () => {
-    await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: colSel.value || null})});
-    toast('已移动'); await refreshLib();
+  // 分库多选 chips（多对多：一篇可挂 N 库；×移出，下拉加入）
+  const linked = paper.collection_ids || [];
+  const chipRow = $('#m-collection-chips');
+  chipRow.innerHTML = linked.length
+    ? linked.map(cid => {
+        const c2 = state.collections.find(x => x.id === cid);
+        return `<span class="chip">${icon('folder', 12)} ${esc(c2?.name || cid)}
+          <button class="hover-only" title="从此库移出" onclick="unlinkPaper('${pid}','${cid}')">${icon('close', 12)}</button></span>`;
+      }).join('')
+    : '<span class="muted" style="font-size: var(--fs-sm)">未分库</span>';
+  const addSel = $('#m-collection-add');
+  addSel.innerHTML = '<option value="">+ 加入库…</option>' + state.collections
+    .filter(c2 => !linked.includes(c2.id))
+    .map(c2 => `<option value="${c2.id}">${esc(c2.name)}</option>`).join('');
+  addSel.onchange = async () => {
+    if (!addSel.value) return;
+    await api('/api/papers/' + pid + '/collections', {method: 'POST', body: JSON.stringify({collection_id: addSel.value})});
+    toast('已加入'); addSel.value = ''; await refreshLib(); renderMeta();
   };
 
   // 星级
@@ -2879,6 +2894,12 @@ async function renderMeta() {
 
 /* 元数据编辑：内联输入框，不弹 prompt 链（原来一次要弹 6 个框）。
    卷/期/页是引用格式需要的字段，一并在这里补。 */
+window.unlinkPaper = async (pid, cid) => {
+  if (!(await uiConfirm('从此库移出？（论文本体与译文不受影响；全部库移出后落「未分库」）',
+                        {title: '移出分库', danger: true}))) return;
+  await api(`/api/papers/${pid}/collections/${cid}`, {method: 'DELETE'});
+  toast('已移出'); await refreshLib(); renderMeta();
+};
 window.editMeta = (pid) => { state._metaEdit = true; renderMeta(); };
 window.cancelMeta = () => { state._metaEdit = false; renderMeta(); };
 window.saveMeta = async (pid) => {
@@ -3532,10 +3553,14 @@ function renderPickList(filter) {
   const cols = [...(state.collections || [])].sort((a, b) =>
     (b.name === '默认文献库') - (a.name === '默认文献库') ||
     (a.name || '').localeCompare(b.name || '', 'zh'));
+  // 多对多：一篇可能挂 N 库 → 分到首个命中的库（Set 勾选会去重 id，视觉不重复）
+  const taken = new Set();
   const groups = cols.map(c => ({
-    id: c.id, name: c.name, papers: papers.filter(p => p.collection_id === c.id && match(p)),
+    id: c.id, name: c.name,
+    papers: papers.filter(p => !taken.has(p.id) && (p.collection_ids || []).includes(c.id) && match(p)
+      ? (taken.add(p.id), true) : false),
   }));
-  const orphan = papers.filter(p => !p.collection_id && match(p));
+  const orphan = papers.filter(p => !(p.collection_ids || []).length && match(p));
   if (orphan.length) groups.push({id: '__orphan', name: '未分库', papers: orphan});
   groups.forEach(g => g.papers.sort(sortFn));
   const visible = groups.filter(g => g.papers.length);
@@ -4833,7 +4858,7 @@ async function renderCollectionsPage(preset = null) {
     const trBadge = s.translating ? `<span class="badge run">${icon('globe')}${tj ? tj.done + '/' + tj.total : ''}</span>`
       : tj?.status === 'done' ? "<span class=\"badge ok\">译" + icon('check') + "</span>"
       : tj?.status === 'failed' ? "<span class=\"badge err\">译" + icon('close') + "</span>" : '<span class="muted">—</span>';
-    const owner = d.collections.find(c => c.id === p.collection_id);
+    const owner = d.collections.find(c => (p.collection_ids || []).includes(c.id));
     return `<tr class="lib-paper-row" onclick="viewPaper('${p.id}')">
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${selBucket(scopeKey).has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
@@ -4868,7 +4893,7 @@ async function renderCollectionsPage(preset = null) {
           ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">${icon('upload')} 上传</button>
           <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>${icon('plus')}子库</button>
           <button class="btn small" title="重命名" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
-          <button class="btn small danger hover-only" title="删除库（整棵子树进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
+          <button class="btn small danger hover-only" title="删除库（论文移出该库；无主论文进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
         </div>
         ${subLibs.length ? `<div class="lib-subbar">
           <span class="muted" style="font-size: var(--fs-sm)">子库：</span>
@@ -5013,9 +5038,10 @@ window.libCk = cid => {
 window.libCkAll = async (cid, on) => {
   const bucket = selBucket(cid);
   if (on) {
-    // 全选【当前范围】的全部论文（跨页）——后端 all=1 返回范围内所有 id
+    // 全选【当前范围】的全部论文（跨页）——后端 all=1；范围=子树（与列表查询一致）
     try {
-      const scope = cid === 'all' ? '' : `collection_id=${encodeURIComponent(cid)}`;
+      const ids = cid === 'all' ? [] : [cid, ...colDescendants(cid)];
+      const scope = ids.length ? `collection_id=${encodeURIComponent(ids.join(','))}` : '';
       const d = await api(`/api/papers?all=1${scope ? '&' + scope : ''}`);
       (d.papers || []).forEach(p => { bucket.add(p.id); state.selected.add(p.id); });
     } catch (e) { toast(friendlyError(e, '全选失败')); return; }
@@ -5131,7 +5157,7 @@ window.delLib = async (cid, name) => {
   walk(cid);
   paperN += (kids.find(c => c.id === cid)?.papers_total ?? 0);
   const scope = `${libN ? `${libN} 个子库、` : ''}库内 ${paperN} 篇论文`;
-  if (!(await uiConfirm(`删除文献库「${name}」？${scope}将一并移入回收站（30 天内可恢复）`,
+  if (!(await uiConfirm(`删除文献库「${name}」？论文将移出该库；不再属于任何库的论文进回收站（30 天内可恢复）`,
                         {title: '删除文献库'}))) return;
   await api('/api/collections/' + cid, {method: 'DELETE'});
   toast('已删除'); await refreshLib();

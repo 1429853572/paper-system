@@ -176,6 +176,47 @@ ok("merge：英文原文让位于翻译", _merge_abstract("An English abstract."
 ok("merge：空 → 翻译", _merge_abstract("", "中文翻译") == "中文翻译")
 ok("merge：翻译缺失 → 保留原文", _merge_abstract("English text", "") == "English text")
 
+print("== 分库多对多（paper_collections）==")
+from core.ingest import attach_to_collection, linked_collections, create_paper
+from core.db import db
+with db.write() as c:
+    c.execute("INSERT INTO collections(id,name,owner_id,parent_id) VALUES('mmA','甲库',1,NULL)")
+    c.execute("INSERT INTO collections(id,name,owner_id,parent_id) VALUES('mmB','乙库',1,NULL)")
+    c.execute("INSERT INTO collections(id,name,owner_id,parent_id) VALUES('mmA1','甲子库',1,'mmA')")
+    c.execute("INSERT INTO papers(id,owner_id,visibility,file_hash,title,parse_status) "
+              "VALUES('pm1',1,'shared','hashmm','多挂库论文','parsed')")
+ok("attach 幂等（重复挂不报错）", attach_to_collection('pm1', 'mmA') and
+   not attach_to_collection('pm1', 'mmA'))
+ok("一篇挂两库", attach_to_collection('pm1', 'mmB') and sorted(linked_collections('pm1')) == ['mmA', 'mmB'])
+
+# dup 复用：create_paper 同 hash → 返回既有 id
+pid2, dup = create_paper(1, 'hashmm', 10, 100, 'shared', '再次上传.pdf')
+ok("同内容导入复用记录", dup and pid2 == 'pm1')
+
+# 删库三态（直接调端点函数；u 为 admin dict）
+from core.libs import delete_subtree
+u_admin = {"id": 1, "role": "admin"}
+# pm1 挂 mmA+mmB：删甲库（含子库 mmA1）→ pm1 仍挂 mmB → 只摘链不回收
+r = delete_subtree('mmA', 1, True)
+ok("删父库：仍挂他库 → 只摘链", r["unlinked"] == 1 and r["trashed"] == 0
+   and sorted(linked_collections('pm1')) == ['mmB']
+   and db.one("SELECT deleted_at FROM papers WHERE id='pm1'")["deleted_at"] is None)
+# 删乙库 → pm1 无主 → 进回收站
+r2 = delete_subtree('mmB', 1, True)
+ok("删最后所属库：无主 → 进回收站", r2["trashed"] == 1
+   and db.one("SELECT deleted_at FROM papers WHERE id='pm1'")["deleted_at"] is not None)
+# hard_delete 级联清挂链
+# 硬删级联清挂链（前面删库用例已把 mmA/mmB 删掉——重建一个库来挂）
+with db.write() as c:
+    c.execute("INSERT INTO collections(id,name,owner_id) VALUES('mmC','丙库',1)")
+    c.execute("UPDATE papers SET deleted_at=NULL WHERE id='pm1'")
+attach_to_collection('pm1', 'mmC')   # attach 自带写锁——必须在 with 块外（非重入，嵌套即自死锁）
+from core.jobs import scheduler
+scheduler.hard_delete_paper('pm1')
+ok("硬删论文级联清挂链", db.one("SELECT COUNT(*) AS n FROM paper_collections WHERE paper_id='pm1'")["n"] == 0)
+with db.write() as c:
+    c.execute("DELETE FROM collections WHERE id IN ('mmA','mmB','mmA1','mmC')")
+
 print("== 恢复查重（restore_clash）==")
 from core.ingest import restore_clash
 with db.write() as c:
@@ -225,4 +266,6 @@ with db.write() as c:
     c.execute("DELETE FROM papers WHERE id='pref'")
 
 print(f"\n结果: {PASS} 通过, {FAIL} 失败")
-sys.exit(1 if FAIL else 0)
+# 导入 server.main 会启动调度器线程（非 daemon）——进程退出被吊住，用 os._exit 硬退
+import os
+os._exit(1 if FAIL else 0)

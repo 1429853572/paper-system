@@ -486,11 +486,12 @@ async def upload_papers(request: Request, files: list[UploadFile]):
         paper_id, dup = ingest.create_paper(
             u["id"], file_hash, pages, len(data), visibility, f.filename or "untitled")
         if dup:
-            results.append({"name": f.filename, "status": "duplicate", "paper_id": paper_id})
+            # 多对多：内容已在库（别的库）→ 复用记录并挂进当前目标库，不拒绝
+            linked = ingest.attach_to_collection(paper_id, collection_id)
+            results.append({"name": f.filename, "status": "duplicate", "paper_id": paper_id,
+                            "linked": linked})
             continue
-        if collection_id:
-            with db.write() as c:
-                c.execute("UPDATE papers SET collection_id=? WHERE id=?", (collection_id, paper_id))
+        ingest.attach_to_collection(paper_id, collection_id)
         ingest.store_pdf(paper_id, data, f.filename or "original.pdf")
         if over_limit:
             with db.write() as c:
@@ -557,6 +558,18 @@ async def set_parse_filter(request: Request):
     return {"ok": True, **d}
 
 
+def _with_collection_ids(row) -> dict:
+    """json_group_array 返回 JSON 字符串 → 解析为数组（sqlite 无数组类型）。"""
+    row = dict(row)
+    v = row.get("collection_ids")
+    if isinstance(v, str):
+        try:
+            row["collection_ids"] = json.loads(v)
+        except ValueError:
+            row["collection_ids"] = []
+    return row
+
+
 @app.get("/api/papers")
 def list_papers(q: str = "", status: str = "", trash: int = 0,
                 collection_id: str = "", page: int = 0, page_size: int = 0, all: int = 0, u: dict = Depends(require)):
@@ -570,10 +583,11 @@ def list_papers(q: str = "", status: str = "", trash: int = 0,
         vis += " AND parse_status=?"
         args.append(status)
     if collection_id == "none":
-        vis += " AND collection_id IS NULL"
+        vis += " AND NOT EXISTS(SELECT 1 FROM paper_collections pc WHERE pc.paper_id=p.id)"
     elif collection_id:
         ids = [x for x in collection_id.split(",") if x]
-        vis += f" AND collection_id IN ({','.join('?' * len(ids))})"
+        vis += (f" AND EXISTS(SELECT 1 FROM paper_collections pc WHERE pc.paper_id=p.id "
+                f"AND pc.collection_id IN ({','.join('?' * len(ids))}))")
         args.extend(ids)
     cond = "deleted_at IS NULL" if not trash else "deleted_at IS NOT NULL"
     limit = max(1, min(500, page_size or 500))
@@ -581,18 +595,20 @@ def list_papers(q: str = "", status: str = "", trash: int = 0,
     # 列表裁剪：abstract/keywords/file_hash 前端列表不用（详情页返回），
     # 89 篇 × abstract 1-2KB ≈ 90% 传输浪费；owner_name 供 shared 论文归属标识
     sel = (f"SELECT p.id,p.owner_id,p.visibility,p.title,p.authors,p.year,p.page_count,"
-           f"p.file_size,p.parse_status,p.collection_id,p.journal,p.created_at,p.deleted_at,"
-           f"u.username AS owner_name "
+           f"p.file_size,p.parse_status,p.journal,p.created_at,p.deleted_at,"
+           f"u.username AS owner_name,"
+           f"(SELECT json_group_array(pc.collection_id) FROM paper_collections pc "
+           f"WHERE pc.paper_id=p.id) AS collection_ids "
            f"FROM papers p LEFT JOIN users u ON u.id=p.owner_id "
            f"WHERE {cond}{vis} ORDER BY p.created_at DESC")
     if all:
         # 范围内全部 id（跨页「全选」用；不分页）
         rows = db.all(sel, tuple(args))
-        return {"papers": [dict(r) for r in rows], "page": 1, "has_more": False,
+        return {"papers": [_with_collection_ids(r) for r in rows], "page": 1, "has_more": False,
                 "total": len(rows)}
     rows = db.all(sel + f" LIMIT {limit} OFFSET {offset}", tuple(args))
-    total = db.one(f"SELECT COUNT(*) AS n FROM papers WHERE {cond}{vis}", tuple(args))["n"]
-    return {"papers": [dict(r) for r in rows], "page": page, "has_more": len(rows) == limit,
+    total = db.one(f"SELECT COUNT(*) AS n FROM papers p WHERE {cond}{vis}", tuple(args))["n"]
+    return {"papers": [_with_collection_ids(r) for r in rows], "page": page, "has_more": len(rows) == limit,
             "total": total}
 
 
@@ -602,8 +618,12 @@ def paper_detail(paper_id: str, offset: int = 0, limit: int = 0, u: dict = Depen
 
     limit=0 表示不分页（兼容旧调用）；前端用 limit 做首屏 + 增量加载。
     """
-    p = db.one("SELECT p.*, u.username AS owner_name FROM papers p "
-               "LEFT JOIN users u ON u.id=p.owner_id WHERE p.id=?", (paper_id,))
+    p = db.one(
+        "SELECT p.*, u.username AS owner_name, "
+        "(SELECT json_group_array(pc.collection_id) FROM paper_collections pc "
+        "WHERE pc.paper_id=p.id) AS collection_ids "
+        "FROM papers p LEFT JOIN users u ON u.id=p.owner_id WHERE p.id=?", (paper_id,))
+    p = _with_collection_ids(dict(p))
     if p is None or p["deleted_at"]:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
@@ -1416,40 +1436,51 @@ def list_collections(u: dict = Depends(require)):
     args = () if u["role"] == "admin" else (u["id"],)
     total = db.one(
         f"SELECT COUNT(*) AS n FROM papers p WHERE p.deleted_at IS NULL{vis}", args)["n"]
+    # 多对多：每库计数经关联表 JOIN（一篇挂 N 库 → 每个库各计一次）
     rows = db.all(
-        "SELECT c.id, c.name, c.parent_id, (SELECT COUNT(*) FROM papers p WHERE p.collection_id=c.id "
+        "SELECT c.id, c.name, c.parent_id, (SELECT COUNT(*) FROM paper_collections pc "
+        "JOIN papers p ON p.id=pc.paper_id WHERE pc.collection_id=c.id "
         "AND p.deleted_at IS NULL AND (p.visibility='shared' OR p.owner_id=?)) AS papers "
         "FROM collections c WHERE c.owner_id=? ORDER BY c.created_at",
         (u["id"], u["id"]),
     )
     nodes = [dict(r) for r in rows]
-    # 未分库：collection_id 为空或指向已删除库的论文（悬挂引用）——此前侧栏无归属，
-    # 出现「总数 90 但各库相加只有 88」的对不上
+    # 未分库：无任何挂链的论文（多对多下不存在悬挂引用——FK CASCADE 已兜底）
     unassigned = db.one(
         f"SELECT COUNT(*) AS n FROM papers p WHERE p.deleted_at IS NULL "
-        f"AND (p.collection_id IS NULL OR p.collection_id NOT IN (SELECT id FROM collections)){vis}",
+        f"AND NOT EXISTS(SELECT 1 FROM paper_collections pc WHERE pc.paper_id=p.id){vis}",
         args)["n"]
     # 他人库中的共享论文（我的库列表不含他人库 → 同样会造成数字差额）
     shared_rows = db.all(
-        "SELECT c.id, c.name, c.owner_id, COUNT(*) AS n FROM papers p "
-        "JOIN collections c ON c.id = p.collection_id "
+        "SELECT c.id, c.name, c.owner_id, COUNT(DISTINCT p.id) AS n FROM papers p "
+        "JOIN paper_collections pc ON pc.paper_id=p.id "
+        "JOIN collections c ON c.id = pc.collection_id "
         "WHERE p.deleted_at IS NULL AND c.owner_id<>? AND (p.visibility='shared' OR p.owner_id=?) "
         "GROUP BY c.id", (u["id"], u["id"]))
     shared_libs = [{"id": r["id"], "name": r["name"], "owner_id": r["owner_id"], "papers": r["n"],
                     "shared": True} for r in shared_rows]
-    # 汇总：父库计数含全部子孙
+    # 汇总：父库计数含全部子孙；子树 DISTINCT 去重——同一篇挂父库+子库只计一次
     children = {}
     for n in nodes:
         children.setdefault(n["parent_id"], []).append(n)
-    def rollup(nid):
+    def subtree_ids(nid):
+        out = []
         for ch in children.get(nid, []):
-            ch["papers_total"] = ch["papers"] + rollup(ch["id"])
-            rollup(ch["id"])
-        return sum(ch.get("papers_total", ch["papers"]) for ch in children.get(nid, []))
+            out.append(ch["id"])
+            out.extend(subtree_ids(ch["id"]))
+        return out
+    def distinct_count(ids):
+        if not ids:
+            return 0
+        ph = ",".join("?" * len(ids))
+        q = (f"SELECT COUNT(DISTINCT p.id) AS n FROM papers p "
+             f"JOIN paper_collections pc ON pc.paper_id=p.id WHERE pc.collection_id IN ({ph}) "
+             f"AND p.deleted_at IS NULL")
+        q += " AND (p.visibility='shared' OR p.owner_id=?)" if u["role"] != "admin" else ""
+        return db.one(q, tuple(ids) + args)["n"]
     roots = [n for n in nodes if not n["parent_id"]]
-    rollup(None)
     for n in nodes:
-        n.setdefault("papers_total", n["papers"])
+        n["papers_total"] = distinct_count([n["id"]] + subtree_ids(n["id"]))
     return {"total": total, "collections": nodes,
             "unassigned": unassigned, "shared_libs": shared_libs}
 
@@ -1508,39 +1539,14 @@ def _subtree_ids(cid: str) -> list[str]:
 
 @app.delete("/api/collections/{cid}")
 def delete_collection(cid: str, u: dict = Depends(require)):
-    """删除文献库（整个子树）；库内论文一并移入回收站（30 天可恢复）。
-
-    member 删含他人共享论文的库 → 403（共享论文的回收是 admin 权限）。
-    """
-    row = db.one("SELECT owner_id FROM collections WHERE id=?", (cid,))
-    if row is None or (row["owner_id"] != u["id"] and u["role"] != "admin"):
+    """删除文献库（整个子树）。语义见 core/libs.delete_subtree：
+    论文移出该库；摘后无主且属于自己的进回收站；他人的论文只摘链。"""
+    from core.libs import delete_subtree
+    r = delete_subtree(cid, u["id"], u["role"] == "admin")
+    if not r:
         raise HTTPException(404, "文献库不存在")
-    ids = _subtree_ids(cid)
-    ph = ",".join("?" * len(ids))
-    papers = db.all(
-        f"SELECT id, owner_id, visibility, title FROM papers "
-        f"WHERE collection_id IN ({ph}) AND deleted_at IS NULL", ids)
-    if u["role"] != "admin" and any(
-            p["visibility"] == "shared" and p["owner_id"] != u["id"] for p in papers):
-        raise HTTPException(403, "库内含他人共享的论文——整库删除（含论文入回收站）仅管理员可执行")
-    n = 0
-    for p in papers:
-        for j in db.all(f"SELECT * FROM jobs WHERE paper_id=? AND status IN {_ACTIVE_JOBS}",
-                        (p["id"],)):
-            if j["remote_task_id"]:
-                mineru.cancel(j["remote_task_id"])
-            with db.write() as c:
-                c.execute("UPDATE jobs SET status='canceled' WHERE id=?", (j["id"],))
-        with db.write() as c:
-            c.execute("UPDATE papers SET deleted_at=datetime('now') WHERE id=?", (p["id"],))
-            c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (p["id"],))
-        audit(u["id"], "batch-delete", p["title"])
-        n += 1
-    from core.retrieval import invalidate_vec_cache
-    invalidate_vec_cache()   # 删库会连带进回收站论文的可见性，向量缓存统一在末尾失效一次
-    with db.write() as c:
-        c.execute(f"DELETE FROM collections WHERE id IN ({ph})", ids)
-    return {"ok": True, "libs": len(ids), "trashed": n}
+    audit(u["id"], "delete-collection", f"libs:{r['libs']} trashed:{r['trashed']}")
+    return r
 
 
 @app.patch("/api/papers/{paper_id}")
@@ -1554,12 +1560,6 @@ async def patch_paper(paper_id: str, request: Request):
     if p["owner_id"] != u["id"] and u["role"] != "admin":
         raise HTTPException(403, "只有上传者可修改")
     sets, args = [], []
-    cid = body.get("collection_id")
-    if "collection_id" in body:
-        if cid is not None and db.one("SELECT id FROM collections WHERE id=?", (cid,)) is None:
-            raise HTTPException(400, "目标文献库不存在")
-        sets.append("collection_id=?")
-        args.append(cid)
     for field in ("title", "authors", "journal", "year", "doi", "keywords", "abstract",
                   "volume", "issue", "pages"):
         if field in body:
@@ -1568,11 +1568,82 @@ async def patch_paper(paper_id: str, request: Request):
     if sets:
         with db.write() as c:
             c.execute(f"UPDATE papers SET {', '.join(sets)} WHERE id=?", (*args, paper_id))
-    # 可见性相关字段变更 → 向量矩阵缓存按用户 scope 缓存，须立即失效（T5）
-    if "visibility" in body or "collection_id" in body:
+    # 可见性变更 → 向量矩阵缓存按用户 scope 缓存，须立即失效（T5）
+    # （挂库变更走 /collections 端点，那里自行失效）
+    if "visibility" in body:
         from core.retrieval import invalidate_vec_cache
         invalidate_vec_cache()
     return {"ok": True}
+
+
+# ---------------- 挂库（多对多）：单篇与批量 ----------------
+def _link_change(u: dict, paper_ids: list[str], cid: str, link: bool) -> dict:
+    """加入/移出分库的公共实现。校验：论文可见 + 目标库归属（_safe_collection）。"""
+    if db.one("SELECT id FROM collections WHERE id=?", (cid,)) is None:
+        raise HTTPException(400, "目标文献库不存在")
+    _safe_collection(u, cid)
+    changed = 0
+    for pid in paper_ids:
+        p = db.one("SELECT id, owner_id FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
+        if p is None:
+            continue
+        if u["role"] != "admin" and p["owner_id"] != u["id"]                 and not db.one("SELECT 1 FROM papers WHERE id=? AND visibility='shared'", (pid,)):
+            continue   # 不可见论文跳过（不报错——批量口径）
+        with db.write() as c:
+            if link:
+                cur = c.execute("INSERT OR IGNORE INTO paper_collections(paper_id, collection_id) "
+                                "VALUES(?,?)", (pid, cid))
+                changed += cur.rowcount
+            else:
+                cur = c.execute("DELETE FROM paper_collections WHERE paper_id=? AND collection_id=?",
+                                (pid, cid))
+                changed += cur.rowcount
+    if changed:
+        from core.retrieval import invalidate_vec_cache
+        invalidate_vec_cache()
+    return {"ok": True, "changed": changed}
+
+
+@app.post("/api/papers/batch-link")
+async def batch_link_papers(request: Request):
+    """批量加入分库（多对多；原「批量移动」的新语义的一半）。"""
+    u = require(request)
+    body = await request.json()
+    ids = [x for x in (body.get("paper_ids") or []) if x]
+    cid = body.get("collection_id") or ""
+    if not ids or not cid:
+        raise HTTPException(400, "paper_ids 与 collection_id 必填")
+    return _link_change(u, ids, cid, link=True)
+
+
+@app.post("/api/papers/batch-unlink")
+async def batch_unlink_papers(request: Request):
+    """批量从分库移出（论文本体不动；全部库移出后落「未分库」）。"""
+    u = require(request)
+    body = await request.json()
+    ids = [x for x in (body.get("paper_ids") or []) if x]
+    cid = body.get("collection_id") or ""
+    if not ids or not cid:
+        raise HTTPException(400, "paper_ids 与 collection_id 必填")
+    return _link_change(u, ids, cid, link=False)
+
+
+@app.post("/api/papers/{paper_id}/collections")
+async def paper_add_collection(paper_id: str, request: Request):
+    """单篇加入分库（详情页 chips）。"""
+    u = require(request)
+    body = await request.json()
+    cid = body.get("collection_id") or ""
+    if not cid:
+        raise HTTPException(400, "collection_id 必填")
+    return _link_change(u, [paper_id], cid, link=True)
+
+
+@app.delete("/api/papers/{paper_id}/collections/{cid}")
+async def paper_remove_collection(paper_id: str, cid: str, request: Request):
+    """单篇移出分库（详情页 chips）。"""
+    u = require(request)
+    return _link_change(u, [paper_id], cid, link=False)
 
 
 # ---------------- 文库搜索 ----------------
@@ -2180,8 +2251,8 @@ async def acquire_import(request: Request):
             skipped.append({"title": title, "reason": "已在库中（内容重复）"})
             continue
         cid = _safe_collection(u, body.get("collection_id"))
+        ingest.attach_to_collection(paper_id, cid)
         with db.write() as c:
-            c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
             c.execute("UPDATE papers SET title=COALESCE(NULLIF(title,''),?) WHERE id=?", (title, paper_id))
             # 溯源：来源站点 + 外部链接（评审的可追溯要求）
             c.execute("UPDATE papers SET meta_source=COALESCE(meta_source,?) WHERE id=?",
@@ -2266,8 +2337,8 @@ async def import_directory(request: Request):
             skipped.append({"file": f.name, "reason": "已在库中（内容重复）"})
             continue
         cid = _safe_collection(u, body.get("collection_id"))
+        ingest.attach_to_collection(paper_id, cid)
         with db.write() as c:
-            c.execute("UPDATE papers SET collection_id=? WHERE id=?", (cid, paper_id))
             # 溯源：来源目录与原始文件名（评审的「获取可追溯」）
             c.execute("UPDATE papers SET meta_source=COALESCE(meta_source,'dir-import') WHERE id=?",
                       (paper_id,))

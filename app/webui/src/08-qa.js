@@ -463,10 +463,14 @@ function renderPickList(filter) {
   const cols = [...(state.collections || [])].sort((a, b) =>
     (b.name === '默认文献库') - (a.name === '默认文献库') ||
     (a.name || '').localeCompare(b.name || '', 'zh'));
+  // 多对多：一篇可能挂 N 库 → 分到首个命中的库（Set 勾选会去重 id，视觉不重复）
+  const taken = new Set();
   const groups = cols.map(c => ({
-    id: c.id, name: c.name, papers: papers.filter(p => p.collection_id === c.id && match(p)),
+    id: c.id, name: c.name,
+    papers: papers.filter(p => !taken.has(p.id) && (p.collection_ids || []).includes(c.id) && match(p)
+      ? (taken.add(p.id), true) : false),
   }));
-  const orphan = papers.filter(p => !p.collection_id && match(p));
+  const orphan = papers.filter(p => !(p.collection_ids || []).length && match(p));
   if (orphan.length) groups.push({id: '__orphan', name: '未分库', papers: orphan});
   groups.forEach(g => g.papers.sort(sortFn));
   const visible = groups.filter(g => g.papers.length);

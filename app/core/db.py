@@ -17,7 +17,7 @@ import re as _re
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # 重建表时会连带删除其上的索引（DROP TABLE 会删索引）——这些表重建后需逐个恢复。
 # 索引定义与 _SCHEMA / _init_schema 中的保持一致。
@@ -105,7 +105,6 @@ CREATE TABLE IF NOT EXISTS papers (
     page_count  INTEGER NOT NULL DEFAULT 0,
     file_size   INTEGER NOT NULL DEFAULT 0,
     parse_status TEXT NOT NULL DEFAULT 'pending',    -- pending|parsing|parsed|failed
-    collection_id TEXT,                              -- 所属文献库（NULL=未分库）
     journal     TEXT,                                -- 元数据校准后期刊
     abstract    TEXT,
     keywords    TEXT,                                -- JSON 数组
@@ -125,6 +124,13 @@ CREATE TABLE IF NOT EXISTS collections (
     owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     parent_id  TEXT,                                  -- 三级库：NULL=顶层库
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS paper_collections (
+    paper_id     TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (paper_id, collection_id)          -- 一篇可挂 N 库；同对同库唯一
 );
 
 CREATE TABLE IF NOT EXISTS parse_runs (
@@ -392,6 +398,8 @@ class Database:
                 self._migrate(c, row["version"])
             self._ensure_columns(c)   # 幂等兜底：任何形态的库都补齐列（新装/老库/中途版本）
             # 依赖兜底列的索引放在列补齐之后建（任意形态旧库都不炸）
+            c.execute("CREATE INDEX IF NOT EXISTS idx_pc_coll "
+                      "ON paper_collections(collection_id)")
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_hash "
                       "ON papers(file_hash) WHERE deleted_at IS NULL")
             # 高频查询索引：文库列表排序 / statuses 按论文聚合 / 用量按论文聚合
@@ -541,7 +549,7 @@ class Database:
 
     def _ensure_columns(self, c: sqlite3.Connection) -> None:
         """列级兜底：全部走 _add_col 幂等判断，修复历史上『列只存在于迁移分支』的新装缺列问题。"""
-        for col in ("collection_id", "journal", "abstract", "keywords", "doi",
+        for col in ("journal", "abstract", "keywords", "doi",
                     "volume", "issue", "pages", "meta_source", "meta_verified_at", "deleted_at"):
             self._add_col(c, "papers", col, "TEXT")
         self._add_col(c, "collections", "parent_id", "TEXT")
@@ -565,6 +573,15 @@ class Database:
         # 已下线功能的残留表（block_notes 段落批注 / block_merges 段落合并）一律清除。
         c.execute("DROP TABLE IF EXISTS block_notes")
         c.execute("DROP TABLE IF EXISTS block_merges")
+        if from_v < 19:
+            # v19：分库多对多——papers.collection_id 单值 → paper_collections 关联表。
+            # 回填既有挂链后删旧列（新语义：一篇可挂 N 库；删库摘链、无主才进回收站）。
+            cols = {r[1] for r in c.execute("PRAGMA table_info(papers)").fetchall()}
+            if "collection_id" in cols:
+                c.execute(
+                    "INSERT OR IGNORE INTO paper_collections(paper_id, collection_id) "
+                    "SELECT id, collection_id FROM papers WHERE collection_id IS NOT NULL")
+                c.execute("ALTER TABLE papers DROP COLUMN collection_id")
         if from_v < 18:
             # v18：死列清理——用量全部现算（user_quotas 快照列从未有读写，
             # parse_runs 的远程 id/目录实际记录在 jobs.remote_task_id 与 MinerU 侧）

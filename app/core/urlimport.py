@@ -12,6 +12,7 @@ import httpx
 
 from . import ingest
 from .db import db
+from .ingest import attach_to_collection
 
 _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
@@ -64,7 +65,7 @@ def import_paper_from_url(user_id: int, url: str, *, visibility: str = "shared",
                                       title or fname)
     if collection_id:
         with db.write() as c:
-            c.execute("UPDATE papers SET collection_id=? WHERE id=?", (collection_id, paper_id))
+            attach_to_collection(paper_id, collection_id)
     if meta:
         sets, args = [], []
         for k in ("title", "authors", "year", "journal", "doi", "abstract"):

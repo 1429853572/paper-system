@@ -68,17 +68,29 @@ async function renderMeta() {
     <div class="card"><h3>References (${refs.references.length}) <input id="ref-search" placeholder="搜索…" style="width:140px; font-size: var(--fs-sm); margin-left:8px; display:inline-block"></h3>
       <div class="ref-list" id="ref-list"></div></div>
     <div class="card"><h3>${icon('folder')} 分库</h3>
-      <select id="m-collection" style="max-width:240px"><option value="">未分库</option></select></div>`;
+      <div id="m-collection-chips" class="chip-row"></div>
+      <select id="m-collection-add" style="max-width:200px;font-size: var(--fs-sm)"></select></div>`;
 
   renderCiteCard();
 
-  // 分库下拉
-  const colSel = $('#m-collection');
-  state.collections.forEach(c2 => colSel.insertAdjacentHTML('beforeend',
-    `<option value="${c2.id}" ${paper.collection_id === c2.id ? 'selected' : ''}>${esc(c2.name)}</option>`));
-  colSel.onchange = async () => {
-    await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: colSel.value || null})});
-    toast('已移动'); await refreshLib();
+  // 分库多选 chips（多对多：一篇可挂 N 库；×移出，下拉加入）
+  const linked = paper.collection_ids || [];
+  const chipRow = $('#m-collection-chips');
+  chipRow.innerHTML = linked.length
+    ? linked.map(cid => {
+        const c2 = state.collections.find(x => x.id === cid);
+        return `<span class="chip">${icon('folder', 12)} ${esc(c2?.name || cid)}
+          <button class="hover-only" title="从此库移出" onclick="unlinkPaper('${pid}','${cid}')">${icon('close', 12)}</button></span>`;
+      }).join('')
+    : '<span class="muted" style="font-size: var(--fs-sm)">未分库</span>';
+  const addSel = $('#m-collection-add');
+  addSel.innerHTML = '<option value="">+ 加入库…</option>' + state.collections
+    .filter(c2 => !linked.includes(c2.id))
+    .map(c2 => `<option value="${c2.id}">${esc(c2.name)}</option>`).join('');
+  addSel.onchange = async () => {
+    if (!addSel.value) return;
+    await api('/api/papers/' + pid + '/collections', {method: 'POST', body: JSON.stringify({collection_id: addSel.value})});
+    toast('已加入'); addSel.value = ''; await refreshLib(); renderMeta();
   };
 
   // 星级
@@ -114,6 +126,12 @@ async function renderMeta() {
 
 /* 元数据编辑：内联输入框，不弹 prompt 链（原来一次要弹 6 个框）。
    卷/期/页是引用格式需要的字段，一并在这里补。 */
+window.unlinkPaper = async (pid, cid) => {
+  if (!(await uiConfirm('从此库移出？（论文本体与译文不受影响；全部库移出后落「未分库」）',
+                        {title: '移出分库', danger: true}))) return;
+  await api(`/api/papers/${pid}/collections/${cid}`, {method: 'DELETE'});
+  toast('已移出'); await refreshLib(); renderMeta();
+};
 window.editMeta = (pid) => { state._metaEdit = true; renderMeta(); };
 window.cancelMeta = () => { state._metaEdit = false; renderMeta(); };
 window.saveMeta = async (pid) => {

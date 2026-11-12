@@ -146,7 +146,7 @@ async function renderCollectionsPage(preset = null) {
     const trBadge = s.translating ? `<span class="badge run">${icon('globe')}${tj ? tj.done + '/' + tj.total : ''}</span>`
       : tj?.status === 'done' ? "<span class=\"badge ok\">译" + icon('check') + "</span>"
       : tj?.status === 'failed' ? "<span class=\"badge err\">译" + icon('close') + "</span>" : '<span class="muted">—</span>';
-    const owner = d.collections.find(c => c.id === p.collection_id);
+    const owner = d.collections.find(c => (p.collection_ids || []).includes(c.id));
     return `<tr class="lib-paper-row" onclick="viewPaper('${p.id}')">
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${selBucket(scopeKey).has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
@@ -181,7 +181,7 @@ async function renderCollectionsPage(preset = null) {
           ${sel ? `<button class="btn small primary" onclick="libUpload('${sel}')">${icon('upload')} 上传</button>
           <button class="btn small" onclick="addSubLib('${sel}')" ${treeDepth(sel) >= 2 ? 'disabled title="最多三级"' : ''}>${icon('plus')}子库</button>
           <button class="btn small" title="重命名" onclick="renameLib('${sel}', '${selNameArg}')">${icon('edit')}</button>
-          <button class="btn small danger hover-only" title="删除库（整棵子树进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
+          <button class="btn small danger hover-only" title="删除库（论文移出该库；无主论文进回收站）" onclick="delLib('${sel}', '${selNameArg}')">${icon('trash')}</button>` : ''}
         </div>
         ${subLibs.length ? `<div class="lib-subbar">
           <span class="muted" style="font-size: var(--fs-sm)">子库：</span>
@@ -326,9 +326,10 @@ window.libCk = cid => {
 window.libCkAll = async (cid, on) => {
   const bucket = selBucket(cid);
   if (on) {
-    // 全选【当前范围】的全部论文（跨页）——后端 all=1 返回范围内所有 id
+    // 全选【当前范围】的全部论文（跨页）——后端 all=1；范围=子树（与列表查询一致）
     try {
-      const scope = cid === 'all' ? '' : `collection_id=${encodeURIComponent(cid)}`;
+      const ids = cid === 'all' ? [] : [cid, ...colDescendants(cid)];
+      const scope = ids.length ? `collection_id=${encodeURIComponent(ids.join(','))}` : '';
       const d = await api(`/api/papers?all=1${scope ? '&' + scope : ''}`);
       (d.papers || []).forEach(p => { bucket.add(p.id); state.selected.add(p.id); });
     } catch (e) { toast(friendlyError(e, '全选失败')); return; }
@@ -444,7 +445,7 @@ window.delLib = async (cid, name) => {
   walk(cid);
   paperN += (kids.find(c => c.id === cid)?.papers_total ?? 0);
   const scope = `${libN ? `${libN} 个子库、` : ''}库内 ${paperN} 篇论文`;
-  if (!(await uiConfirm(`删除文献库「${name}」？${scope}将一并移入回收站（30 天内可恢复）`,
+  if (!(await uiConfirm(`删除文献库「${name}」？论文将移出该库；不再属于任何库的论文进回收站（30 天内可恢复）`,
                         {title: '删除文献库'}))) return;
   await api('/api/collections/' + cid, {method: 'DELETE'});
   toast('已删除'); await refreshLib();

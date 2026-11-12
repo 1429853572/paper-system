@@ -73,7 +73,7 @@ function renderCollections() {
     e.stopPropagation();
     const cid = e.target.closest('.col-item').dataset.id;
     const name = state.collections.find(c => c.id === cid)?.name || '';
-    if (!(await uiConfirm(`删除文献库「${name}」？其子库与库内论文将一并移入回收站（30 天内可恢复）`,
+    if (!(await uiConfirm(`删除文献库「${name}」？其子库一并删除；论文移出该库，不再属于任何库的论文进回收站（30 天内可恢复）`,
                            {title: '删除文献库', anchor: e.currentTarget}))) return;
     await api('/api/collections/' + cid, {method: 'DELETE'});
     if (state.currentCollection === cid) state.currentCollection = '';
@@ -320,7 +320,7 @@ $('#ident-btn').onclick = async () => {
     const nopdf = d.results.filter(x => x.status === 'no_pdf').length;
     const nf = d.results.filter(x => x.status === 'not_found').length;
     let msg = q ? `已导入 ${q} 篇并开始解析` : '没有可导入的条目';
-    if (dup) msg += `，${dup} 篇已在库跳过`;
+    if (dup) msg += `，${dup} 篇已在库——已挂进当前库`;
     if (nopdf) msg += `，${nopdf} 篇无公开 PDF`;
     if (nf) msg += `，${nf} 条未识别`;
     toast(msg, 4000);
@@ -439,7 +439,10 @@ async function uploadFiles(files, targetCid) {
       });
       const res = (d.results || [])[0] || {};
       if (res.status === 'rejected') { up.phase = 'error'; up.msg = res.reason || '被拒收'; rejN++; }
-      else if (res.status === 'duplicate') { state.uploads.delete(f.name); dupN++; }
+      else if (res.status === 'duplicate') {
+        state.uploads.delete(f.name); dupN++;
+        if (res.linked) { setTimeout(() => toast('该内容已在其他库——已挂进当前库（同一份，不重复占用）'), 400); }
+      }
       else { state.uploads.delete(f.name); okN++; }
       await refreshLib();
       if (up.phase === 'error') renderPapers();

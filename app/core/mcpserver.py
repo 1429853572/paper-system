@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime
 
 from .db import db
+from .ingest import attach_to_collection
 
 _READ_TOOLS = [
     ("search_papers", "按标题/作者关键词搜索文献库", {
@@ -347,7 +348,7 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
             with db.write() as c:
                 c.execute("UPDATE papers SET title=COALESCE(NULLIF(title,''),?) WHERE id=?", (title, pid))
                 c.execute("UPDATE papers SET meta_source=COALESCE(meta_source,'acquire') WHERE id=?", (pid,))
-                c.execute("UPDATE papers SET collection_id=? WHERE id=?", (default_cid, pid))
+                attach_to_collection(pid, default_cid)
                 if it.get("authors"):
                     c.execute("UPDATE papers SET authors=? WHERE id=?", (it["authors"][:500], pid))
                 if it.get("year"):
