@@ -332,9 +332,10 @@ if (synPop) {
   const ids = (window.__T.state._libScopeAll || window.__T.state._libScopePapers || []).length;
   ok('导出范围缓存存在（_libScopeAll 已随渲染写入）', ids > 0, 'ids=' + ids);
   const scopeN = doc.querySelector('#exp-scope-n');
+  const allN = (window.__T.state._libScopeAll || []).length;
   ok('导出弹层范围数=全量 total（非当前页数）',
-     !!scopeN && Number(scopeN.textContent) === (window.__T.state._scopeAllIds ? 1 : 1),
-     scopeN ? scopeN.textContent : '无元素');
+     !!scopeN && Number(scopeN.textContent) === allN,
+     `显示=${scopeN ? scopeN.textContent : '无'} 全量=${allN}`);
 }
 
 // 9b) 批量条「加入库…/从本库移出」（多对多挂链 UI；batch-link/batch-unlink）
