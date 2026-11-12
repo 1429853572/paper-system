@@ -551,6 +551,7 @@ class Database:
         self._add_col(c, "users", "disabled", "INTEGER NOT NULL DEFAULT 0")
         self._add_col(c, "jobs", "batch_id", "TEXT")
         self._add_col(c, "papers", "acq_task_id", "TEXT")
+        self._add_col(c, "papers", "abstract_src", "TEXT")   # 摘要块 id JSON——翻译完成后按 id 精确回填中文摘要
         self._add_col(c, "syntheses", "evidence", "TEXT")
         # survey-writer 升级：冻结引用键表 / 双向校验结果 / 发起参数(axis/tier/style/purpose)
         self._add_col(c, "syntheses", "cite_table", "TEXT")

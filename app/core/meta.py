@@ -7,23 +7,56 @@ import re
 from .db import db
 
 
-def extract_abstract_from_blocks(blocks: list) -> str:
-    """规则提取摘要：Abstract 小节的正文块拼接。"""
-    texts = []
+def extract_abstract_blocks(blocks: list) -> tuple[str, list[str]]:
+    """规则提取摘要：Abstract 小节的正文块拼接。返回 (文本, 块id 列表)——
+    块 id 存 papers.abstract_src，翻译完成后按 id 精确取译文回填中文摘要
+    （双栏论文的 section_path 有噪声，翻译期再定位不可靠，须在解析期锁定）。
+
+    blocks 先按 (页码, bbox 左上 y, x) 几何排序——MinerU 的 block_index 在
+    部分版面（跨栏/图文混排）下不是阅读序，实测会把小节正文排到摘要前。"""
+    def _pos(b):
+        k = b.keys()   # dict 与 sqlite3.Row 通用
+        page = b["page_index"] if "page_index" in k else 0
+        try:
+            box = json.loads(b["bbox"])
+            if isinstance(box, list) and box and isinstance(box[0], list):
+                box = box[0]
+            return (page, float(box[1]), float(box[0]))
+        except Exception:
+            return (page, 9e9, 9e9)
+    blocks = sorted(blocks, key=_pos)
+    texts: list[str] = []
+    ids: list[str] = []
     in_abs = False
     for b in blocks:
         sec = (b["section_path"] or "").lower()
-        if re.search(r"\babstract\b", sec):
-            in_abs = True
-            continue
-        if in_abs:
-            # 进入下一节（Introduction 等）即结束
-            if re.search(r"\b(introduction|keywords|keywords:\s*)\b", sec) or b["type"] == "title":
-                break
-            t = (b["text"] or "").strip()
-            if t and b["type"] not in ("page_number", "aside_text", "header", "footer"):
+        t = (b["text"] or "").strip()
+        is_abs_sec = bool(re.search(r"\babstract\b", sec))
+        if not in_abs:
+            # 锚点 A：Abstract 标题块（标准版式）→ 从其后开始收
+            if b["type"] == "title" and (re.fullmatch(r"abstract[:\s]*", t, re.I) or is_abs_sec):
+                in_abs = True
+            # 锚点 B：无独立标题的版式——正文块自带 abstract 小节归属 → 直接收
+            elif is_abs_sec and b["type"] == "text":
                 texts.append(t)
-    return "\n".join(texts)[:3000]
+                ids.append(b["block_id"])
+            continue
+        # 已进入摘要：进入下一节（Introduction/Keywords/编号小节）即结束；
+        # 重复的 Abstract 标题（多 run JOIN/版面重复）跳过不 break
+        if re.search(r"\b(introduction|keywords)\b", sec):
+            break
+        if b["type"] == "title":
+            if re.fullmatch(r"abstract[:\s]*", t, re.I):
+                continue
+            break
+        if t and b["type"] not in ("page_number", "aside_text", "header", "footer"):
+            texts.append(t)
+            ids.append(b["block_id"])
+    return "\n".join(texts)[:3000], ids
+
+
+def extract_abstract_from_blocks(blocks: list) -> str:
+    return extract_abstract_blocks(blocks)[0]
 
 
 def _first_pages_context(paper_id: str, max_chars: int = 9000) -> str:
@@ -48,6 +81,51 @@ def _first_pages_context(paper_id: str, max_chars: int = 9000) -> str:
     return "\n\n".join(out)
 
 
+def _merge_abstract(cur_abs: str | None, zh_abs: str | None) -> str:
+    """abstract 字段收敛为中文摘要：已中文保持；英文原文/空 → 用翻译覆盖。"""
+    cur_abs = (cur_abs or "").strip()
+    zh_abs = (zh_abs or "").strip()
+    if cur_abs and re.search(r"[\u4e00-\u9fff]", cur_abs):
+        return cur_abs[:3000]
+    return (zh_abs or cur_abs)[:3000]
+
+
+def refresh_abstract_from_translations(paper_id: str) -> bool:
+    """翻译完成后把 papers.abstract 收敛为忠实翻译（零 LLM 成本）。
+
+    块来源优先 papers.abstract_src（解析期锁定的摘要块 id）；旧解析无该列
+    时现场跑规则提取器定位。摘要块译文存在且非空才回填，否则不动。"""
+    ids: list[str] = []
+    src = db.one("SELECT abstract_src FROM papers WHERE id=?", (paper_id,))
+    if src and src["abstract_src"]:
+        try:
+            ids = json.loads(src["abstract_src"])
+        except (TypeError, ValueError):
+            ids = []
+    if not ids:
+        run = db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
+                     "ORDER BY created_at DESC LIMIT 1", (paper_id,))
+        if run is None:
+            return False
+        blocks = db.all(
+            "SELECT block_id, type, section_path, text, page_index, bbox FROM blocks "
+            "WHERE parse_run_id=? ORDER BY block_index", (run["id"],))
+        _, ids = extract_abstract_blocks(blocks)
+    if not ids:
+        return False
+    marks = ",".join("?" * len(ids))
+    rows = db.all(
+        f"SELECT t.text_zh FROM translations t JOIN blocks b ON b.block_id=t.block_id "
+        f"WHERE t.block_id IN ({marks}) AND t.text_zh<>'' "
+        f"ORDER BY b.block_index", tuple(ids))
+    zh = "\n".join((r["text_zh"] or "").strip() for r in rows if (r["text_zh"] or "").strip())
+    if not zh:
+        return False
+    with db.write() as c:
+        c.execute("UPDATE papers SET abstract=? WHERE id=?", (zh[:3000], paper_id))
+    return True
+
+
 def extract_meta_llm(user_id: int, paper_id: str) -> dict:
     """用用户 chat key 从首页提取作者/期刊/年份/DOI/关键词。"""
     from .llm import LLMClient, resolve_llm
@@ -65,9 +143,10 @@ def extract_meta_llm(user_id: int, paper_id: str) -> dict:
         {"role": "system", "content":
             "从论文首页文本中提取文献元数据，只输出 JSON：\n"
             '{"authors": ["姓 名", ...], "journal": "期刊/会议名，没有则空串", '
-            '"year": "2024", "doi": "", "keywords": ["...", ...], "abstract_zh": "中文摘要（3句内）"}\n'
+            '"year": "2024", "doi": "", "keywords": ["...", ...], "abstract_zh": "Abstract 的完整中文翻译"}\n'
             "规则：authors 按原文顺序；year 取发表年份；keywords 无则空数组；"
-            "abstract_zh 依据 Abstract 部分概括，不编造。"},
+            "abstract_zh 是 Abstract 部分的完整忠实中文翻译——逐句对应原文，"
+            "不概括、不删减、不添加评价。"},
         {"role": "user", "content": f"标题：{paper['title']}\n\n{context}"},
     ], max_tokens=1500)
     try:
@@ -79,13 +158,15 @@ def extract_meta_llm(user_id: int, paper_id: str) -> dict:
     # AI 补全语义：已有（校准/规则/人工）字段优先，AI 只填空缺
     cur = db.one("SELECT authors, journal, year, doi, keywords, abstract FROM papers WHERE id=?",
                  (paper_id,))
+    # abstract 字段语义 = 中文摘要（原文在 PDF 块里，点击定位可达）：
+    # 现值已是中文 → 保持；现值是英文原文（规则提取）或空 → 用完整翻译覆盖
     merged = {
         "authors": (cur["authors"] or ", ".join(data.get("authors", [])))[:400],
         "journal": (cur["journal"] or data.get("journal", ""))[:200],
         "year": (cur["year"] or str(data.get("year", "")))[:8],
         "doi": (cur["doi"] or data.get("doi", ""))[:100],
         "keywords": (cur["keywords"] or json.dumps(data.get("keywords", []), ensure_ascii=False))[:500],
-        "abstract": (cur["abstract"] or data.get("abstract_zh", ""))[:3000],
+        "abstract": _merge_abstract(cur["abstract"], data.get("abstract_zh", "")),
     }
     with db.write() as c:
         c.execute(

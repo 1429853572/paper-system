@@ -335,12 +335,13 @@ class Scheduler:
         if title:
             with db.write() as c:
                 c.execute("UPDATE papers SET title=? WHERE id=?", (title, paper_id))
-        from .meta import extract_abstract_from_blocks
-        abs_blocks = db.all("SELECT type, section_path, text FROM blocks WHERE parse_run_id=?", (run_id,))
-        abstract = extract_abstract_from_blocks(abs_blocks)
+        from .meta import extract_abstract_blocks
+        abs_blocks = db.all("SELECT block_id, type, section_path, text FROM blocks WHERE parse_run_id=?", (run_id,))
+        abstract, abs_ids = extract_abstract_blocks(abs_blocks)
         if abstract:
             with db.write() as c:
-                c.execute("UPDATE papers SET abstract=? WHERE id=?", (abstract, paper_id))
+                c.execute("UPDATE papers SET abstract=?, abstract_src=? WHERE id=?",
+                          (abstract, json.dumps(abs_ids), paper_id))
 
         self._update(job["id"], status="done", progress_done=1, progress_total=1)
         log.info("paper %s 解析完成: %d blocks, %d chunks", paper_id, n_blocks, n_chunks)

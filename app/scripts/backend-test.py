@@ -146,6 +146,36 @@ with db.write() as c:
     c.execute("DELETE FROM papers WHERE id='px1'")
     c.execute("DELETE FROM jobs WHERE id IN (90001, 90002)")
 
+print("== 摘要提取与收敛（extract_abstract_blocks / _merge_abstract）==")
+from core.meta import extract_abstract_blocks, _merge_abstract
+
+def B(i, typ, sec, text, page, y, x):
+    return {"block_id": f"ab{i}", "type": typ, "section_path": sec, "text": text,
+            "page_index": page, "bbox": json.dumps([x, y, x + 5, y + 1])}
+
+# block_index 是乱的（MinerU 噪声），bbox 排序后才是阅读序
+blocks = [
+    B(0, "text", "Paper > 1. Introduction", "Intro paragraph here.", 0, 500, 100),
+    B(1, "title", "Paper > Abstract", "Abstract", 0, 100, 100),
+    B(2, "text", "Paper > Abstract", "The abstract body sentence one.", 0, 130, 100),
+    B(3, "title", "Paper > 1. Introduction", "1. Introduction", 0, 400, 100),
+]
+text, ids = extract_abstract_blocks(blocks)
+ok("bbox 几何排序修正阅读序（block_index 乱序不影响）",
+   text == "The abstract body sentence one." and ids == ["ab2"], text[:40])
+
+blocks2 = [  # 无标题版式：正文块自带 abstract 小节归属 → 直接收
+    B(0, "text", "Paper > Abstract", "Abs body without heading block.", 0, 120, 100),
+    B(1, "title", "Paper > 1. Introduction", "1. Introduction", 0, 400, 100),
+]
+t2, i2 = extract_abstract_blocks(blocks2)
+ok("无标题版式（sec 归属直收）", t2 == "Abs body without heading block." and i2 == ["ab0"])
+
+ok("merge：已中文保持", _merge_abstract("中文摘要", "新翻译") == "中文摘要")
+ok("merge：英文原文让位于翻译", _merge_abstract("An English abstract.", "中文翻译") == "中文翻译")
+ok("merge：空 → 翻译", _merge_abstract("", "中文翻译") == "中文翻译")
+ok("merge：翻译缺失 → 保留原文", _merge_abstract("English text", "") == "English text")
+
 print("== 跨页参考文献合并（get_references）==")
 from core.meta import get_references
 with db.write() as c:

@@ -157,6 +157,12 @@ async def _startup() -> None:
                               error="已被更新的翻译任务取代（术语表/强制重译）")
         else:
             scheduler._update(job["id"], status="done", progress_done=n, progress_total=n)
+            # 摘要收敛为忠实翻译：译文刚生成，用摘要块译文覆盖 3 句总结（零 LLM 成本）
+            from core.meta import refresh_abstract_from_translations
+            try:
+                refresh_abstract_from_translations(job["paper_id"])
+            except Exception as e:  # noqa: BLE001 —— 回填失败不影响翻译任务状态
+                log.warning("摘要回填失败 %s: %s", job["paper_id"], str(e)[:120])
 
     scheduler.translate_handler = _translate_handler
     scheduler.start()
