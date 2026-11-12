@@ -2553,6 +2553,35 @@ async function showSynthesisReport(sid) {
       .replace(/^# /gm, '## ')
       .replace(/[【\[]E\d{1,4}[】\]]/g, '');
     rep.innerHTML = mdLite(body);
+    // 作者-年份引用高亮 + 点击滚到参考文献对应条目
+    const CITE_RE = /[（(]([^（）()]{1,80}?,\s*20[12]\d[a-z]?)[）)]/g;
+    const walker = document.createTreeWalker(rep, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+    for (const node of textNodes) {
+      const text = node.textContent;
+      if (!CITE_RE.test(text)) continue;
+      CITE_RE.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      for (const m of text.matchAll(CITE_RE)) {
+        const start = m.index, end = m.index + m[0].length;
+        if (start > last) frag.appendChild(document.createTextNode(text.slice(last, start)));
+        const span = document.createElement('span');
+        span.className = 'cite-key';
+        span.textContent = m[0];
+        const key = m[1].trim();
+        span.onclick = () => {
+          const row = $$('#syn-report ~ * .syn-ref-row, .syn-refs .syn-ref-row')
+            .find(r => r.textContent.includes(key.slice(0, 24)));
+          if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.style.background = 'var(--tint-primary)'; setTimeout(() => row.style.background = '', 1200); }
+        };
+        frag.appendChild(span);
+        last = end;
+      }
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      node.replaceWith(frag);
+    }
   }
   // 换框架重写
   $$('#page-tasks [data-fw-rewrite]').forEach(b => b.onclick = async () => {

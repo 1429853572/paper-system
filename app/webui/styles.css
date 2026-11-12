@@ -1036,6 +1036,9 @@ table.list input[type=checkbox] { width: auto; }
 .syn-fw-alts { display: flex; gap: 8px; flex-wrap: wrap; }
 .syn-refs { padding: 10px 16px; }
 .syn-refs-list { max-height: 300px; overflow-y: auto; margin-top: 6px; }
+/* 综述正文的作者-年份引用高亮（可点击跳到参考文献条目） */
+.cite-key { color: var(--primary); cursor: pointer; }
+.cite-key:hover { text-decoration: underline; }
 .syn-ref-row { display: flex; align-items: center; gap: 10px; padding: 5px 2px;
                border-bottom: 1px dashed var(--line-soft); font-size: var(--fs-sm); }
 .syn-ref-row.weak { opacity: .6; }
