@@ -3549,6 +3549,10 @@ async function populateQaPicker() {
   if (!toggle) return;
   $('#qa-pick-count').textContent = state.qaPapers.size;
 }
+  // 库 id → 名（我的库 + 他人共享库统一解析）
+  const _lib_names = ids => ids.map(cid =>
+    ((state.collections || []).find(c => c.id === cid) || {}).name ||
+    ((state.sharedLibs || []).find(c => c.id === cid) || {}).name || cid).filter(Boolean);
 function renderPickList(filter) {
   const el = $('#qa-pick-list');
   if (!el) return;
@@ -3559,7 +3563,7 @@ function renderPickList(filter) {
       <input type="checkbox" ${state.qaPapers.has(p.id) ? 'checked' : ''} data-id="${p.id}">
       <span class="qp-title">${esc(p.title || p.id)}</span>
       ${p.year ? `<span class="qp-year">${esc(p.year)}</span>` : ''}${st}
-      ${(p.collection_ids || []).length > 1 ? `<span class="muted" style="font-size: var(--fs-xs)" title="${esc((p.collection_ids || []).map(cid => ((state.collections || []).find(c => c.id === cid) || {}).name).join(' · '))}">${esc((p.collection_ids || []).map(cid => ((state.collections || []).find(c => c.id === cid) || {}).name).filter(Boolean).join('/'))}</span>` : ''}
+      ${(p.collection_ids || []).length > 1 ? `<span class="muted" style="font-size: var(--fs-xs)" title="${esc(_lib_names(p.collection_ids).join(' · '))}">${esc(_lib_names(p.collection_ids).join('/'))}</span>` : ''}
     </label>`;};
   // 按文献库分组；库多时默认折叠（展开状态记忆），搜索时自动全展开（跨组匹配要一眼可见）
   const papers = state.qaAllPapers || state.papers || [];   // boot 早期 qaAllPapers 可能未加载

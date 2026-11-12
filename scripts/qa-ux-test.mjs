@@ -16,8 +16,13 @@ const js = fs.readFileSync(path.join(UI, 'viewer.js'), 'utf8');
 const DATA = {
   '/api/me': { id: 1, username: 'tester', role: 'admin', llm_configured: { chat: true, translate: true } },
   '/api/chat/sessions': { sessions: [] },
-  '/api/collections': { total: 1, collections: [{ id: 'c1', name: '默认文献库', parent_id: null, papers: 1, papers_total: 1 }] },
-  '/api/papers': { total: 1, papers: [{ id: 'p1', title: 'Test Paper', parse_status: 'parsed', visibility: 'shared', owner_id: 1, page_count: 10, file_size: 1024 }] },
+  '/api/collections': { total: 1, collections: [{ id: 'c1', name: '默认文献库', parent_id: null, papers: 1, papers_total: 1 }],
+    shared_libs: [{ id: 'cs1', name: '合作者库', owner_id: 2, papers: 1, shared: true }] },
+  '/api/statuses': { statuses: {} },
+  // sharedLibs 走 /api/collections 的 shared_libs 字段 → loadCollections 读进 state
+  '/api/papers': { total: 2, papers: [
+    { id: 'p1', title: 'Test Paper', parse_status: 'parsed', visibility: 'shared', owner_id: 1, page_count: 10, file_size: 1024, collection_ids: ['c1'] },
+    { id: 'p2', title: 'Multi Lib Paper', parse_status: 'parsed', visibility: 'shared', owner_id: 1, page_count: 10, file_size: 1024, collection_ids: ['c1', 'cs1'] }] },
   '/api/papers/p1': {
     paper: { id: 'p1', title: 'Test Paper', authors: 'A', year: '2025', journal: 'J', doi: '',
              keywords: '[]', abstract: 'This paper studies testing.', parse_status: 'parsed',
@@ -223,6 +228,33 @@ await new Promise((r) => setTimeout(r, 200));
 ok('标识符导入请求发出（含步骤8引文提取共 2 次）', identCalls.length === 2 &&
    identCalls[1].text.includes('10.1234/abc'));
 ok('上传弹层关闭+列表刷新', doc.querySelector('#upload-pop').hidden);
+
+// 多对多：QA 选文共享库分组 + 多库论文标识
+{
+  window.__T.state.qaAllPapers = [
+    { id: 'p1', title: 'Test Paper', parse_status: 'parsed', visibility: 'shared', owner_id: 1, collection_ids: ['c1'] },
+    { id: 'p2', title: 'Multi Lib Paper', parse_status: 'parsed', visibility: 'shared', owner_id: 1, collection_ids: ['c1', 'cs1'] },
+  ];
+  window.__T.state.sharedLibs = [{ id: 'cs1', name: '合作者库', owner_id: 2, papers: 1, shared: true }];
+  window.__T.state.collections = [{ id: 'c1', name: '默认文献库', parent_id: null, papers: 1, papers_total: 1 }];
+  const panelBtn = doc.querySelector('#qa-pick-toggle');
+  if (panelBtn) {
+    panelBtn.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const body = doc.body.textContent;
+    ok('共享库分组出现（合作者库）', body.includes('合作者库'));
+    ok('多库论文行有归属标识', body.includes('默认文献库/合作者库'),
+       JSON.stringify({
+         list: doc.querySelector('#qa-pick-list')?.innerHTML.slice(0, 400) || '无列表',
+         rows: doc.querySelectorAll('.qa-pick-item').length,
+         papers: window.__T.state.qaAllPapers?.length,
+         cols: window.__T.state.collections?.length,
+         shared: window.__T.state.sharedLibs?.length,
+       }).slice(0, 500));
+  } else {
+    ok('选文面板入口存在（跳过多库断言）', false, '无 #qa-pick-toggle');
+  }
+}
 
 console.log(results.join('\n'));
 if (errors.length) {

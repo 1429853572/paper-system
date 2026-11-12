@@ -233,6 +233,54 @@ for _body, _want, _desc in _strip_cases:
     ok("E 剥离：" + _desc, _strip_ev_markers(_body, _tab, _ev) == _want,
        repr(_strip_ev_markers(_body, _tab, _ev)))
 
+print("== v19 读过滤与删库第三态 ==")
+import json as _json
+from core.libs import delete_subtree
+from server.main import list_papers, list_collections
+# 造数：admin 论文挂进 member 库（模拟「收藏他人共享论文」），member 只挂此库
+with db.write() as c:
+    c.execute("INSERT OR IGNORE INTO users(id,username,password_hash,role) VALUES(2,'member_u','x','member')")
+    c.execute("INSERT INTO collections(id,name,owner_id) VALUES('mL','我的库',2)")
+    c.execute("INSERT INTO collections(id,name,owner_id) VALUES('mL2','我的库2',2)")
+    c.execute("INSERT INTO papers(id,owner_id,visibility,file_hash,title,parse_status) "
+              "VALUES('pvis',1,'shared','hvis','admin 的共享论文','parsed')")
+    c.execute("INSERT INTO paper_collections(paper_id,collection_id) VALUES('pvis','mL')")
+# EXISTS 过滤：member 按自己库查能看到 admin 的共享论文
+d = list_papers(q="", status="", trash=0, collection_id="mL", page=0, page_size=10, all=0,
+                u={"id": 2, "role": "member"})
+ok("EXISTS 过滤：member 按库可见他人共享论文", any(x["id"] == "pvis" for x in d["papers"]))
+d2 = list_papers(q="", status="", trash=0, collection_id="none", page=0, page_size=10, all=0,
+                 u={"id": 2, "role": "member"})
+ok("collection_id=none（无挂链）口径正确",
+   all((x.get("collection_ids") or []) == [] for x in d2["papers"]))
+# 行带 collection_ids 数组（list 端点形状）
+d3 = list_papers(q="", status="", trash=0, collection_id="", page=0, page_size=10, all=0,
+                 u={"id": 1, "role": "admin"})
+ok("list 行带 collection_ids 数组", isinstance(d3["papers"][0].get("collection_ids"), list))
+# 计数：member 两库各挂一查 DISTINCT
+dc = list_collections(u={"id": 2, "role": "member"})
+mL = next(c for c in dc["collections"] if c["id"] == "mL")
+ok("collections 计数走关联表", mL["papers"] == 1, str(mL))
+# 删库第三态：member 删自己的库（内有 admin 的共享论文）→ 他人论文只摘链不回收
+r = delete_subtree("mL", 2, False)
+ok("删库第三态：他人论文只摘链不回收",
+   r["unlinked"] == 1 and r["trashed"] == 0
+   and db.one("SELECT deleted_at FROM papers WHERE id='pvis'")["deleted_at"] is None)
+# 软删不摘链 + restore 回原挂链
+attach_to_collection("pvis", "mL2")
+with db.write() as c:
+    c.execute("UPDATE papers SET deleted_at=datetime('now') WHERE id='pvis'")
+before = linked_collections("pvis")
+with db.write() as c:
+    c.execute("UPDATE papers SET deleted_at=NULL WHERE id='pvis'")
+after = linked_collections("pvis")
+ok("软删不摘链 + restore 回原挂链", before == after == ["mL2"], f"{before}→{after}")
+with db.write() as c:
+    c.execute("DELETE FROM paper_collections WHERE paper_id='pvis'")
+    c.execute("DELETE FROM papers WHERE id='pvis'")
+    c.execute("DELETE FROM collections WHERE id IN ('mL','mL2')")
+    c.execute("DELETE FROM users WHERE id=2")
+
 print("== 恢复查重（restore_clash）==")
 from core.ingest import restore_clash
 with db.write() as c:
