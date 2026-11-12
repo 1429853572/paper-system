@@ -126,13 +126,17 @@ def overrides_of(user_id: int) -> dict:
 
 
 def check_budget(user_id: int, overrides: dict | None = None) -> None:
-    """LLM 调用前的预算闸：超预算抛 BudgetExceeded。"""
+    """LLM 调用前的预算闸：超预算抛 BudgetExceeded。
+
+    花费折算强制用【全局单价表】——用户自设 pricing 只影响个人显示
+    （此前用户把模型单价设 0 即可让 month_cost=0，永久短路 admin 硬上限，
+    公共池开启时等于免费烧池）。"""
     if overrides is None:
         overrides = overrides_of(user_id)
     budget = budget_of(overrides, user_id)
     if budget <= 0:
         return
-    spent = month_cost(user_id, overrides)["total"]
+    spent = month_cost(user_id, _pricing_table(None))["total"]   # 全局表，忽略用户 pricing
     if spent >= budget:
         raise BudgetExceeded(spent, budget)
 

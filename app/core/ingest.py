@@ -118,16 +118,21 @@ def restore_clash(paper_id: str) -> dict | None:
     if row is None:
         return None
     return db.one(
-        "SELECT id, title FROM papers WHERE file_hash=? AND deleted_at IS NULL AND id<>?",
-        (row["file_hash"], paper_id))
+        "SELECT id, title FROM papers WHERE file_hash=? AND deleted_at IS NULL AND id<>? "
+        "AND (visibility='shared' OR owner_id=(SELECT owner_id FROM papers WHERE id=?))",
+        (row["file_hash"], paper_id, paper_id))
 
 
 def create_paper(user_id: int, file_hash: str, pages: int, size: int,
                  visibility: str, original_name: str) -> tuple[str, bool]:
     """返回 (paper_id, deduplicated)。同哈希未删除论文 → 复用不重复入库。"""
+    # 查重限「本人 + shared」：命中他人 private 时不再复用其 id（存在性泄露），
+    # 也不阻断本地上传（用户对自己合法副本有所有权）→ 配合 idx_papers_hash
+    # 改 (file_hash, owner_id) 后此处自然落新行。
     exist = db.one(
-        "SELECT id, owner_id, title FROM papers WHERE file_hash=? AND deleted_at IS NULL",
-        (file_hash,),
+        "SELECT id, owner_id, title FROM papers WHERE file_hash=? AND deleted_at IS NULL "
+        "AND (visibility='shared' OR owner_id=?)",
+        (file_hash, user_id),
     )
     if exist:
         return exist["id"], True

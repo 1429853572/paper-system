@@ -17,7 +17,7 @@ import re as _re
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 # 重建表时会连带删除其上的索引（DROP TABLE 会删索引）——这些表重建后需逐个恢复。
 # 索引定义与 _SCHEMA / _init_schema 中的保持一致。
@@ -408,8 +408,12 @@ class Database:
                       "ON jobs(status) WHERE status IN ('queued','pending_gate','running')")
             c.execute("CREATE INDEX IF NOT EXISTS idx_paper_notes_paper "
                       "ON paper_notes(paper_id)")
+            # 同内容去重键改 (file_hash, owner_id)：全局唯一会把「他人 private 同内容」
+            # 也挡掉——member 永远无法拥有与 A 私有相同字节的合法副本，且 upload dup
+            # 返回他人 paper_id 构成存在性泄露。per-owner 后：本人仍去重，跨用户互不影响。
+            c.execute("DROP INDEX IF EXISTS idx_papers_hash")
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_hash "
-                      "ON papers(file_hash) WHERE deleted_at IS NULL")
+                      "ON papers(file_hash, owner_id) WHERE deleted_at IS NULL")
             # 高频查询索引：文库列表排序 / statuses 按论文聚合 / 用量按论文聚合
             c.execute("CREATE INDEX IF NOT EXISTS idx_papers_list "
                       "ON papers(deleted_at, created_at DESC)")

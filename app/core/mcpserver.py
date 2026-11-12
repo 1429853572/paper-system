@@ -15,6 +15,7 @@ import os
 import uuid
 from datetime import datetime
 
+from .config import config
 from .db import db
 from .ingest import attach_to_collection
 
@@ -349,6 +350,22 @@ def run_tool(user_id: int, name: str, args: dict) -> dict:
                 except caj_mod.ConvertError as e:
                     skipped.append({"title": title, "reason": f"非 PDF 且转换失败: {str(e)[:110]}"})
                     continue
+            # MCP 通道与 HTTP 同闸：此前 acquire_cnki 无每日解析配额
+            _qrow = db.one("SELECT overrides FROM user_quotas WHERE user_id=?",
+                           (act["user_id"],))
+            try:
+                _qov = json.loads(_qrow["overrides"]) if _qrow and _qrow["overrides"] else {}
+            except ValueError:
+                _qov = {}
+            _used = db.one(
+                "SELECT COUNT(*) AS n FROM jobs WHERE user_id=? AND job_type='parse' "
+                "AND created_at>=date('now')", (act["user_id"],))["n"]
+            _limit = int(_qov.get("daily_parse_papers")
+                         or config.get("limits", "daily_parse_papers"))
+            if _used >= _limit:
+                skipped.append({"title": title,
+                                "reason": f"已达今日解析配额（{_used}/{_limit}）"})
+                continue
             try:
                 # is_admin 用真实角色：否则 MCP 通道能绕过 member 的页数限额
                 pages, _k = ingest.preflight_doc(data, fname or "paper.pdf",

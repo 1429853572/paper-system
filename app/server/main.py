@@ -207,15 +207,20 @@ def health():
 @app.post("/api/login")
 async def login(request: Request):
     body = await request.json()
-    ip = request.client.host if request.client else "?"
+    # 反代后 client.host 恒为 caddy 容器 IP → 限速退化成按用户名（爆破横向不受限、
+    # 锁号 DoS）。X-Forwarded-For 由本机 caddy 注入，取最后一跳=真实客户端。
+    xff = (request.headers.get("x-forwarded-for") or "").split(",")
+    ip = xff[-1].strip() if xff and xff[-1].strip() else (request.client.host if request.client else "?")
     uname = (body.get("username") or "").strip()
     try:
-        auth.check_login_rate(ip, uname)
+        auth.check_login_rate(ip, uname)          # IP+用户名双键（原）
+        auth.check_login_rate(ip)                 # 纯 IP 键：换用户名爆破同样受限
     except auth.AuthError as e:
         raise HTTPException(429, str(e))
     user = auth.authenticate(uname, body.get("password", ""))
     if user is None:
         auth.record_login_fail(ip, uname)
+        audit(None, "login-fail", f"ip={ip} user={uname}")   # 失败留痕（成功原本就有）
         raise HTTPException(401, "用户名或密码错误")
     token = auth.make_session(user["id"], user["role"], user.get("token_ver", 0))
     resp = JSONResponse({"id": user["id"], "username": user["username"], "role": user["role"]})
@@ -349,6 +354,8 @@ async def set_llm_settings(request: Request):
             conf = body.get(purpose)
             if conf is None:
                 continue
+            if u["role"] != "admin" and conf.get("base_url"):
+                _assert_public_url(conf["base_url"])   # BYOK base_url 服务端会主动请求——同堵 SSRF
             meta = {"base_url": conf.get("base_url", ""), "model": conf.get("model", ""),
                     "api_type": conf.get("api_type", "openai")}
             sets = [f"{purpose}_meta=?"]
@@ -375,7 +382,12 @@ async def test_llm(request: Request):
         api_key = stored.get("key", "")
         if not api_key:
             return {"ok": False, "message": "未保存任何 key（先在下方填写并保存，或输入 key 再测试）"}
-    ok, msg = test_connection(body.get("base_url", ""), api_key,
+    base_url = (body.get("base_url") or "").strip()
+    if u["role"] != "admin" and base_url:
+        # SSRF 读回显堵漏：member 可让服务器向任意 URL POST 并回显响应体
+        # （127.0.0.1:8000/9997、网关 8801/8802 等）。admin 放行（可指本机 xinference）。
+        _assert_public_url(base_url)
+    ok, msg = test_connection(base_url, api_key,
                               body.get("model", ""), body.get("api_type", "openai"))
     return {"ok": ok, "message": msg}
 
@@ -1869,6 +1881,7 @@ def extract_meta(paper_id: str, u: dict = Depends(require)):
 
 @app.get("/api/papers/{paper_id}/notes")
 def get_paper_notes(paper_id: str, u: dict = Depends(require)):
+    _require_visible(u, _get_paper_or_404(paper_id, u))   # 他人 private 论文的笔记不可读（含存在性探测）
     row = db.one("SELECT importance, tags, notes, updated_at FROM paper_notes "
                  "WHERE user_id=? AND paper_id=?", (u["id"], paper_id))
     return dict(row) if row else {"importance": 0, "tags": "", "notes": ""}
@@ -1877,6 +1890,7 @@ def get_paper_notes(paper_id: str, u: dict = Depends(require)):
 @app.put("/api/papers/{paper_id}/notes")
 async def set_paper_notes(paper_id: str, request: Request):
     u = require(request)
+    _require_visible(u, _get_paper_or_404(paper_id, u))   # 同上：不可写他人 private 论文的笔记
     body = await request.json()
     with db.write() as c:
         c.execute(
@@ -2946,6 +2960,12 @@ async def import_identifier(request: Request):
     out = []
     cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
     _safe_collection(u, cid)   # 归属校验（此前零校验）
+    # 配额闸：此前 import-identifier 无每日解析配额（唯一旁路口），且条数无上限可刷队列
+    _enforce_parse_quota(u)
+    import re as _re
+    _ident_n = len(_re.findall(r"10\.\d{4,9}/\S+|arXiv:\d{4}\.\d{4,5}", body.get("text") or ""))
+    if _ident_n > 50:
+        raise HTTPException(400, f"单次最多导入 50 条标识符（本次 {_ident_n} 条）")
     for ident in idents:
         try:
             meta = resolve_identifier(ident["kind"], ident["value"])
