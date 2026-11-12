@@ -373,6 +373,52 @@ def _verify_dblp(title: str) -> dict | None:
             "match": round(ratio, 2)}
 
 
+def _verify_pdf_native(paper_id: str) -> dict | None:
+    """PDF 原件本地提取年份（零网络，mutool）——五个联网源都查不到的
+    camera-ready 会议论文兜底（CVF/IEEE 开放版封面自带会议名+年份；
+    arXiv 版水印含提交日期）。候选字段与现有元数据合并：只补年份，
+    作者/期刊等保持原样（本源拿不到这些，不能清空用户数据）。"""
+    import subprocess
+
+    from .config import DATA_DIR
+    path = DATA_DIR / "papers" / paper_id / "original.pdf"
+    if not path.exists():
+        return None
+    try:
+        out = subprocess.run(
+            ["mutool", "draw", "-F", "text", "-o", "-", str(path), "1-2"],
+            capture_output=True, timeout=60).stdout.decode("utf-8", "ignore")
+        info = subprocess.run(["mutool", "info", str(path)],
+                              capture_output=True, timeout=60).stdout.decode("utf-8", "ignore")
+    except Exception:
+        return None
+    year = ""
+    m = re.search(r"arXiv:\d{4}\.\d{4,5}(?:v\d+)?\s+\[[^\]]*\]\s+\d{1,2}\s+\w+\s+(20[12]\d)", out)
+    if m:
+        year = m.group(1)
+    else:
+        m2 = re.search(r"\b(?:ICLR|NeurIPS|NIPS|CVPR|ICCV|ECCV|AAAI|SIGGRAPH|3DV|WACV)\s+(20[12]\d)", out)
+        if m2:
+            year = m2.group(1)
+        else:
+            m3 = re.search(r"©\s*(20[12]\d)", out)
+            if m3:
+                year = m3.group(1)
+            else:
+                m4 = re.search(r"CreationDate\(D:(20[12]\d)", info)
+                if m4:
+                    year = m4.group(1)
+    if not year:
+        return None
+    cur = db.one("SELECT authors, journal, doi, volume, issue, pages, title FROM papers WHERE id=?",
+                 (paper_id,))
+    return {"authors": cur["authors"] or "", "year": year,
+            "journal": cur["journal"] or "", "volume": cur["volume"] or "",
+            "issue": cur["issue"] or "", "pages": cur["pages"] or "",
+            "doi": cur["doi"] or "", "source": "PDF 原件",
+            "title": cur["title"] or "", "match": 1.0}
+
+
 def verify_meta_online(paper_id: str, apply: bool = True,
                        candidate: dict | None = None) -> dict:
     """联网校准元数据：arXiv 优先（预印本），否则 S2/CrossRef/OpenAlex/DBLP。标题匹配≥0.75 才写入。
@@ -414,6 +460,11 @@ def verify_meta_online(paper_id: str, apply: bool = True,
             try:
                 candidate = _verify_dblp(title)
             except httpx.HTTPError:
+                candidate = None
+        if candidate is None:
+            try:
+                candidate = _verify_pdf_native(paper_id)
+            except Exception:
                 candidate = None
     if candidate is None:
         return {"verified": False, "message": "未在 arXiv/S2/CrossRef/OpenAlex/DBLP 匹配到该论文（标题相似度<0.75），未改动本地元数据"}

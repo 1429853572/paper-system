@@ -52,6 +52,10 @@ async def _cache_policy(request: Request, call_next):
     p = request.url.path
     if p.startswith("/static/vendor/"):
         resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
+    elif p.startswith("/api"):
+        # 动态数据一律禁缓存——浏览器启发式缓存曾让用户看到旧数据
+        # （删了的论文还在、改了的数字不动，实测于多对多/n.d. 验证期）
+        resp.headers["Cache-Control"] = "no-store"
     elif p.startswith("/static") or p in ("/", "/login"):
         resp.headers["Cache-Control"] = "no-cache"
     # 安全响应头（同源部署）

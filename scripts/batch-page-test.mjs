@@ -327,6 +327,21 @@ if (synPop) {
   }
 }
 
+// 9b) 批量条「加入库…/从本库移出」（多对多挂链 UI；batch-link/batch-unlink）
+{
+  // 直接种勾选桶（libBatchMove 只读 selBucket，不依赖 DOM 视图）
+  window.__T.state._selByScope = { c2: new Set(['p1']) };
+  calls.length = 0;
+  const fakeSel = { value: '' };
+  await window.libBatchMove('c2', 'c1', fakeSel);
+  await new Promise((r) => setTimeout(r, 250));
+  ok('加入库 → 调 batch-link', calls.some(c => c.includes('/api/papers/batch-link')), calls.slice(-2).join(' | '));
+  calls.length = 0;
+  await window.libBatchMove('c2', '__remove__', fakeSel);
+  await new Promise((r) => setTimeout(r, 250));
+  ok('从本库移出 → 调 batch-unlink', calls.some(c => c.includes('/api/papers/batch-unlink')));
+}
+
 // 10) 删除操作带「撤销」——误删不必去回收站翻
 {
   calls.length = 0;

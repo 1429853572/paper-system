@@ -191,7 +191,7 @@ async function renderCollectionsPage(preset = null) {
           <b id="lb-count-${scopeKey}">0</b>&nbsp;篇选中
           <button class="btn small primary" onclick="libBatchTranslate('${scopeKey}')">${icon('globe')} 翻译</button>
           <button class="btn small" onclick="libBatchSynth('${scopeKey}')" title="自动分组比对生成综述报告">综述</button>
-          <select style="width:auto;font-size: var(--fs-sm)" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">移入…</option>${moveOpts(sel)}</select>
+          <select style="width:auto;font-size: var(--fs-sm)" onchange="libBatchMove('${scopeKey}', this.value, this)"><option value="">加入库…</option><option value="__remove__">从本库移出</option>${moveOpts(sel)}</select>
           <button class="btn small danger" onclick="libBatchDelete('${scopeKey}')">${icon('trash')} 删除</button>
           <span class="lib-batch-sep"></span>
           <button class="btn small primary" onclick="libToBatchCenter('${scopeKey}')" title="切换到任务中心（勾选全局共享，自动可见）">去任务中心</button>
@@ -389,21 +389,25 @@ window.libClearSel = cid => {
 window.libBatchMove = async (cid, v, sel) => {
   if (!v) return;
   const ids = libSelected(cid);
-  if (!ids.length) { toast('先勾选要移动的论文'); return; }
-  const target = v === '__none__' ? null : v;
+  if (!ids.length) { toast('先勾选论文'); return; }
+  const remove = v === '__remove__';
+  const target = remove ? scopeLibId(cid) : v;
+  if (remove && !target) { toast('当前是「全部文献」视图——请先进某个库再移出'); sel.value = ''; return; }
   await withBusy(sel, async () => {
     sel.value = '';
-    let ok = 0, bad = 0;
-    for (const pid of ids) {
-      try {
-        await api('/api/papers/' + pid, {method: 'PATCH', body: JSON.stringify({collection_id: target})});
-        ok++;
-      } catch (e) { bad++; }
-    }
-    toast(`已移动 ${ok} 篇${bad ? `，${bad} 篇失败` : ''}`);
+    try {
+      await api(remove ? '/api/papers/batch-unlink' : '/api/papers/batch-link',
+                {method: 'POST', body: JSON.stringify({paper_ids: ids, collection_id: target})});
+      toast(remove ? `已从本库移出 ${ids.length} 篇（论文本体不动）` : `已加入库 ${ids.length} 篇`);
+    } catch (e) { toast(friendlyError(e, '操作失败，请重试')); return; }
+    state._scopeAllIds = {};   // 挂链变更 → 各范围全量 id 缓存失效
     await refreshLib();
-  }, '移动失败，请重试');
+  }, '操作失败，请重试');
 };
+// scopeKey（'全部文献' 视图为 'all'）→ 当前所在库 id（空串=全部视图）
+function scopeLibId(scopeKey) {
+  return scopeKey === 'all' ? '' : scopeKey;
+}
 window.libBatchDelete = async cid => {
   const ids = libSelected(cid);
   if (!(await uiConfirm(`删除选中的 ${ids.length} 篇？（进回收站，${state.health.trash_days || 30} 天内可恢复）`,
