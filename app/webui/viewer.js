@@ -1606,13 +1606,14 @@ $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.data
 function switchPage(page) {
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
   $('#page-title').textContent = {reader: '阅读', collections: '文库管理',
-    tasks: '任务中心', trash: '回收站', settings: '设置'}[page] || 'paper-system';
+    tasks: '任务中心', trash: '回收站', settings: '设置',
+    admin: '管理后台'}[page] || 'paper-system';
   syncSynBackBtn();
-  for (const p of ['reader', 'collections', 'tasks', 'trash', 'settings']) {
+  for (const p of ['reader', 'collections', 'tasks', 'trash', 'settings', 'admin']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
   ({collections: renderCollectionsPage, tasks: renderTasksPage,
-    trash: renderTrash, settings: renderSettings})[page]?.();
+    trash: renderTrash, settings: renderSettings, admin: renderAdminZone})[page]?.();
 }
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
 
@@ -3958,10 +3959,7 @@ async function boot() {
     if (act === 'logout') { await fetch('/api/logout', {method: 'POST'}); location.href = '/login'; }
     else if (act === 'settings') switchPage('settings');
     else if (act === 'trash') switchPage('trash');
-    else if (act === 'admin') {   // 管理 → 设置页「管理」页签
-      switchPage('settings');
-      setTimeout(() => renderSettings('admin'), 120);
-    }
+    else if (act === 'admin') switchPage('admin');   // 管理后台独立页
   };
   // key 缺失提示横幅（公共池开启时问答可用不算缺失；翻译需本人 key）
   {
@@ -4177,7 +4175,6 @@ const SET_TABS = [
   {id: 'ai',   label: 'AI 模型',  icon: 'key'},
   {id: 'gloss',label: '术语表',   icon: 'book'},
   {id: 'usage',label: '我的用量', icon: 'chart'},
-  {id: 'admin',label: '管理',     icon: 'crown', admin: true},
 ];
 function setTab() {
   const t = localStorage.getItem('ps-set-tab') || 'acc';
@@ -4239,7 +4236,6 @@ async function renderSettings(tab) {
           <button class="btn small primary" id="gl-add" title="添加术语">${icon('plus')}</button>
         </div>` : ''}
       ${cur === 'usage' ? '<div id="me-quota-zone"></div>' : ''}
-      ${cur === 'admin' && isAdmin ? '<div id="admin-zone"></div>' : ''}
     </div>`;
   $$('#page-settings .set-tab').forEach(b => b.onclick = () => renderSettings(b.dataset.setTab));
   const bind = (fid, purpose) => {
@@ -4270,7 +4266,6 @@ async function renderSettings(tab) {
     };
   }
   if (cur === 'usage') renderMeQuota();
-  if (cur === 'admin' && isAdmin) renderAdminZone();
 }
 /* 我的用量：真额度（解析/磁盘）+ 本月花费与预算闸。
    token 数字不展示——余额是上游商家的事，上游额度不足会原样报错；这里只给"花了多少/还能花多少"。 */
@@ -4328,7 +4323,7 @@ const AUDIT_ACT = {
 function auditActionName(a) { return AUDIT_ACT[a] || a; }
 
 async function renderAdminZone() {
-  const el = $('#admin-zone');
+  const el = $('#page-admin');
   if (!el) return;
   const [users, pool, audit] = await Promise.all([
     api('/api/admin/users'),

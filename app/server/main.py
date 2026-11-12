@@ -314,6 +314,7 @@ async def register(request: Request):
         get_or_create_default_collection(uid)
     except Exception:  # noqa: BLE001 —— 建库失败不影响注册
         log.warning("新用户 %s 建默认库失败", username)
+    audit(uid, "register", username)
     return {"ok": True}
 
 
@@ -357,6 +358,8 @@ async def set_llm_settings(request: Request):
                 args.append(auth.encrypt_key(conf["api_key"]))
             c.execute(f"UPDATE user_llm_keys SET {','.join(sets)} WHERE user_id=?",
                       (*args, u["id"]))
+    purposes = [k for k in ("chat", "translate") if body.get(k)]
+    audit(u["id"], "llm-key-set", " + ".join(purposes) + f"（base_url={body.get(purposes[0], {}).get('base_url', '')[:40]}）")   # 只记动作与来源，不落 key
     return {"ok": True}
 
 
@@ -509,6 +512,12 @@ async def upload_papers(request: Request, files: list[UploadFile]):
             priority="background" if batch else "interactive",
         )
         results.append({"name": fname, "status": "queued", "paper_id": paper_id})
+    ok_n = sum(1 for r in results if r["status"] == "ok")
+    if ok_n or any(r["status"] == "duplicate" for r in results):
+        audit(u["id"], "upload",
+              f"{ok_n} 入库 / {sum(1 for r in results if r['status']=='duplicate')} 重复"
+              f" / {sum(1 for r in results if r['status']=='rejected')} 拒收"
+              + (f" → {collection_id[:12]}" if collection_id else ""))
     return {"results": results}
 
 
@@ -762,6 +771,7 @@ def restore_paper(paper_id: str, u: dict = Depends(require)):
     if blocks:
         run = blocks[0]["parse_run_id"]
         retrieval.build_chunks(paper_id, run, blocks)
+    audit(u["id"], "restore-paper", p["title"])
     return {"ok": True}
 
 
@@ -1425,6 +1435,7 @@ async def import_url(request: Request):
         collection_id=cid,
         priority="interactive",
         is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"])))
+    audit(u["id"], "import-url", f"{r['status']} → {cid[:12]}")
     return {"paper_id": r["paper_id"], "status": r["status"]}
 
 
@@ -2623,6 +2634,7 @@ def empty_trash(u: dict = Depends(require)):
     from core.jobs import scheduler
     for r in rows:
         scheduler.hard_delete_paper(r["id"])
+    audit(u["id"], "empty-trash", f"{len(rows)} 篇")
     return {"purged": len(rows)}
 
 

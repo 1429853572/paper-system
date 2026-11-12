@@ -84,7 +84,7 @@ process.on('unhandledRejection', r => {
   errors.push('rej: ' + m);
 });
 
-window.eval(js + ';window.__T={state,loadPapers,renderSettings,switchPage};');
+window.eval(js + ';window.__T={state,loadPapers,renderSettings,switchPage,renderAdminZone};');
 for (let i = 0; i < 40; i++) {
   await new Promise(r => setTimeout(r, 100));
   if (window.__T?.state?.me) break;
@@ -137,9 +137,10 @@ check('用量区含磁盘已用', (qz?.textContent || '').includes('磁盘已用
 check('用量区含本月花费（token 展示已按需求移除）',
    (qz?.textContent || '').includes('本月花费') && !(qz?.textContent || '').includes('近 30 天 token'));
 
-await window.__T.renderSettings('admin');
+// 管理后台已独立成页（acc 菜单直连 switchPage('admin')）
+await window.__T.renderAdminZone();
 await new Promise(r => setTimeout(r, 500));
-const az = doc.querySelector('#admin-zone');
+const az = doc.querySelector('#page-admin');
 check('管理区用户表渲染 2 用户', (az?.querySelectorAll('table.list tr').length || 0) >= 2);
 check('管理区显示磁盘占用（1.07G）', (az?.textContent || '').includes('1.07G'));
 check('管理区显示本月花费（非 token）', (az?.textContent || '').includes('本月花费'));

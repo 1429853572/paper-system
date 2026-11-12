@@ -183,13 +183,14 @@ $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.data
 function switchPage(page) {
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
   $('#page-title').textContent = {reader: '阅读', collections: '文库管理',
-    tasks: '任务中心', trash: '回收站', settings: '设置'}[page] || 'paper-system';
+    tasks: '任务中心', trash: '回收站', settings: '设置',
+    admin: '管理后台'}[page] || 'paper-system';
   syncSynBackBtn();
-  for (const p of ['reader', 'collections', 'tasks', 'trash', 'settings']) {
+  for (const p of ['reader', 'collections', 'tasks', 'trash', 'settings', 'admin']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
   ({collections: renderCollectionsPage, tasks: renderTasksPage,
-    trash: renderTrash, settings: renderSettings})[page]?.();
+    trash: renderTrash, settings: renderSettings, admin: renderAdminZone})[page]?.();
 }
 window.switchPage = switchPage;  // 内联 onclick 可访问（module 作用域不暴露全局）
 

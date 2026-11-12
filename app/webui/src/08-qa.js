@@ -849,10 +849,7 @@ async function boot() {
     if (act === 'logout') { await fetch('/api/logout', {method: 'POST'}); location.href = '/login'; }
     else if (act === 'settings') switchPage('settings');
     else if (act === 'trash') switchPage('trash');
-    else if (act === 'admin') {   // 管理 → 设置页「管理」页签
-      switchPage('settings');
-      setTimeout(() => renderSettings('admin'), 120);
-    }
+    else if (act === 'admin') switchPage('admin');   // 管理后台独立页
   };
   // key 缺失提示横幅（公共池开启时问答可用不算缺失；翻译需本人 key）
   {

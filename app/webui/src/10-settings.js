@@ -6,7 +6,6 @@ const SET_TABS = [
   {id: 'ai',   label: 'AI 模型',  icon: 'key'},
   {id: 'gloss',label: '术语表',   icon: 'book'},
   {id: 'usage',label: '我的用量', icon: 'chart'},
-  {id: 'admin',label: '管理',     icon: 'crown', admin: true},
 ];
 function setTab() {
   const t = localStorage.getItem('ps-set-tab') || 'acc';
@@ -68,7 +67,6 @@ async function renderSettings(tab) {
           <button class="btn small primary" id="gl-add" title="添加术语">${icon('plus')}</button>
         </div>` : ''}
       ${cur === 'usage' ? '<div id="me-quota-zone"></div>' : ''}
-      ${cur === 'admin' && isAdmin ? '<div id="admin-zone"></div>' : ''}
     </div>`;
   $$('#page-settings .set-tab').forEach(b => b.onclick = () => renderSettings(b.dataset.setTab));
   const bind = (fid, purpose) => {
@@ -99,7 +97,6 @@ async function renderSettings(tab) {
     };
   }
   if (cur === 'usage') renderMeQuota();
-  if (cur === 'admin' && isAdmin) renderAdminZone();
 }
 /* 我的用量：真额度（解析/磁盘）+ 本月花费与预算闸。
    token 数字不展示——余额是上游商家的事，上游额度不足会原样报错；这里只给"花了多少/还能花多少"。 */
@@ -157,7 +154,7 @@ const AUDIT_ACT = {
 function auditActionName(a) { return AUDIT_ACT[a] || a; }
 
 async function renderAdminZone() {
-  const el = $('#admin-zone');
+  const el = $('#page-admin');
   if (!el) return;
   const [users, pool, audit] = await Promise.all([
     api('/api/admin/users'),
