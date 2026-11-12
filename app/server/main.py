@@ -20,6 +20,14 @@ from core.config import (DATA_DIR, MINERU_BASE_URL, OLLAMA_BASE_URL,
                            PAPERSYS_API_TOKEN, config)
 from core.db import db
 from core.jobs import bus, scheduler
+
+
+def emit_data(entity: str) -> None:
+    """广播数据变更事件（双标签一致性）：非 jobs 的 CRUD（增删改/挂链/恢复）
+    也推 SSE——此前只有 jobs 事件，另一标签页对删论文/挂链/改库静默如常，
+    产生幽灵论文与勾选分叉。事件不含内容（只通知"变了"），前端拉取时走
+    可见性过滤——无泄露面。user_id=None → SSE 流广播给所有连接。"""
+    bus.publish({"type": "data", "entity": entity, "user_id": None})
 from core.llm import LLMClient, NoKeyError, test_connection
 from core.mineru_client import mineru
 
@@ -41,6 +49,7 @@ def audit(user_id: int | None, action: str, detail: str = "") -> None:
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """未捕获异常统一返回 JSON（此前 500 为纯文本，前端无法解析提示）。"""
     log.exception("未处理异常 %s %s", request.method, request.url.path)
+    emit_data("collections")
     return JSONResponse({"detail": "服务器内部错误"}, status_code=500)
 
 
@@ -320,6 +329,7 @@ async def register(request: Request):
     except Exception:  # noqa: BLE001 —— 建库失败不影响注册
         log.warning("新用户 %s 建默认库失败", username)
     audit(uid, "register", username)
+    emit_data("collections")
     return {"ok": True}
 
 
@@ -530,6 +540,7 @@ async def upload_papers(request: Request, files: list[UploadFile]):
               f"{ok_n} 入库 / {sum(1 for r in results if r['status']=='duplicate')} 重复"
               f" / {sum(1 for r in results if r['status']=='rejected')} 拒收"
               + (f" → {collection_id[:12]}" if collection_id else ""))
+    emit_data("papers")
     return {"results": results}
 
 
@@ -774,6 +785,7 @@ def delete_paper(paper_id: str, u: dict = Depends(require)):
         c.execute("UPDATE papers SET deleted_at=datetime('now') WHERE id=?", (paper_id,))
         c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (paper_id,))
     audit(u["id"], "delete-paper", p["title"])
+    emit_data("papers")
     return {"ok": True}
 
 
@@ -797,6 +809,7 @@ def restore_paper(paper_id: str, u: dict = Depends(require)):
         run = blocks[0]["parse_run_id"]
         retrieval.build_chunks(paper_id, run, blocks)
     audit(u["id"], "restore-paper", p["title"])
+    emit_data("papers")
     return {"ok": True}
 
 
@@ -1207,7 +1220,8 @@ def jobs_stream(u: dict = Depends(require)):
                 except _q.Empty:
                     yield ": keepalive\n\n"
                     continue
-                if not is_admin and ev.get("user_id") != u["id"]:
+                # user_id=None = 数据变更广播（不含内容）——推送所有连接
+                if not is_admin and ev.get("user_id") is not None and ev.get("user_id") != u["id"]:
                     continue
                 yield f"data: {json.dumps(ev)}\n\n"
         finally:
@@ -1461,6 +1475,7 @@ async def import_url(request: Request):
         priority="interactive",
         is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"])))
     audit(u["id"], "import-url", f"{r['status']} → {cid[:12]}")
+    emit_data("papers")
     return {"paper_id": r["paper_id"], "status": r["status"]}
 
 
@@ -1595,6 +1610,7 @@ def delete_collection(cid: str, u: dict = Depends(require)):
         raise HTTPException(404, "文献库不存在")
     audit(u["id"], "delete-collection",
           f"libs:{r['libs']} trashed:{r['trashed']} unlinked:{r['unlinked']}")
+    emit_data("collections")
     return r
 
 
@@ -2342,6 +2358,7 @@ async def acquire_import(request: Request):
                           priority="background")
         queued.append({"title": title, "paper_id": paper_id})
     audit(u["id"], "acquire-import", f"{len(queued)} 入库 / {len(skipped)} 跳过")
+    emit_data("papers")
     return {"batch_id": batch_id, "queued": queued, "skipped": skipped}
 
 
@@ -2419,6 +2436,7 @@ async def import_directory(request: Request):
                           priority="background")
         queued.append({"file": f.name, "paper_id": paper_id})
     audit(u["id"], "import-directory", f"{target.name}: {len(queued)} 入库 / {len(skipped)} 跳过")
+    emit_data("papers")
     return {"batch_id": batch_id, "queued": queued, "skipped": skipped,
             "total": len(files)}
 
@@ -2648,6 +2666,7 @@ async def batch_delete_papers(request: Request):
                 clear_fts_by_paper(c, _pid)
         for t in titles:
             audit(u["id"], "batch-delete", t)
+        emit_data("papers")
         from core.retrieval import invalidate_vec_cache
         invalidate_vec_cache()
     return {"ok": True, "count": len(todo)}
@@ -2662,6 +2681,7 @@ def empty_trash(u: dict = Depends(require)):
     for r in rows:
         scheduler.hard_delete_paper(r["id"])
     audit(u["id"], "empty-trash", f"{len(rows)} 篇")
+    emit_data("papers")
     return {"purged": len(rows)}
 
 
@@ -3134,6 +3154,7 @@ async def discover_import(request: Request):
             imported += 1
     if imported:
         audit(u["id"], "discover-import", f"{imported} 篇")
+    emit_data("papers")
     return {"results": out}
 
 

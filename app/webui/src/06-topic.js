@@ -557,6 +557,19 @@ setInterval(() => {
 
 // SSE 事件风暴节流动作（throttle 前沿放行：风暴期首事件生效，其余丢弃）
 const refreshTaskOnBatchSse = throttle(() => { renderTaskPanel(); renderSynList(); }, 2000);
+// 数据变更统一刷新：失效范围缓存 + 库树/列表/文库管理页/QA 选文 papers
+const refreshOnData = throttle(entity => {
+  invalidateScopeIds();
+  loadCollections().catch(() => {});
+  loadPapers();
+  const cp = $('#page-collections');
+  if (cp && cp.style.display !== 'none') renderCollectionsPage();
+  // QA 选文 papers 重拉（选文面板开着时）
+  api('/api/papers').then(d => {
+    state.qaAllPapers = d.papers;
+    if (state.view === 'qa') { renderPickList($('#qa-pick-filter')?.value.toLowerCase() || ''); renderQaScope(); }
+  }).catch(() => {});
+}, 3000);
 const refreshSidebarOnParse = throttle(() => loadCollections().catch(() => {}), 3000);
 
 /* ---------------- 找相关（Semantic Scholar 三模式排卡，llm-for-zotero /discover_related 式） ----
@@ -690,6 +703,12 @@ async function watchJobs() {
   const es = new EventSource('/api/jobs/stream');
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
+    // 数据变更广播（双标签一致性）：另一标签页删/挂链/恢复/清空回收站/改库
+    // → 通知本页失效缓存 + 节流刷新（事件不含内容，拉取走可见性过滤）
+    if (ev.type === 'data') {
+      refreshOnData(ev.entity);
+      return;
+    }
     // 解析实时进度 → 侧栏列表“提取中 x/y”（SSE 事件自带 done/total）
     if (ev.job_type === 'parse') {
       const prev = JSON.stringify(state.parseProg[ev.paper_id] || null);
