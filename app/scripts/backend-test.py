@@ -146,5 +146,39 @@ with db.write() as c:
     c.execute("DELETE FROM papers WHERE id='px1'")
     c.execute("DELETE FROM jobs WHERE id IN (90001, 90002)")
 
+print("== 跨页参考文献合并（get_references）==")
+from core.meta import get_references
+with db.write() as c:
+    c.execute("INSERT INTO papers(id,owner_id,visibility,title,parse_status,file_hash) "
+              "VALUES('pref',1,'shared','Ref Merge Fixture','parsed','hr1')")
+    c.execute("INSERT INTO parse_runs(id,paper_id,tier,status) VALUES('runref','pref','standard','done')")
+    blocks = [
+        ("[46] Alpha, A. Prior work on gaussian splatting. J. Conf., 1–9, 2024.", 0),
+        ("[47] Jiang Wu, et al. Sparse2dgs: Geometry-prioritized gaussian", 0),          # 断在句中
+        ("splatting for surface reconstruction from sparse views. In Proceedings, 2025. 3", 1),  # 跨页续块
+        ("[48] Beta, B. Hyphenated continuation is com-", 2),                            # 连字符断词
+        ("pletely common in two-column PDFs, 2024.", 2),
+        ("Disclaimer/Publisher's Note: statements are those of the authors.", 3),        # 大写开头 → 独立
+    ]
+    for i, (text, page) in enumerate(blocks):
+        c.execute("INSERT INTO blocks(block_id,parse_run_id,paper_id,type,text,page_index,block_index) "
+                  "VALUES(?, 'runref', 'pref', 'ref_text', ?, ?, ?)",
+                  (f"pref-b{i:05d}", text, page, i))
+refs = get_references("pref")
+ok("跨页续块并入上一条（59→58 同型）", len(refs) == 4, f"实际 {len(refs)} 条")
+r47 = next((r for r in refs if r["text"].startswith("[47]")), None)
+ok("[47] 全文完整", r47 is not None and "sparse views. In Proceedings, 2025. 3" in r47["text"],
+   (r47 or {}).get("text", "")[-60:])
+ok("跳转定位保留起始块", r47 is not None and r47["page_index"] == 0, str((r47 or {}).get("page_index")))
+r48 = next((r for r in refs if r["text"].startswith("[48]")), None)
+ok("连字符断词去 '-' 拼接", r48 is not None and "completely common" in r48["text"],
+   (r48 or {}).get("text", "")[:60])
+ok("大写 Disclaimer 不被并入", any(r["text"].startswith("Disclaimer") for r in refs) and
+   not refs[-1]["text"].startswith("[48]"))
+with db.write() as c:
+    c.execute("DELETE FROM blocks WHERE paper_id='pref'")
+    c.execute("DELETE FROM parse_runs WHERE id='runref'")
+    c.execute("DELETE FROM papers WHERE id='pref'")
+
 print(f"\n结果: {PASS} 通过, {FAIL} 失败")
 sys.exit(1 if FAIL else 0)

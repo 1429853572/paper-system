@@ -97,8 +97,18 @@ def extract_meta_llm(user_id: int, paper_id: str) -> dict:
     return {**data, **merged}
 
 
+_REF_NUM = re.compile(r"^\s*(?:\[\d{1,4}\]|\d{1,3}[.)])\s*")
+
+
 def get_references(paper_id: str, limit: int = 300) -> list[dict]:
-    """参考文献列表（References 小节的 ref_text 块，带页码可跳转）。"""
+    """参考文献列表（References 小节的 ref_text 块，带页码可跳转）。
+
+    跨页/跨栏的参考文献会被版面分析切成两块：编号块断在句中，续块以
+    小写开头且无编号——列表里表现为一条参考文献裂成两条。此处按
+    「无编号 + 小写开头（或前块连字符收尾）→ 并入上一条」合并；
+    block_id/page_index 保留起始块（点击跳转仍定位到条目开头）。
+    无编号但大写开头的块（如 Disclaimer/Publisher's Note）是独立条目，
+    不并入。"""
     rows = db.all(
         "SELECT b.block_id, b.text, b.page_index FROM blocks b "
         "JOIN parse_runs r ON r.id=b.parse_run_id "
@@ -106,7 +116,24 @@ def get_references(paper_id: str, limit: int = 300) -> list[dict]:
         "ORDER BY b.page_index, b.block_index LIMIT ?",
         (paper_id, limit),
     )
-    return [{"block_id": r["block_id"], "text": r["text"], "page_index": r["page_index"]} for r in rows]
+    out: list[dict] = []
+    for r in rows:
+        t = (r["text"] or "").strip()
+        if not t:
+            continue
+        numbered = bool(_REF_NUM.match(t))
+        lower_cont = t[:1].islower()
+        hyphen_cont = bool(out) and out[-1]["text"].rstrip().endswith("-")
+        if out and (lower_cont or hyphen_cont) and not numbered:
+            prev = out[-1]
+            base = prev["text"].rstrip()
+            if base.endswith("-"):           # Proceed- + ingss → 去连字符拼词
+                prev["text"] = base[:-1] + t
+            else:
+                prev["text"] = base + " " + t
+            continue
+        out.append({"block_id": r["block_id"], "text": t, "page_index": r["page_index"]})
+    return out
 
 
 # ================= 联网元数据校准（arXiv → CrossRef） =================
