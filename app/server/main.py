@@ -636,7 +636,8 @@ def new_batch_id() -> str:
 
 def latest_run(paper_id: str):
     """该论文最新的 done 解析 run（7 处同款查询的公共件）。"""
-    return latest_run(paper_id)
+    return db.one("SELECT id FROM parse_runs WHERE paper_id=? AND status='done' "
+                  "ORDER BY created_at DESC LIMIT 1", (paper_id,))
 
 
 def owner_scope(u: dict, col: str = "user_id", placeholder: bool = True):

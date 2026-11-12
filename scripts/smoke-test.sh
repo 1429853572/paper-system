@@ -112,7 +112,9 @@ PID1=$(echo "$PP" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin)["papers"][0]["id"])
 except Exception: print("")' 2>/dev/null)
 if [[ -n "${PID1:-}" ]]; then
-    for ep in "" "/cite" "/notes" "/jobstate"; do
+    # 首个探针带 offset/limit——前端真实调用形态（不带 limit 走不分页分支，
+    # 曾漏掉 _blocks_count→latest_run 递归 500：坏版本下不带参 200、带参 500）
+    for ep in "?offset=0&limit=40" "/cite" "/notes" "/jobstate"; do
         CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/papers/$PID1$ep")
         [[ "$CODE" == 200 ]] && ok "GET /api/papers/{id}$ep" || bad "GET /api/papers/{id}$ep HTTP $CODE"
     done
