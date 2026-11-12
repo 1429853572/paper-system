@@ -204,7 +204,7 @@ async function renderAdminZone() {
       <div id="invite-out" style="margin:2px 0 10px;font-size: var(--fs-base)"></div>
       <table class="list adm-table">
         <tr><th>成员</th><th>状态</th><th class="num">论文</th><th class="num">磁盘</th>
-            <th class="num">本月花费</th><th>限额</th><th style="width:56px"></th></tr>
+            <th class="num">本月花费</th><th>限额</th><th style="width:auto"></th></tr>
         ${list.filter(u => u.disabled !== 2).map(u => {
           const ov = (() => { try { return JSON.parse(u.overrides || '{}'); } catch { return {}; } })();
           state._quotaRaw = state._quotaRaw || {};
