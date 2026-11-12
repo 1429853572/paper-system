@@ -1557,7 +1557,8 @@ def delete_collection(cid: str, u: dict = Depends(require)):
     r = delete_subtree(cid, u["id"], u["role"] == "admin")
     if not r:
         raise HTTPException(404, "文献库不存在")
-    audit(u["id"], "delete-collection", f"libs:{r['libs']} trashed:{r['trashed']}")
+    audit(u["id"], "delete-collection",
+          f"libs:{r['libs']} trashed:{r['trashed']} unlinked:{r['unlinked']}")
     return r
 
 
@@ -2604,7 +2605,9 @@ async def batch_delete_papers(request: Request):
             c.execute(f"UPDATE jobs SET status='canceled' WHERE paper_id IN ({marks}) "
                       f"AND status IN {_ACTIVE_JOBS}", tuple(todo))
             c.execute(f"UPDATE papers SET deleted_at=datetime('now') WHERE id IN ({marks})", tuple(todo))
-            c.execute(f"DELETE FROM chunks_fts WHERE paper_id IN ({marks})", tuple(todo))
+            from core.retrieval import clear_fts_by_paper
+            for _pid in todo:
+                clear_fts_by_paper(c, _pid)
         for t in titles:
             audit(u["id"], "batch-delete", t)
         from core.retrieval import invalidate_vec_cache

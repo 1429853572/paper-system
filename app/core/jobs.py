@@ -765,7 +765,10 @@ class Scheduler:
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
         with db.write() as c:
-            c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (paper_id,))
+            # chunks_fts 的 paper_id 是 UNINDEXED 列——直接 DELETE WHERE paper_id 是
+            # 全 FTS 扫（janitor/hard_delete 持写锁时间随库规模恶化）→ 先取 rowid 按行删
+            from .retrieval import clear_fts_by_paper
+            clear_fts_by_paper(c, paper_id)
             c.execute("DELETE FROM llm_calls WHERE paper_id=?", (paper_id,))
             # 无外键的两张表：孤儿行会永久泄漏并污染统计
             c.execute("DELETE FROM section_summaries WHERE paper_id=?", (paper_id,))

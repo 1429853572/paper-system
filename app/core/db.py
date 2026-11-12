@@ -400,6 +400,14 @@ class Database:
             # 依赖兜底列的索引放在列补齐之后建（任意形态旧库都不炸）
             c.execute("CREATE INDEX IF NOT EXISTS idx_pc_coll "
                       "ON paper_collections(collection_id)")
+            # blocks 详情排序消 TEMP B-TREE（EQP 实测）；badge 高频轮询的 partial index；
+            # paper_notes 级联删除的前缀索引（hard_delete 全表扫 → 前缀扫）
+            c.execute("CREATE INDEX IF NOT EXISTS idx_blocks_run "
+                      "ON blocks(parse_run_id, page_index, block_index)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_badge "
+                      "ON jobs(status) WHERE status IN ('queued','pending_gate','running')")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_paper_notes_paper "
+                      "ON paper_notes(paper_id)")
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_hash "
                       "ON papers(file_hash) WHERE deleted_at IS NULL")
             # 高频查询索引：文库列表排序 / statuses 按论文聚合 / 用量按论文聚合

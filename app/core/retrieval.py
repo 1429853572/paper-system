@@ -36,6 +36,15 @@ def _clean_text(t: str) -> str:
     return re.sub(r"[ \t]+", " ", t).strip()
 
 
+def clear_fts_by_paper(c, paper_id: str) -> None:
+    """按论文清 FTS 行。chunks_fts 的 paper_id 是 UNINDEXED 列——直接
+    DELETE WHERE paper_id 是全 FTS 扫，持写锁时间随库规模恶化；先取
+    rowid 再按行删（90 篇 ≈7k 行毫秒级，万篇级差距数个量级）。"""
+    rows = c.execute("SELECT rowid FROM chunks_fts WHERE paper_id=?", (paper_id,)).fetchall()
+    for fr in rows:
+        c.execute("DELETE FROM chunks_fts WHERE rowid=?", (fr[0],))
+
+
 def build_chunks(paper_id: str, run_id: str, blocks: list) -> int:
     """按 block 边界聚合 chunk：~800 字符目标，重叠靠块级重复上一 chunk 尾块。
 
@@ -91,7 +100,7 @@ def build_chunks(paper_id: str, run_id: str, blocks: list) -> int:
         )
         # FTS 同步（冗余可见性列）
         paper = c.execute("SELECT owner_id, visibility FROM papers WHERE id=?", (paper_id,)).fetchone()
-        c.execute("DELETE FROM chunks_fts WHERE paper_id=?", (paper_id,))
+        clear_fts_by_paper(c, paper_id)
         c.executemany(
             "INSERT INTO chunks_fts(text,paper_id,owner_id,visibility,chunk_row) VALUES(?,?,?,?,?)",
             [(cjk_space(t), paper_id, paper["owner_id"], paper["visibility"],
