@@ -2868,8 +2868,9 @@ async function renderMeta() {
     const list = refs.references.filter(r => !q || r.text.toLowerCase().includes(q));
     state._refs = refs.references;
     $('#ref-list').innerHTML = list.map(r =>
-      `<div class="ref-item" onclick="flashRefBlock('${r.block_id}')">${icon('doc')} ${esc(r.text.slice(0, 150))}</div>`).join('') ||
-      '<p class="muted">无匹配</p>';
+      // 全文显示——库里块文本完整，此前 slice(0,150) 把年份/页码静默截掉（用户报告「信息显示不全」）
+      `<div class="ref-item" onclick="flashRefBlock('${r.block_id}')">${icon('doc')} ${esc(r.text)}</div>`).join('') ||
+      '<div class="empty-note">无匹配</div>';
   };
   renderRefs('');
   $('#ref-search').oninput = e => renderRefs(e.target.value.toLowerCase());
