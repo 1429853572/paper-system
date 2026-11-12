@@ -265,6 +265,7 @@ function _uiDialog({title, message = '', input = false, value = '', placeholder 
     if (anchor) {
       const r = anchor.getBoundingClientRect();
       pop.style.visibility = 'hidden';
+      pop.style.transform = 'none';   // 居中样式不再生效——锚定坐标按左上角计算
       requestAnimationFrame(() => {
         const pw = pop.offsetWidth, ph = pop.offsetHeight;
         let x = Math.min(r.left, innerWidth - pw - 8);
@@ -274,12 +275,9 @@ function _uiDialog({title, message = '', input = false, value = '', placeholder 
         pop.style.top = y + 'px';
         pop.style.visibility = '';
       });
-    } else {
-      requestAnimationFrame(() => {   // 居中
-        pop.style.left = Math.max(8, (innerWidth - pop.offsetWidth) / 2) + 'px';
-        pop.style.top = Math.max(8, (innerHeight - pop.offsetHeight) / 2.4) + 'px';
-      });
     }
+    // 非锚定模态的居中由 .ui-pop CSS 统一处理（left/top 50% + translate -50%；
+    // 此前的 JS 居中写内联 left/top 会覆盖 CSS 且纵向偏上，已删）
     const inp = pop.querySelector('.ui-pop-input');
     if (inp) { inp.focus(); inp.select(); }
     else pop.querySelector('[data-ok]').focus();
