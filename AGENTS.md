@@ -1,7 +1,7 @@
 # AGENTS.md — paper-system
 
 基于 MinerU 的学术论文阅读 / 双语翻译 / 证据问答 / 科研导读系统。
-FastAPI + SQLite(FTS5 + 向量) + 原生 JS 前端，MinerU(vLLM) 与 Ollama(BGE-M3) 共享单 GPU。
+FastAPI + SQLite(FTS5 + 向量) + 原生 JS 前端，MinerU(vLLM) 与 xinference(BGE-M3) 共享单 GPU。
 
 ## 架构与目录
 
