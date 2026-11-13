@@ -17,7 +17,7 @@ import re as _re
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 # 重建表时会连带删除其上的索引（DROP TABLE 会删索引）——这些表重建后需逐个恢复。
 # 索引定义与 _SCHEMA / _init_schema 中的保持一致。
@@ -147,6 +147,49 @@ CREATE TABLE IF NOT EXISTS paper_collections (
     collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (paper_id, collection_id)          -- 一篇可挂 N 库；同对同库唯一
+);
+
+-- 文献追踪：订阅（关键词+分类巡逻 arXiv；期刊列表巡逻顶刊）
+CREATE TABLE IF NOT EXISTS tracker_subs (
+    id              TEXT PRIMARY KEY,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    keywords        TEXT NOT NULL DEFAULT '',          -- 逗号分隔（ti/abs 命中）
+    categories      TEXT NOT NULL DEFAULT '',          -- 空格分隔 arXiv 分类（cs.CV eess.IV...）
+    exclude         TEXT NOT NULL DEFAULT '',          -- 逗号分隔排除词
+    journals        TEXT NOT NULL DEFAULT '',          -- 逗号分隔期刊名（S2 venue 检索）
+    frequency_hours INTEGER NOT NULL DEFAULT 24,
+    llm_auto        TEXT NOT NULL DEFAULT 'core',      -- off|core|all：巡逻后自动 LLM 摘要的范围
+    email_enabled   INTEGER NOT NULL DEFAULT 0,
+    email_to        TEXT NOT NULL DEFAULT '',          -- 收件邮箱（发件走全局 SMTP）
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    last_run_at     TEXT,
+    last_error      TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 文献追踪：收件箱条目（巡逻结果，审阅后收进文献库成为正式论文）
+CREATE TABLE IF NOT EXISTS tracker_items (
+    id          TEXT PRIMARY KEY,
+    sub_id      TEXT NOT NULL REFERENCES tracker_subs(id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    paper_id    TEXT,                                  -- accept 后指向 papers.id
+    title       TEXT NOT NULL,
+    zh_title    TEXT,
+    authors     TEXT NOT NULL DEFAULT '',
+    abstract    TEXT NOT NULL DEFAULT '',
+    zh_summary  TEXT,
+    doi         TEXT,
+    arxiv_id    TEXT,
+    pdf_url     TEXT,
+    code_url    TEXT,
+    venue       TEXT,
+    published   TEXT,
+    tier        TEXT NOT NULL DEFAULT 'eco',           -- core|proxy|eco|noise
+    is_fallback INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'new',           -- new|dismissed|accepted
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    accepted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS parse_runs (
@@ -421,6 +464,11 @@ class Database:
             self._add_col(c, "paper_discussion_messages", "reply_to", "TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS idx_discussion_paper "
                       "ON paper_discussion_messages(paper_id)")
+            # 文献追踪：收件箱列表按状态过滤 + 订阅聚合；arxiv_id 幂等去重点查
+            c.execute("CREATE INDEX IF NOT EXISTS idx_tracker_items_user "
+                      "ON tracker_items(user_id, status, created_at DESC)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_tracker_items_sub "
+                      "ON tracker_items(sub_id, arxiv_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_pc_coll "
                       "ON paper_collections(collection_id)")
             # blocks 详情排序消 TEMP B-TREE（EQP 实测）；badge 高频轮询的 partial index；

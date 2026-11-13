@@ -136,6 +136,14 @@ if [[ -n "${FIRST_SYN:-}" ]]; then
     CODE=$(curl -sf -b "$CJ2" -o /dev/null -w '%{http_code}' "$BASE/api/syntheses/$FIRST_SYN/progress")
     [[ "$CODE" == 200 ]] && ok "GET /api/syntheses/{id}/progress" || bad "progress HTTP $CODE"
 fi
+# 文献追踪端点（subs 列表 + 收件箱 + admin SMTP 配置读取）
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/tracker/subs")
+[[ "$CODE" == 200 ]] && ok "GET /api/tracker/subs" || bad "GET /api/tracker/subs HTTP $CODE"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/tracker/items")
+[[ "$CODE" == 200 ]] && ok "GET /api/tracker/items" || bad "GET /api/tracker/items HTTP $CODE"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/tracker/smtp")
+[[ "$CODE" == 200 || "$CODE" == 403 ]] && ok "GET /api/tracker/smtp（admin 200/成员 403）" || bad "GET /api/tracker/smtp HTTP $CODE"
+
 # MCP tools/list（bearer token）
 TOOLS=$(curl -sf "$BASE/api/mcp" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || echo '')

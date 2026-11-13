@@ -99,6 +99,7 @@ class Scheduler:
             ("synthesis-worker", self._synthesis_loop),
             ("acquire-worker", self._acquire_loop),
             ("janitor", self._janitor_loop),
+            ("tracker", self._tracker_loop),
         ):
             t = threading.Thread(target=fn, name=name, daemon=True)
             t.start()
@@ -721,6 +722,18 @@ class Scheduler:
             except Exception:  # noqa: BLE001
                 log.exception("janitor 异常")
             time.sleep(3600)
+
+    def _tracker_loop(self) -> None:
+        """文献追踪巡逻：30 分钟醒一次，跑所有到期的订阅；有新条目则 SSE 广播。"""
+        while not self._stop.is_set():
+            try:
+                from . import tracker, tracker_mail   # 延迟导入：避开 jobs↔tracker 环
+                res = tracker.run_due(email_fn=tracker_mail.send_digest)
+                if any(r.get("new") for r in res):
+                    bus.publish({"type": "data", "entity": "tracker", "user_id": None})
+            except Exception:  # noqa: BLE001
+                log.exception("tracker 巡逻异常")
+            time.sleep(1800)
 
     def _daily_backup(self) -> None:
         """每日自动备份：DB 快照（VACUUM INTO）+ papers/ 文件目录打包；按 backup_keep 轮转."""

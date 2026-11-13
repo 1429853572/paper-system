@@ -564,6 +564,9 @@ const refreshOnData = throttle(entity => {
   loadPapers();
   const cp = $('#page-collections');
   if (cp && cp.style.display !== 'none') renderCollectionsPage();
+  if (entity === 'tracker' && window.refreshTrackerBadge) window.refreshTrackerBadge();
+  const tp = $('#page-tracker');
+  if (entity === 'tracker' && tp && tp.style.display !== 'none') window.renderTrackerPage?.();
   // QA 选文 papers 重拉（选文面板开着时）
   api('/api/papers').then(d => {
     state.qaAllPapers = d.papers;

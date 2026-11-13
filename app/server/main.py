@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from core import auth, ingest, qa, retrieval, summarizer, synthesis
+from core import auth, ingest, qa, retrieval, summarizer, synthesis, tracker_mail
 from core.config import (DATA_DIR, MINERU_BASE_URL, OLLAMA_BASE_URL,
                            PAPERSYS_API_TOKEN, config)
 from core.db import db
@@ -3273,6 +3273,259 @@ def del_glossary(term: str, request: Request):
     with db.write() as c:
         c.execute("DELETE FROM glossary WHERE term=?", (term,))
     return {"ok": True}
+
+
+# ---------------- 文献追踪（订阅巡逻 → 收件箱 → 收进文献库） ----------------
+_TRACKER_TIERS = ("core", "proxy", "eco")
+
+def _own_sub(u: dict, sid: str):
+    row = db.one("SELECT * FROM tracker_subs WHERE id=?", (sid,))
+    if row is None:
+        raise HTTPException(404, "订阅不存在")
+    if row["user_id"] != u["id"] and u["role"] != "admin":
+        raise HTTPException(403, "不是你的订阅")
+    return row
+
+def _sub_counts(user_id: int) -> dict:
+    counts = {"new": 0, "core": 0, "proxy": 0, "eco": 0, "dismissed": 0, "accepted": 0}
+    for r in db.all("SELECT status, tier, COUNT(*) n FROM tracker_items WHERE user_id=? "
+                    "GROUP BY status, tier", (user_id,)):
+        counts[r["status"]] = counts.get(r["status"], 0) + r["n"]
+        if r["status"] == "new":
+            counts[r["tier"]] = counts.get(r["tier"], 0) + r["n"]
+    counts["inbox"] = counts["new"]
+    return counts
+
+def _run_patrol_bg(sub: dict) -> None:
+    import threading
+    import traceback
+
+    def _work():
+        from core import tracker
+        try:
+            r = tracker.patrol(sub, email_fn=tracker_mail.send_digest)
+            log.info("tracker patrol %s: %s", sub["id"], r)
+            emit_data("tracker")
+        except Exception:  # noqa: BLE001
+            log.exception("tracker patrol %s 失败", sub["id"])
+            with db.write() as c:
+                c.execute("UPDATE tracker_subs SET last_run_at=datetime('now'), last_error=? WHERE id=?",
+                          (traceback.format_exc()[-300:], sub["id"]))
+    threading.Thread(target=_work, daemon=True).start()
+
+@app.get("/api/tracker/subs")
+def tracker_subs_list(request: Request):
+    u = require(request)
+    subs = db.all("SELECT * FROM tracker_subs WHERE user_id=? ORDER BY created_at DESC", (u["id"],))
+    return {"subs": [dict(s) for s in subs], "counts": _sub_counts(u["id"]),
+            "smtp_ready": tracker_mail.smtp_configured()}
+
+@app.post("/api/tracker/subs")
+async def tracker_sub_create(request: Request):
+    u = require(request)
+    b = await request.json()
+    name = (b.get("name") or "").strip()[:60]
+    keywords = ",".join(x.strip() for x in (b.get("keywords") or "").split(",") if x.strip())[:300]
+    journals = ",".join(x.strip() for x in (b.get("journals") or "").split(",") if x.strip())[:300]
+    if not keywords and not journals:
+        raise HTTPException(400, "关键词与期刊至少填一项")
+    categories = " ".join(x.strip() for x in (b.get("categories") or "").split() if x.strip())[:200]
+    exclude = ",".join(x.strip() for x in (b.get("exclude") or "").split(",") if x.strip())[:200]
+    if not keywords and not categories and not journals:
+        raise HTTPException(400, "追踪条件不能全空")
+    freq = max(6, min(168, int(b.get("frequency_hours") or 24)))
+    llm_auto = b.get("llm_auto") or "core"
+    if llm_auto not in ("off", "core", "all"):
+        llm_auto = "core"
+    email_to = (b.get("email_to") or "").strip()[:120]
+    if email_to and "@" not in email_to:
+        raise HTTPException(400, "收件邮箱格式不正确")
+    sid = "ts" + secrets.token_hex(8)
+    with db.write() as c:
+        c.execute("INSERT INTO tracker_subs(id, user_id, name, keywords, categories, exclude, journals, "
+                  "frequency_hours, llm_auto, email_enabled, email_to, enabled) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,1)",
+                  (sid, u["id"], name or "未命名订阅", keywords, categories, exclude, journals,
+                   freq, llm_auto, 1 if b.get("email_enabled") else 0, email_to))
+    return {"id": sid}
+
+@app.put("/api/tracker/subs/{sid}")
+async def tracker_sub_update(sid: str, request: Request):
+    u = require(request)
+    sub = _own_sub(u, sid)
+    b = await request.json()
+    name = (b.get("name") or sub["name"]).strip()[:60]
+    keywords = ",".join(x.strip() for x in (b.get("keywords") or sub["keywords"] or "").split(",") if x.strip())[:300]
+    journals = ",".join(x.strip() for x in (b.get("journals") or sub["journals"] or "").split(",") if x.strip())[:300]
+    categories = " ".join(x.strip() for x in (b.get("categories") or sub["categories"] or "").split() if x.strip())[:200]
+    exclude = ",".join(x.strip() for x in (b.get("exclude") if b.get("exclude") is not None else sub["exclude"] or "").split(",") if x.strip())[:200]
+    if not keywords and not categories and not journals:
+        raise HTTPException(400, "追踪条件不能全空")
+    freq = max(6, min(168, int(b.get("frequency_hours") or sub["frequency_hours"])))
+    llm_auto = b.get("llm_auto") or sub["llm_auto"]
+    if llm_auto not in ("off", "core", "all"):
+        llm_auto = "core"
+    email_to = (b.get("email_to") if b.get("email_to") is not None else sub["email_to"] or "").strip()[:120]
+    if email_to and "@" not in email_to:
+        raise HTTPException(400, "收件邮箱格式不正确")
+    with db.write() as c:
+        c.execute("UPDATE tracker_subs SET name=?, keywords=?, categories=?, exclude=?, journals=?, "
+                  "frequency_hours=?, llm_auto=?, email_enabled=?, email_to=?, enabled=? WHERE id=?",
+                  (name, keywords, categories, exclude, journals, freq, llm_auto,
+                   1 if b.get("email_enabled") else 0, email_to,
+                   1 if b.get("enabled") else 0, sid))
+    return {"ok": True}
+
+@app.delete("/api/tracker/subs/{sid}")
+def tracker_sub_delete(sid: str, request: Request):
+    u = require(request)
+    _own_sub(u, sid)
+    with db.write() as c:
+        c.execute("DELETE FROM tracker_subs WHERE id=?", (sid,))
+    emit_data("tracker")
+    return {"ok": True}
+
+@app.post("/api/tracker/run/{sid}")
+def tracker_run(sid: str, request: Request):
+    u = require(request)
+    sub = _own_sub(u, sid)
+    if sub["enabled"] != 1:
+        raise HTTPException(400, "订阅已停用")
+    _run_patrol_bg(dict(sub))
+    return {"ok": True, "started": True}
+
+@app.get("/api/tracker/items")
+def tracker_items(request: Request, status: str = "new", tier: str = "", page: int = 1, page_size: int = 30):
+    u = require(request)
+    if status not in ("new", "dismissed", "accepted", "all"):
+        status = "new"
+    if tier not in ("", *_TRACKER_TIERS):
+        tier = ""
+    page = max(1, page)
+    page_size = max(1, min(100, page_size))
+    where, args = ["user_id=?"], [u["id"]]
+    if status != "all":
+        where.append("status=?")
+        args.append(status)
+    if tier:
+        where.append("tier=?")
+        args.append(tier)
+    wsql = " AND ".join(where)
+    total = db.one(f"SELECT COUNT(*) n FROM tracker_items WHERE {wsql}", tuple(args))["n"]
+    rows = db.all(f"SELECT * FROM tracker_items WHERE {wsql} "
+                  "ORDER BY CASE tier WHEN 'core' THEN 0 WHEN 'proxy' THEN 1 ELSE 2 END, "
+                  "published DESC, created_at DESC LIMIT ? OFFSET ?",
+                  (*args, page_size, (page - 1) * page_size))
+    return {"items": [dict(r) for r in rows], "total": total, "page": page,
+            "page_size": page_size, "counts": _sub_counts(u["id"])}
+
+@app.post("/api/tracker/items/{iid}/accept")
+async def tracker_item_accept(iid: str, request: Request):
+    u = require(request)
+    it = db.one("SELECT * FROM tracker_items WHERE id=?", (iid,))
+    if it is None:
+        raise HTTPException(404, "条目不存在")
+    if it["user_id"] != u["id"] and u["role"] != "admin":
+        raise HTTPException(403, "不是你的条目")
+    if it["status"] == "accepted":
+        return {"ok": True, "paper_id": it["paper_id"], "status": "accepted", "duplicate": True}
+    body = await request.json()
+    cid = body.get("collection_id") or get_or_create_default_collection(u["id"])
+    _safe_collection(u, cid)
+    _enforce_parse_quota(u)
+    if it["paper_id"]:                       # 之前收过（幂等）
+        from core.ingest import attach_to_collection
+        attach_to_collection(it["paper_id"], cid)
+        return {"ok": True, "paper_id": it["paper_id"], "duplicate": True}
+    url = it["pdf_url"] or (f"https://arxiv.org/pdf/{it['arxiv_id']}" if it["arxiv_id"] else "")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "该条目没有可下载的 PDF 链接——请在 arXiv 页面手动下载")
+    try:
+        _assert_public_url(url)
+    except HTTPException as e:
+        raise HTTPException(400, f"PDF 链接不可用：{e.detail}")
+    from core.urlimport import import_paper_from_url
+    r = import_paper_from_url(
+        u["id"], url, visibility="shared", collection_id=cid,
+        title=it["title"],
+        meta={"authors": it["authors"], "year": (it["published"] or "")[:4],
+              "journal": it["venue"], "doi": it["doi"], "abstract": it["abstract"]},
+        is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"]))
+    with db.write() as c:
+        c.execute("UPDATE tracker_items SET status='accepted', paper_id=?, accepted_at=datetime('now') WHERE id=?",
+                  (r["paper_id"], iid))
+    emit_data("tracker")
+    return {"ok": True, "paper_id": r["paper_id"], "status": r["status"], "duplicate": r["status"] == "duplicate"}
+
+@app.post("/api/tracker/items/{iid}/dismiss")
+def tracker_item_dismiss(iid: str, request: Request):
+    u = require(request)
+    it = db.one("SELECT * FROM tracker_items WHERE id=?", (iid,))
+    if it is None:
+        raise HTTPException(404, "条目不存在")
+    if it["user_id"] != u["id"] and u["role"] != "admin":
+        raise HTTPException(403, "不是你的条目")
+    with db.write() as c:
+        c.execute("UPDATE tracker_items SET status='dismissed' WHERE id=?", (iid,))
+    emit_data("tracker")
+    return {"ok": True}
+
+@app.post("/api/tracker/items/{iid}/enrich")
+def tracker_item_enrich(iid: str, request: Request):
+    u = require(request)
+    it = db.one("SELECT * FROM tracker_items WHERE id=?", (iid,))
+    if it is None or (it["user_id"] != u["id"] and u["role"] != "admin"):
+        raise HTTPException(404, "条目不存在")
+    if it["zh_summary"]:
+        return {"ok": True, "zh_summary": it["zh_summary"], "zh_title": it["zh_title"], "cached": True}
+    from core.tracker import llm_enrich
+    item = dict(it)
+    item["abstract"] = item["abstract"] or ""
+    r = llm_enrich(u["id"], item)
+    if not r:
+        raise HTTPException(400, "未配置可用的 LLM key——请在设置页配置，或让管理员开放公共池")
+    with db.write() as c:
+        c.execute("UPDATE tracker_items SET zh_summary=?, zh_title=? WHERE id=?",
+                  (r["zh_summary"], r["zh_title"], iid))
+    return {"ok": True, "zh_summary": r["zh_summary"], "zh_title": r["zh_title"]}
+
+@app.get("/api/tracker/smtp")
+def tracker_smtp_get(request: Request):
+    u = require(request)
+    if u["role"] != "admin":
+        raise HTTPException(403, "仅管理员可查看发件邮箱配置")
+    cfg = tracker_mail.get_smtp_config() or {}
+    return {"host": cfg.get("host", ""), "port": cfg.get("port", 465), "sender": cfg.get("sender", ""),
+            "sender_name": cfg.get("sender_name", ""), "configured": tracker_mail.smtp_configured()}
+
+@app.put("/api/tracker/smtp")
+async def tracker_smtp_put(request: Request):
+    u = require(request)
+    if u["role"] != "admin":
+        raise HTTPException(403, "仅管理员可配置发件邮箱")
+    b = await request.json()
+    host = (b.get("host") or "").strip()
+    sender = (b.get("sender") or "").strip()
+    if not host or "@" not in sender:
+        raise HTTPException(400, "SMTP 主机与发件邮箱必填（邮箱格式需正确）")
+    tracker_mail.save_smtp_config(host, b.get("port") or 465, sender,
+                                  b.get("password") or "", b.get("sender_name") or "")
+    return {"ok": True}
+
+@app.post("/api/tracker/smtp/test")
+async def tracker_smtp_test(request: Request):
+    u = require(request)
+    if u["role"] != "admin":
+        raise HTTPException(403, "仅管理员可测试发件邮箱")
+    b = await request.json()
+    to = (b.get("to") or "").strip()
+    try:
+        tracker_mail.test_send(to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"发送失败：{str(e)[:200]}")
+    return {"ok": True, "to": to}
 
 
 # ---------------- 问答（SSE 流式） ----------------

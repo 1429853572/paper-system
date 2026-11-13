@@ -329,6 +329,117 @@ with db.write() as c:
     c.execute("DELETE FROM parse_runs WHERE id='runref'")
     c.execute("DELETE FROM papers WHERE id='pref'")
 
+# == 文献追踪（tracker）==
+print("== 文献追踪（tracker：查询构造/去重/分层/补足/patrol/邮件HTML）==")
+from core import tracker as tk
+from core import tracker_mail as tm
+
+sub = {"id": "ts1", "user_id": 9001, "categories": "cs.CV eess.IV",
+       "keywords": "gaussian splatting, 3D reconstruction", "exclude": "survey, review",
+       "journals": "", "frequency_hours": 24}
+q = tk.arxiv_search_query(sub, 48)
+ok("查询构造：cat 组 AND 关键词组 ANDNOT 排除",
+   q == '(cat:cs.CV OR cat:eess.IV) AND ((ti:"gaussian splatting" OR abs:"gaussian splatting") '
+         'OR (ti:"3D reconstruction" OR abs:"3D reconstruction")) '
+         'ANDNOT ((ti:"survey" OR abs:"survey") OR (ti:"review" OR abs:"review"))', q or "None")
+q2 = tk.arxiv_search_query({"categories": "", "keywords": "", "exclude": "", "journals": "Nature"}, 24)
+ok("无 arXiv 条件（仅期刊）→ query=None", q2 is None, str(q2))
+
+def _mk(t, ab, doi="", ax="", pdf="", venue="arXiv", pub="2026-11-13", authors="A"):
+    return {"title": t, "abstract": ab, "doi": doi, "arxiv_id": ax, "pdf_url": pdf,
+            "venue": venue, "published": pub, "authors": authors, "code_url": ""}
+
+a1 = _mk("Gaussian Splatting for Urban Reconstruction", "we render urban scenes with 3D gaussian splatting",
+         doi="10.1/aa", ax="2601.0001", pdf="https://arxiv.org/pdf/2601.0001")
+a2 = _mk("Gaussian Splatting for Urban  Reconstruction", "short version", ax="2601.0002",
+         venue="Nature Communications")
+merged = tk.merge_round([a1, a2])
+ok("轮内去重：双空格标题≥0.85 合并为一条", len(merged) == 1, f"n={len(merged)}")
+a3 = _mk("Gaussian Splatting for Urban Reconstruction v2", "we render urban scenes with 3D gaussian splatting and more",
+         ax="2601.0003")
+m2 = tk.merge_round([_mk("Gaussian Splatting for Urban Reconstruction", "we render urban scenes with 3D gaussian splatting",
+                         doi="10.1/aa", pdf="https://arxiv.org/pdf/x"), a3])
+hit = m2[0]
+ok("合并保留字段更全者并补空位", hit.get("abstract", "").endswith("splatting") and
+   hit.get("pdf_url") and hit.get("arxiv_id") == "2601.0003",
+   f"abs_tail={hit.get('abstract','')[-20:]} pdf={hit.get('pdf_url')} ax={hit.get('arxiv_id')}")
+a5 = _mk("Totally Different Paper on Topic Modeling", "latent dirichlet allocation")
+ok("无关论文不误合", len(tk.merge_round([_mk("Gaussian Splatting Urban", "x gaussian y"), a5])) == 2)
+
+sub_cls = {"keywords": "gaussian splatting", "journals": "Nature Communications"}
+ok("分层：期刊命中→core", tk.classify(_mk("Some Other Title", "nothing", venue="Nature Communications"), sub_cls) == "core")
+ok("分层：标题命中关键词→core", tk.classify(_mk("Gaussian Splatting Survey of Methods", "x"), sub_cls) == "core")
+ok("分层：仅摘要命中→proxy", tk.classify(_mk("Fast Scene Solver", "uses gaussian splatting for speed"), sub_cls) == "proxy")
+ok("分层：无命中→eco", tk.classify(_mk("Cat Image Classifier", "cats and dogs"), sub_cls) == "eco")
+
+batch = [_mk("Core Paper", "gaussian splatting here", venue="Nature Communications"),
+         _mk("Proxy Paper", "mentions gaussian splatting once")]
+for b in batch: b["tier"] = tk.classify(b, sub_cls)
+batch += [_mk(f"Filler {i}", "unrelated", pub=f"2026-11-{10+i:02d}") for i in range(8)]
+for b in batch:
+    if "tier" not in b: b["tier"] = tk.classify(b, sub_cls)
+tk.fill_fallback(batch, minimum=5)
+fb = [x for x in batch if x.get("is_fallback")]
+ok("补足：core+proxy=2 → 从 eco 补 3 篇并标 is_fallback", len(fb) == 3 and all(x["tier"] == "eco" for x in fb),
+   f"fb={len(fb)}")
+big = batch[:2] + [_mk(f"Strong {i}", "gaussian splatting in title", venue="Nature Communications") for i in range(5)]
+for b in big:
+    if "tier" not in b: b["tier"] = tk.classify(b, sub_cls)
+tk.fill_fallback(big, minimum=5)
+ok("足额不补（无 is_fallback）", not any(x.get("is_fallback") for x in big))
+
+# patrol 离线整链（mock 采集与 LLM；临时库真实读写）
+from core.db import Database as _TDB
+from pathlib import Path as _PPath
+_tpath = _PPath(tempfile.mkdtemp(prefix="ps-trk-")) / "trk.db"
+_tdb = _TDB(_tpath)
+tk.db = _tdb
+tm.db = _tdb
+sub_row = {"id": "tsX", "user_id": 9001, "name": "T", "keywords": "gaussian splatting",
+           "categories": "cs.CV", "exclude": "", "journals": "", "frequency_hours": 24,
+           "llm_auto": "off", "email_enabled": 0, "email_to": "", "enabled": 1,
+           "last_run_at": None, "last_error": None}
+with _tdb.write() as c:
+    c.execute("INSERT INTO users(id, username, password_hash, role) VALUES(9001, 'trktest', 'x', 'admin')")
+    c.execute("INSERT INTO tracker_subs(id, user_id, name, keywords, categories, exclude, journals, "
+              "frequency_hours, llm_auto, email_enabled, email_to, enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)",
+              ("tsX", 9001, "T", "gaussian splatting", "cs.CV", "", "", 24, "off", 0, ""))
+    c.execute("INSERT INTO papers(id, owner_id, file_hash, title, doi, deleted_at) VALUES('pexists',9001,'h1','An Old Paper','10.9/old',NULL)")
+tk.fetch_arxiv = lambda s, lh: [
+    _mk("Fresh GS Paper One", "gaussian splatting advances", ax="2602.1", doi="10.2/1"),
+    _mk("An Old Paper", "duplicate of library paper", ax="2602.2", doi="10.9/old"),
+    _mk("Radiance Field Refinement Study", "more splatting techniques", ax="2602.3", doi="10.2/3"),
+]
+tk.fetch_journal_articles = lambda s, lh: []
+tk.llm_enrich = lambda uid, it: None
+mail_calls = []
+r1 = tk.patrol(sub_row, email_fn=lambda s, it: mail_calls.append(len(it)))
+ok("patrol：新条目 2 篇（已入库去重 1）", r1["new"] == 2 and r1["dup_library"] == 1, str(r1))
+r2 = tk.patrol(sub_row, email_fn=lambda s, it: mail_calls.append(len(it)))
+ok("patrol 幂等：第二轮 0 新（同 arxiv_id 跳过）", r2["new"] == 0, str(r2))
+row = _tdb.one("SELECT COUNT(*) n FROM tracker_items WHERE sub_id='tsX'")
+ok("收件箱落库 2 条", row["n"] == 2, str(row["n"]))
+srow = _tdb.one("SELECT last_error IS NULL OR last_error='' AS clean FROM tracker_subs WHERE id='tsX'")
+ok("patrol 无错误记录", bool(srow["clean"]))
+tk.fetch_arxiv = lambda s, lh: (_ for _ in ()).throw(RuntimeError("network down"))
+r3 = tk.patrol(sub_row, email_fn=None)
+srow2 = _tdb.one("SELECT last_error FROM tracker_subs WHERE id='tsX'")
+ok("采集异常记录 last_error 不炸巡逻", r3["new"] == 0 and srow2["last_error"], str(r3))
+
+html = tm._digest_html(sub_row, [
+    {"tier": "core", "title": "T1", "zh_summary": "总结一", "zh_title": "论文一", "authors": "A",
+     "published": "2026-11-13", "venue": "arXiv", "pdf_url": "https://x/1", "code_url": "", "is_fallback": 0},
+    {"tier": "eco", "title": "T2", "zh_summary": None, "zh_title": None, "authors": "B",
+     "published": "2026-11-12", "venue": "", "pdf_url": "", "code_url": "", "is_fallback": 1},
+])
+ok("日报 HTML：tier 徽章 + 中文摘要 + 补足标 + PDF 链接",
+   "核心" in html and "总结一" in html and "补足" in html and "https://x/1" in html)
+with _tdb.write() as c:
+    c.execute("DELETE FROM tracker_items WHERE sub_id='tsX'")
+    c.execute("DELETE FROM tracker_subs WHERE id='tsX'")
+    c.execute("DELETE FROM papers WHERE id='pexists'")
+    c.execute("DELETE FROM users WHERE id=9001")
+
 print(f"\n结果: {PASS} 通过, {FAIL} 失败")
 # 导入 server.main 会启动调度器线程（非 daemon）——进程退出被吊住，用 os._exit 硬退
 import os
