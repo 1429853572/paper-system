@@ -3208,8 +3208,13 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
     </div>
     <div class="qa-msgs" id="qa-msgs">
       <div class="qa-no-paper" id="qa-no-paper" hidden>${icon('plus')} 点「＋ 添加论文」或在左侧打开一篇，即可提问<br><span style="font-size:var(--fs-xs)">添加 2 篇以上自动进入对比</span></div>
+      <div class="qa-curq" id="qa-curq" hidden title="滚回这个问题">${icon('chat', 12)}<span class="t" id="qa-curq-t"></span></div>
       <div id="qa-sum-bubble"></div>
       <div id="qa-msg-list"></div>
+      <div class="qa-jumps">
+        <button id="qa-jump-up" title="回到顶部" aria-label="回到顶部"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 10l4-4 4 4"/></svg></button>
+        <button id="qa-jump-down" title="跳到最新（含进行中的回答）" aria-label="跳到最新"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></button>
+      </div>
     </div>
     <div class="qa-quote" id="qa-quote" hidden>
       <span class="muted" style="font-size: var(--fs-xs)">${icon('quote', 12)} 引用</span>
@@ -3285,6 +3290,45 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
   // 会话恢复：按「问答范围」过滤（不是当前打开的论文）
   // 范围为空 → 问答区留空并禁用输入；范围有论文 → 加载这些论文的会话
   const scope = [...state.qaPapers];
+  // ↑↓ 悬浮箭头 + 「当前问题」置顶条：显示视口上方最近的提问（长回答滚走问题后
+  // 仍知道在看的回答对应哪问；翻历史时跟随切换），点击滚回该问题
+  const msgs = $('#qa-msgs'), up = $('#qa-jump-up'), down = $('#qa-jump-down'), curq = $('#qa-curq');
+  window._qaScrollUI = () => {
+    if (!msgs?.isConnected) return;
+    down.hidden = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - 90;
+    up.hidden = msgs.scrollTop <= 140;
+    const top = msgs.getBoundingClientRect().top;
+    let target = null, next = null;
+    for (const q of msgs.querySelectorAll('#qa-msg-list .msg.user .bubble')) {
+      if (q.getBoundingClientRect().bottom < top + 8) target = q;
+      else { next = q; break; }
+    }
+    // 最近的提问就在视口顶部附近可见 → 它自己就是当前答案，条不必出现
+    if (target && next && next.getBoundingClientRect().top - top < 60) target = null;
+    curq.hidden = !target;
+    if (target) {
+      curq._target = target;
+      const t = $('#qa-curq-t');
+      if (t) t.textContent = '问：' + (target.dataset.q || target.textContent).trim().slice(0, 120);
+    }
+  };
+  if (msgs) {
+    up.onclick = () => { state._qaFollow = false; msgs.scrollTo({top: 0, behavior: 'smooth'}); };
+    down.onclick = () => {   // 跟随模式：流式增长期间保持贴底，用户滚轮/触摸即解除
+      state._qaFollow = true;
+      msgs.scrollTop = msgs.scrollHeight;
+      window._qaScrollUI();
+    };
+    curq.onclick = () => {   // 落点下让 44px：避免提问恰好被置顶条盖住
+      const t = curq._target;
+      if (!t || !msgs) return;
+      const y = msgs.scrollTop + t.getBoundingClientRect().top - msgs.getBoundingClientRect().top - 44;
+      msgs.scrollTo({top: Math.max(0, y), behavior: 'smooth'});
+    };
+    msgs.addEventListener('scroll', () => window._qaScrollUI(), {passive: true});
+    msgs.addEventListener('wheel', () => state._qaFollow = false, {passive: true});
+    msgs.addEventListener('touchmove', () => state._qaFollow = false, {passive: true});
+  }
   api('/api/chat/sessions').then(d => {
     const hint = $('#qa-no-paper');
     const inp = $('#qa-text');
@@ -3294,6 +3338,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
       const sum = $('#qa-sum-bubble'); if (sum) sum.innerHTML = '';
       if (hint) hint.hidden = false;
       if (inp) inp.disabled = true;
+      window._qaScrollUI?.();
       updateExportBtn();
       return;
     }
@@ -3712,10 +3757,10 @@ async function loadSession(sid) {
   state.qaSession = sid;
   const el = $('#qa-msgs');
   if (!el) return;
-  if (!sid) { el.innerHTML = ''; return; }
-  const d = await api(`/api/chat/sessions/${sid}/messages`);
   const list = $('#qa-msg-list');
   if (!list) return;
+  if (!sid) { list.innerHTML = ''; window._qaScrollUI?.(); return; }
+  const d = await api(`/api/chat/sessions/${sid}/messages`);
   const MARKER = '请生成这篇论文的科研导读';
   const msgs = [];
   for (let i = 0; i < d.messages.length; i++) {
@@ -3725,7 +3770,7 @@ async function loadSession(sid) {
     msgs.push(m);
   }
   list.innerHTML = msgs.map((m, i) =>
-    `<div class="msg ${m.role}"><div class="bubble" data-mi="${i}">${m.role === 'assistant' ? renderCites(m.content, m._ev) : esc(m.content)}</div></div>`).join('');
+    `<div class="msg ${m.role}"><div class="bubble" data-mi="${i}"${m.role === 'user' ? ` data-q="${esc(m.content).slice(0, 300)}"` : ''}>${m.role === 'assistant' ? renderCites(m.content, m._ev) : esc(m.content)}</div></div>`).join('');
   msgs.forEach((m, i) => {
     if (m.role === 'assistant' && m._ev?.length) {
       const el = $(`#qa-msg-list .bubble[data-mi="${i}"]`);
@@ -3733,6 +3778,7 @@ async function loadSession(sid) {
     }
   });
   renderSumBubble();
+  window._qaScrollUI?.();
 }
 function sendQa() {
   const text = $('#qa-text')?.value.trim();
@@ -3751,9 +3797,14 @@ function sendQa() {
   state._histIdx = null;
   const quote = state.qaQuote || '';
   $('#qa-msg-list').insertAdjacentHTML('beforeend',
-    `<div class="msg user"><div class="bubble">${quote ? '<div class="muted" style="font-size: var(--fs-xs);border-left:2px solid #c9d2ee;padding-left:6px;margin-bottom:4px">' + icon('quote', 12) + ' ' + esc(quote.split('\n> ')[1]?.slice(0, 80) || '') + '…</div>' : ''}${esc(text)}</div></div>
+    `<div class="msg user"><div class="bubble" data-q="${esc(text).slice(0, 300)}">${quote ? '<div class="muted" style="font-size: var(--fs-xs);border-left:2px solid #c9d2ee;padding-left:6px;margin-bottom:4px">' + icon('quote', 12) + ' ' + esc(quote.split('\n> ')[1]?.slice(0, 80) || '') + '…</div>' : ''}${esc(text)}</div></div>
      <div class="msg assistant"><div class="bubble" id="qa-live">…</div></div>`);
   const live = $('#qa-live'); live.id = '';
+  // 新提问默认跟随到底部（用户上滚解除）
+  state._qaFollow = true;
+  const msgs = $('#qa-msgs');
+  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+  window._qaScrollUI?.();
   clearQuote();
   const ta = $('#qa-text'); ta.style.height = '';
   fetch('/api/chat/stream', {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -3772,7 +3823,14 @@ function sendQa() {
         const line = buf.slice(0, idx); buf = buf.slice(idx + 2);
         if (!line.startsWith('data:')) continue;
         const ev = JSON.parse(line.slice(5));
-        if (ev.type === 'delta') live.textContent += ev.text;
+        if (ev.type === 'delta') {
+          // 吸底：跟随模式（点过↓/刚发送）或本就在底部附近 → 跟随流式增长
+          const m = $('#qa-msgs');
+          const stick = state._qaFollow || (m && m.scrollTop + m.clientHeight >= m.scrollHeight - 120);
+          live.textContent += ev.text;
+          if (stick && m) m.scrollTop = m.scrollHeight;
+          window._qaScrollUI?.();
+        }
         else if (ev.type === 'error') live.textContent += `\n[错误] ${ev.message}`;
         else if (ev.type === 'done') {
           state.qaSession = ev.session_id;
