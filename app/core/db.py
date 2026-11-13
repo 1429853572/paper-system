@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS tracker_subs (
     exclude         TEXT NOT NULL DEFAULT '',          -- 逗号分隔排除词
     journals        TEXT NOT NULL DEFAULT '',          -- 逗号分隔期刊名（S2 venue 检索）
     frequency_hours INTEGER NOT NULL DEFAULT 24,
+    run_at_time     TEXT,                              -- 每日巡逻时刻 HH:MM（本地时区；空=按间隔滚动）
     llm_auto        TEXT NOT NULL DEFAULT 'core',      -- off|core|all：巡逻后自动 LLM 摘要的范围
     email_enabled   INTEGER NOT NULL DEFAULT 0,
     email_to        TEXT NOT NULL DEFAULT '',          -- 收件邮箱（发件走全局 SMTP）
@@ -468,6 +469,7 @@ class Database:
             self._add_col(c, "tracker_items", "rank", "TEXT")
             self._add_col(c, "tracker_items", "cited_by", "INTEGER")
             self._add_col(c, "tracker_items", "accepted_to", "TEXT")
+            self._add_col(c, "tracker_subs", "run_at_time", "TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS idx_discussion_paper "
                       "ON paper_discussion_messages(paper_id)")
             # 文献追踪：收件箱列表按状态过滤 + 订阅聚合；arxiv_id 幂等去重点查

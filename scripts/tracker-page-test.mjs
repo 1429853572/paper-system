@@ -16,7 +16,7 @@ const js = fs.readFileSync(path.join(UI, 'viewer.js'), 'utf8');
 
 const SUB = { id: 'tsa1', user_id: 1, name: '3DGS 前沿', keywords: 'gaussian splatting',
   categories: 'cs.CV eess.IV', exclude: '', journals: '', frequency_hours: 24,
-  llm_auto: 'core', email_enabled: 0, email_to: '', enabled: 1, new_count: 2,
+  llm_auto: 'core', email_enabled: 0, email_to: '', enabled: 1, new_count: 2, run_at_time: '08:00',
   last_run_at: '2026-11-13 08:00:00', last_error: null, created_at: '2026-11-13' };
 const ITEMS = [
   { id: 'tia1', sub_id: 'tsa1', user_id: 1, paper_id: null, title: 'Fresh GS Paper', zh_title: '新GS论文',
@@ -223,18 +223,24 @@ const badge = window.document.querySelector('#tbadge');
 ok('11 未读角标显示收件箱数', badge && !badge.hidden && badge.textContent === '2',
    `hidden=${badge?.hidden} text=${badge?.textContent}`);
 
+// 11b. rail 行悬停编辑按钮存在
+ok('11b rail 订阅行有编辑按钮',
+   !!window.document.querySelector('#tk-rail-list .tk-rail-item .tk-rail-edit'));
+
 // 12. 编辑订阅表单：预填 + 期刊选择 + PUT
 subSaves = [];
 window.trackerEdit('tsa1');
 await sleep(300);
 const prefill = window.document.querySelector('#tk-keywords')?.value;
+const timePrefill = window.document.querySelector('#tk-time')?.value;
+ok('12a 巡逻时刻预填 08:00', timePrefill === '08:00', `time=${timePrefill}`);
 window.trackerJrPick('Scientific Reports');
 window.document.querySelector('#tk-name').value = '改名';
 await window.trackerSave('tsa1');
 await sleep(300);
-ok('12 编辑订阅：预填关键词 + PUT 保存（含所选期刊）', prefill === 'gaussian splatting' &&
-   subSaves.length === 1 && subSaves[0].name === '改名' && subSaves[0].journals === 'Scientific Reports',
-   JSON.stringify(subSaves[0] || {}));
+ok('12 编辑订阅：预填关键词 + PUT 保存（含期刊与时刻）', prefill === 'gaussian splatting' &&
+   subSaves.length === 1 && subSaves[0].name === '改名' && subSaves[0].journals === 'Scientific Reports' &&
+   subSaves[0].run_at_time === '08:00', JSON.stringify(subSaves[0] || {}));
 
 ok('零 JS 异常', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);

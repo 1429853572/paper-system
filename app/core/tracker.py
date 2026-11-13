@@ -424,12 +424,41 @@ def patrol(sub: dict, is_admin: bool = True, email_fn=None) -> dict:
             "error": error or None}
 
 
+def _is_due(sub, now=None) -> bool:
+    """到期判定：设了 run_at_time（HH:MM，服务器本地时区）→ 每天到点且今天未跑；
+    未设 → 按 frequency_hours 间隔滚动。last_run_at 存 UTC，统一转时区后比较。"""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    last = sub.get("last_run_at")
+    last_dt = None
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    rt = (sub.get("run_at_time") or "").strip()
+    if re.match(r"^\d{1,2}:\d{2}$", rt):
+        hh, mm = map(int, rt.split(":"))
+        now_loc = now.astimezone()                          # 服务器本地时区
+        target_loc = now_loc.replace(hour=min(hh, 23), minute=min(mm, 59), second=0, microsecond=0)
+        if now_loc < target_loc:
+            return False                                    # 今天时刻未到
+        if last_dt is not None and last_dt.astimezone() >= target_loc:
+            return False                                    # 今天的点已跑过
+        return True
+    if last_dt is None:
+        return True
+    return (now - last_dt).total_seconds() / 3600 >= int(sub.get("frequency_hours") or 24)
+
+
 def run_due(email_fn=None) -> list[dict]:
     """tracker_loop 周期入口：跑所有到期且启用的订阅（SSE 广播由调用方做）。"""
     with db.read() as c:
-        rows = c.execute(
-            "SELECT * FROM tracker_subs WHERE enabled=1 AND (last_run_at IS NULL OR "
-            "last_run_at < datetime('now', '-' || frequency_hours || ' hours'))").fetchall()
+        rows = c.execute("SELECT * FROM tracker_subs WHERE enabled=1").fetchall()
+    rows = [r for r in rows if _is_due(dict(r))]
     results = []
     for sub in rows:
         try:

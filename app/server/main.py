@@ -3346,13 +3346,17 @@ async def tracker_sub_create(request: Request):
     email_to = (b.get("email_to") or "").strip()[:120]
     if email_to and "@" not in email_to:
         raise HTTPException(400, "收件邮箱格式不正确")
+    run_at = (b.get("run_at_time") or "").strip()
+    import re as _re
+    if run_at and not _re.match(r"^\d{1,2}:\d{2}$", run_at):
+        raise HTTPException(400, "巡逻时刻格式应为 HH:MM")
     sid = "ts" + secrets.token_hex(8)
     with db.write() as c:
         c.execute("INSERT INTO tracker_subs(id, user_id, name, keywords, categories, exclude, journals, "
-                  "frequency_hours, llm_auto, email_enabled, email_to, enabled) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,1)",
+                  "frequency_hours, run_at_time, llm_auto, email_enabled, email_to, enabled) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)",
                   (sid, u["id"], name or "未命名订阅", keywords, categories, exclude, journals,
-                   freq, llm_auto, 1 if b.get("email_enabled") else 0, email_to))
+                   freq, run_at or None, llm_auto, 1 if b.get("email_enabled") else 0, email_to))
     return {"id": sid}
 
 @app.put("/api/tracker/subs/{sid}")
@@ -3374,10 +3378,14 @@ async def tracker_sub_update(sid: str, request: Request):
     email_to = (b.get("email_to") if b.get("email_to") is not None else sub["email_to"] or "").strip()[:120]
     if email_to and "@" not in email_to:
         raise HTTPException(400, "收件邮箱格式不正确")
+    run_at = (b.get("run_at_time") if b.get("run_at_time") is not None else sub["run_at_time"] or "").strip()
+    import re as _re
+    if run_at and not _re.match(r"^\d{1,2}:\d{2}$", run_at):
+        raise HTTPException(400, "巡逻时刻格式应为 HH:MM")
     with db.write() as c:
         c.execute("UPDATE tracker_subs SET name=?, keywords=?, categories=?, exclude=?, journals=?, "
-                  "frequency_hours=?, llm_auto=?, email_enabled=?, email_to=?, enabled=? WHERE id=?",
-                  (name, keywords, categories, exclude, journals, freq, llm_auto,
+                  "frequency_hours=?, run_at_time=?, llm_auto=?, email_enabled=?, email_to=?, enabled=? WHERE id=?",
+                  (name, keywords, categories, exclude, journals, freq, run_at or None, llm_auto,
                    1 if b.get("email_enabled") else 0, email_to,
                    1 if b.get("enabled") else 0, sid))
     return {"ok": True}

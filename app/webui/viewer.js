@@ -6750,8 +6750,13 @@ async function loadTracker() {
       ${opts.icon ? `<span class="muted">${opts.icon}</span>` : ''}</div>`;
   rail.innerHTML =
     railItem('全部新到', counts.inbox, "trackerSubF('')", st === 'new' && !subF) +
-    subs.subs.map(s => railItem(s.name, s.new_count, `trackerSubF('${s.id}')`,
-                                st === 'new' && subF === s.id, {title: trackerCondChips(s)})).join('') +
+    subs.subs.map(s => {
+      const on = st === 'new' && subF === s.id;
+      return `<div class="tk-rail-item ${on ? 'on' : ''}" onclick="trackerSubF('${s.id}')">
+        <span class="tk-rail-name" title="${esc(trackerCondChips(s))}">${esc(s.name)}</span>
+        ${s.new_count ? `<span class="tk-rail-badge">${s.new_count > 99 ? '99+' : s.new_count}</span>` : ''}
+        <span class="tk-rail-edit" title="编辑订阅" onclick="event.stopPropagation(); trackerEdit('${s.id}')">${icon('edit', 12)}</span></div>`;
+    }).join('') +
     `<div class="tk-rail-sep"></div>` +
     railItem('已收进', counts.accepted, "trackerStatus('accepted')", st === 'accepted', {dim: 1}) +
     railItem('已忽略', counts.dismissed, "trackerStatus('dismissed')", st === 'dismissed', {dim: 1});
@@ -6996,6 +7001,15 @@ function trackerFormHtml(s = null) {
              background:var(--panel);max-height:200px;overflow-y:auto;margin-top:4px"></div>
       </div>
     </div>
+    <div class="tk-grid2">
+      <label class="tk-fld">巡逻时刻（频率为每天/每周时生效）
+        <input id="tk-time" type="time" value="${esc(s?.run_at_time || '08:00')}" title="每天到这个时刻巡逻一次">
+      </label>
+      <label class="tk-fld">说明
+        <div class="muted" style="font-size:var(--fs-xs);line-height:1.6;padding-top:4px">
+          每 6/12 小时的订阅按间隔滚动，不受时刻影响；每天/每周的订阅到设定时刻自动巡逻（服务器本地时区）</div>
+      </label>
+    </div>
     <div class="tk-row">
       <label class="tk-fld" style="flex:1">收件邮箱（接收巡逻日报）
         <input id="tk-email" value="${esc(s ? s.email_to : '')}" placeholder="you@example.com（可空）"></label>
@@ -7044,6 +7058,7 @@ async function trackerSave(id) {
     exclude: g('#tk-exclude')?.value || '',
     journals: (window.trackerJrSelected?.() || []).join(','),
     frequency_hours: parseInt(g('#tk-freq')?.value || '24', 10),
+    run_at_time: g('#tk-time')?.value || '',
     llm_auto: g('#tk-auto')?.value || 'core',
     email_to: g('#tk-email')?.value || '',
     email_enabled: g('#tk-mail-on')?.checked || false,
