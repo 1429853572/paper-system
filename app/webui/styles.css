@@ -501,33 +501,61 @@ table.list th { color: var(--muted); font-weight: 500; }
 /* 放大只看表格：居中弹层，宽表横向滚动 + 表头吸附（覆盖 .ui-pop 基础 max-width:360px） */
 .ui-pop.md-tbl-pop { width: 1200px; max-width: 94vw; max-height: 82vh; overflow: auto; }
 .ui-pop.md-tbl-pop .md-tbl-box:hover .md-tbl-bar, .ui-pop.md-tbl-pop .md-tbl-bar { opacity: 1; }
-/* ---- 文献追踪 ---- */
-/* 订阅横卡：主信息（名称+条件 chips）在左，状态与操作在右 */
-.tk-sub { display: flex; gap: 14px; align-items: center; padding: 12px 16px; margin: 0 0 10px;
-          background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); }
-.tk-sub-main { flex: 1; min-width: 0; }
-.tk-sub-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.tk-sub-head b { font-size: var(--fs-base); }
-.tk-sub-conds { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+/* ---- 文献追踪（Feedly 式双栏：左订阅导航 + 右内容流） ---- */
+.tk-wrap { display: flex; gap: 18px; align-items: flex-start; }
+.tk-rail { width: 252px; flex: none; position: sticky; top: 0;
+           display: flex; flex-direction: column; gap: 2px;
+           background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
+           padding: 10px; max-height: calc(100vh - 110px); overflow-y: auto; }
+.tk-rail-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 8px 8px; }
+.tk-rail-head b { font-size: var(--fs-base); }
+.tk-rail-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+                border-radius: var(--r-md); cursor: pointer; color: var(--text-2); }
+.tk-rail-item:hover { background: var(--hover); }
+.tk-rail-item.on { background: var(--tint-primary); color: var(--primary); font-weight: 600; }
+.tk-rail-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-rail-badge { background: var(--primary); color: var(--on-primary); border-radius: 10px;
+                 min-width: 20px; text-align: center; font-size: var(--fs-xs); padding: 0 6px; }
+.tk-rail-badge.dim { background: var(--hover); color: var(--text-2); }
+.tk-rail-sep { border-top: 1px solid var(--border); margin: 6px 4px; }
+.tk-rail-flex { flex: 1; min-height: 10px; }
+.tk-rail-foot { padding: 10px 8px 4px; border-top: 1px solid var(--border);
+                font-size: var(--fs-xs); color: var(--text-2); }
+.tk-main { flex: 1; min-width: 0; }
+/* KPI 统计带 */
+.tk-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+.tk-kpi { border-radius: var(--r-lg); padding: 12px 18px; background: var(--panel); border: 1px solid var(--border); }
+.tk-kpi .n { font-size: 26px; font-weight: 700; line-height: 1.2; }
+.tk-kpi .t { font-size: var(--fs-xs); color: var(--text-2); }
+.tk-kpi.hot { background: var(--tint-primary); border-color: transparent; }
+.tk-kpi.hot .n { color: var(--primary); }
+/* 工具行 / 订阅标签 */
+.tk-toolbar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.tk-subtag { display: inline-flex; gap: 6px; align-items: center; background: var(--tint-primary);
+             color: var(--primary); border-radius: var(--r-pill); padding: 3px 12px; font-weight: 600; }
+/* 条件 chips（订阅卡） */
 .tk-chip { padding: 1px 9px; border-radius: var(--r-pill); font-size: var(--fs-xs); border: 1px solid transparent; }
 .tk-chip.kw { background: var(--tint-primary); color: var(--primary); }
 .tk-chip.cat { background: var(--hover); color: var(--text-2); }
 .tk-chip.jr { background: #eef3f8; color: #2b5a8c; }
 .tk-chip.ex { background: transparent; color: var(--muted); border-color: var(--border); text-decoration: line-through; }
-.tk-sub-side { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex: none; }
 /* 日期分组头 */
 .tk-day { display: flex; gap: 10px; align-items: baseline; margin: 16px 0 10px; }
 .tk-day span:first-child { font-weight: 600; font-size: var(--fs-base); color: var(--primary); }
 .tk-day-n { color: var(--muted); font-size: var(--fs-xs); }
 .tk-day i { flex: 1; border-top: 1px solid var(--border); align-self: center; }
-/* 表单弹层与通用行 */
+/* 弹层与通用行 */
 .ui-pop.tk-form-pop { width: 680px; max-width: 94vw; }
+.ui-pop.tk-smtp-pop { width: 760px; max-width: 94vw; }
 .tk-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tk-fld { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); color: var(--text-2); }
 .tk-fld input, .tk-fld select { width: 100%; }
 .tk-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
 .tk-inline { display: flex; gap: 6px; align-items: center; white-space: nowrap; font-size: var(--fs-sm); color: var(--text-2); }
-@media (max-width: 720px) { .tk-grid2 { grid-template-columns: 1fr; } .tk-sub { flex-direction: column; align-items: stretch; } .tk-sub-side { flex-direction: row; align-items: center; justify-content: space-between; } }
+@media (max-width: 900px) { .tk-wrap { flex-direction: column; } .tk-rail { width: 100%; max-height: none; }
+  .tk-grid2 { grid-template-columns: 1fr; } .tk-kpis { grid-template-columns: repeat(2, 1fr); } }
+
+.tbl-wrap { overflow-x: auto; margin: 10px 0; border: 1px solid var(--border);
 
 .tbl-wrap { overflow-x: auto; margin: 10px 0; border: 1px solid var(--border);
              border-radius: var(--r-md); background: var(--panel); max-width: 100%; }

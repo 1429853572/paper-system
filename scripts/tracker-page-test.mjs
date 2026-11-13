@@ -16,7 +16,7 @@ const js = fs.readFileSync(path.join(UI, 'viewer.js'), 'utf8');
 
 const SUB = { id: 'tsa1', user_id: 1, name: '3DGS 前沿', keywords: 'gaussian splatting',
   categories: 'cs.CV eess.IV', exclude: '', journals: '', frequency_hours: 24,
-  llm_auto: 'core', email_enabled: 0, email_to: '', enabled: 1,
+  llm_auto: 'core', email_enabled: 0, email_to: '', enabled: 1, new_count: 2,
   last_run_at: '2026-11-13 08:00:00', last_error: null, created_at: '2026-11-13' };
 const ITEMS = [
   { id: 'tia1', sub_id: 'tsa1', user_id: 1, paper_id: null, title: 'Fresh GS Paper', zh_title: '新GS论文',
@@ -118,37 +118,41 @@ await sleep(600);
 // 1. 页面注册与渲染
 window.switchPage('tracker');
 await sleep(400);
-ok('1 页面切换并渲染（标题+订阅横卡+SMTP卡+收件箱）',
+ok('1 双栏布局：左订阅导航 + 右内容流',
    window.document.querySelector('#page-tracker').style.display !== 'none' &&
    window.document.querySelector('#page-title').textContent === '文献追踪' &&
-   window.document.querySelectorAll('#tracker-subs .tk-sub').length === 1 &&
-   window.document.querySelector('#tracker-subs .tk-sub').textContent.includes('3DGS 前沿') &&
-   window.document.querySelectorAll('#tracker-subs .set-card').length === 1 &&
-   window.document.querySelectorAll('#tracker-inbox .tracker-item').length === 2);
-ok('1b 条件 chips（关键词/分类着色）',
-   window.document.querySelectorAll('#tracker-subs .tk-chip.kw').length === 1 &&
-   window.document.querySelectorAll('#tracker-subs .tk-chip.cat').length === 2);
-ok('1c 收件箱按天分组（分组头出现）',
-   window.document.querySelectorAll('#tracker-inbox .tk-day').length >= 1 &&
-   /昨天|今天|\d+月\d+日/.test(window.document.querySelector('#tracker-inbox .tk-day')?.textContent || ''));
+   window.document.querySelectorAll('#tk-rail-list .tk-rail-item').length === 4 &&
+   window.document.querySelectorAll('#tk-kpis .tk-kpi').length === 4 &&
+   window.document.querySelectorAll('#tk-stream .tracker-item').length === 2);
+ok('1a 左栏：全部新到(角标2) + 订阅(角标2) + 已收进/已忽略',
+   [...window.document.querySelectorAll('#tk-rail-list .tk-rail-item')].slice(0, 2)
+     .map(x => x.querySelector('.tk-rail-badge')?.textContent).join(',') === '2,2' &&
+   window.document.querySelector('#tk-rail-foot').textContent.includes('邮件发送'));
+ok('1b KPI 统计带（24小时新到高亮）',
+   window.document.querySelectorAll('#tk-kpis .tk-kpi.hot').length === 1 &&
+   window.document.querySelector('#tk-kpis').textContent.includes('核心命中'));
+ok('1c 条件 chips + 按天分组头（悬停订阅行 title）',
+   window.document.querySelectorAll('#tk-rail-list .tk-chip').length === 0 &&
+   window.document.querySelectorAll('#tk-stream .tk-day').length >= 1 &&
+   /昨天|今天|\d+月\d+日/.test(window.document.querySelector('#tk-stream .tk-day')?.textContent || ''));
 
 // 2. 行渲染：tier 徽章 / 补足标 / 中文摘要 / 代码链接 / 行内按钮
-const row = window.document.querySelector('#tracker-inbox .tracker-item');
+const row = window.document.querySelector('#tk-stream .tracker-item');
 ok('2 行渲染完整（核心徽章/中文摘要/代码链接/三按钮）',
    row.textContent.includes('核心') && row.textContent.includes('这篇提出了一种新的泼溅方法。') &&
    row.textContent.includes('代码 ↗') &&
    [...row.querySelectorAll('.btn')].filter(b => b.textContent.includes('收进文献库')).length === 1 &&
    [...row.querySelectorAll('.btn')].some(b => b.textContent.includes('忽略')));
 ok('3 补足灰标只在 is_fallback 行',
-   [...window.document.querySelectorAll('#tracker-inbox .tracker-item')].filter(x => x.textContent.includes('补足')).length === 1);
+   [...window.document.querySelectorAll('#tk-stream .tracker-item')].filter(x => x.textContent.includes('补足')).length === 1);
 
 // 4. 筛选 chips：切层级 → items API 带 tier=core
 acceptCalls = [];
 window.trackerTierF('core');
 await sleep(400);
 ok('4 层级筛选触发（重渲染仅核心行）',
-   window.document.querySelectorAll('#tracker-inbox .tracker-item').length === 1 &&
-   window.document.querySelector('#tracker-inbox .tracker-item').textContent.includes('Fresh GS Paper'));
+   window.document.querySelectorAll('#tk-stream .tracker-item').length === 1 &&
+   window.document.querySelector('#tk-stream .tracker-item').textContent.includes('Fresh GS Paper'));
 window.trackerTierF('');
 await sleep(300);
 
@@ -187,16 +191,15 @@ ok('8 新建订阅：chip 联动输入框 + POST payload 正确',
    JSON.stringify({ catVal, save: subSaves[0] }));
 
 // 9. SMTP 配置卡（admin 可见）+ 保存调用
-const smtpCard = [...window.document.querySelectorAll('#tracker-subs .set-card')]
-  .find(c => c.textContent.includes('邮件发送'));
-ok('9 admin 可见 SMTP 配置卡', !!smtpCard, '');
-window.trackerSmtpToggle();
-await sleep(300);
+const smtpCard = window.document.querySelector('#tk-rail-foot');
+ok('9 左栏邮件入口（admin 可见+未配置徽章）', !!smtpCard && smtpCard.textContent.includes('未配置'), '');
+window.trackerSmtpOpen();
+await sleep(400);
 window.document.querySelector('#smtp-host').value = 'smtp.qq.com';
 window.document.querySelector('#smtp-sender').value = 'a@qq.com';
 window.document.querySelector('#smtp-pass').value = 'authcode';
 smtpSaves = [];
-await window.trackerSaveSmtp(window.document.querySelector('[onclick*="trackerSaveSmtp"]'));
+await window.trackerSaveSmtp(window.document.querySelector('.ui-pop [onclick*="trackerSaveSmtp"]'));
 await sleep(300);
 ok('10 SMTP 保存 payload（host/sender/密码）',
    smtpSaves.length === 1 && smtpSaves[0].host === 'smtp.qq.com' && smtpSaves[0].password === 'authcode',

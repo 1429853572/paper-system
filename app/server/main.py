@@ -3287,13 +3287,16 @@ def _own_sub(u: dict, sid: str):
     return row
 
 def _sub_counts(user_id: int) -> dict:
-    counts = {"new": 0, "core": 0, "proxy": 0, "eco": 0, "dismissed": 0, "accepted": 0}
+    counts = {"new": 0, "core": 0, "proxy": 0, "eco": 0, "dismissed": 0, "accepted": 0, "today": 0}
     for r in db.all("SELECT status, tier, COUNT(*) n FROM tracker_items WHERE user_id=? "
                     "GROUP BY status, tier", (user_id,)):
         counts[r["status"]] = counts.get(r["status"], 0) + r["n"]
         if r["status"] == "new":
             counts[r["tier"]] = counts.get(r["tier"], 0) + r["n"]
     counts["inbox"] = counts["new"]
+    counts["today"] = db.one("SELECT COUNT(*) n FROM tracker_items WHERE user_id=? "
+                             "AND created_at >= datetime('now', '-24 hours')",
+                             (user_id,))["n"]
     return counts
 
 def _run_patrol_bg(sub: dict) -> None:
@@ -3316,9 +3319,12 @@ def _run_patrol_bg(sub: dict) -> None:
 @app.get("/api/tracker/subs")
 def tracker_subs_list(request: Request):
     u = require(request)
+    new_by = {r["sub_id"]: r["n"] for r in db.all(
+        "SELECT sub_id, COUNT(*) n FROM tracker_items WHERE user_id=? AND status='new' GROUP BY sub_id",
+        (u["id"],))}
     subs = db.all("SELECT * FROM tracker_subs WHERE user_id=? ORDER BY created_at DESC", (u["id"],))
-    return {"subs": [dict(s) for s in subs], "counts": _sub_counts(u["id"]),
-            "smtp_ready": tracker_mail.smtp_configured()}
+    return {"subs": [{**dict(s), "new_count": new_by.get(s["id"], 0)} for s in subs],
+            "counts": _sub_counts(u["id"]), "smtp_ready": tracker_mail.smtp_configured()}
 
 @app.post("/api/tracker/subs")
 async def tracker_sub_create(request: Request):
@@ -3395,7 +3401,8 @@ def tracker_run(sid: str, request: Request):
     return {"ok": True, "started": True}
 
 @app.get("/api/tracker/items")
-def tracker_items(request: Request, status: str = "new", tier: str = "", page: int = 1, page_size: int = 30):
+def tracker_items(request: Request, status: str = "new", tier: str = "", sub_id: str = "",
+                  page: int = 1, page_size: int = 30):
     u = require(request)
     if status not in ("new", "dismissed", "accepted", "all"):
         status = "new"
@@ -3410,6 +3417,9 @@ def tracker_items(request: Request, status: str = "new", tier: str = "", page: i
     if tier:
         where.append("tier=?")
         args.append(tier)
+    if sub_id:
+        where.append("sub_id=?")
+        args.append(sub_id)
     wsql = " AND ".join(where)
     total = db.one(f"SELECT COUNT(*) n FROM tracker_items WHERE {wsql}", tuple(args))["n"]
     rows = db.all(f"SELECT * FROM tracker_items WHERE {wsql} "
