@@ -112,6 +112,7 @@ bash scripts/setup-xinference.sh # 重载 embedding/rerank 模型
 | embedding 报错 | `curl localhost:9997/v1/models` 应列出 bge-m3 / bge-reranker-v2-m3；没有就跑 `bash scripts/setup-xinference.sh` |
 | 导出 PDF 失败 | `systemctl status papersystem-render`；存活 `curl localhost:8801/health`；鉴权 `curl -H "X-Render-Token: $(grep ^PAPERSYS_RENDER_TOKEN .env | cut -d= -f2)" -X POST localhost:8801/render -d '{\"html\":\"<p>t</p>\"}'` |
 | 翻译/问答 401 | 各用户设置页测试连接；公共池需 admin 开启 |
+| 阅读器 PDF 图表空白（图注在、图本体白/噪声条） | 原文内嵌 JPXDecode(JPEG2000) 图，pdf.js 解码器不完整 → 宿主 `python3 scripts/fix-jpx-images.py`（需 `pip install pymupdf`；先 `--dry-run` 看 scope）。脚本重编码为 JPEG 并做结构验证；已入库的 91 篇中 4 篇 206 张已修复（2026-11-13） |
 
 
 ## 宿主浏览器采集服务（中文文献获取）
