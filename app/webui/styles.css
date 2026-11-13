@@ -588,9 +588,26 @@ table.list th { color: var(--muted); font-weight: 500; }
 .tb-src-item { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--r-sm); cursor: pointer; }
 .tb-src-item:hover { background: var(--hover); }
 .ui-pop.tb-harvest-pop { width: 560px; max-width: 94vw; }
-.ui-pop.tb-compare-pop { width: min(96vw, 1280px); max-height: 90vh; overflow: auto; }
-.tb-cmp { display: grid; grid-template-columns: minmax(280px, 42%) 1fr; gap: 14px; margin-top: 8px; }
-.tb-cmp-left img { max-width: 100%; border: 1px solid var(--border); border-radius: var(--r-sm); background: #fff; }
+/* 对照审阅工作台：近全屏，左右独立滚动，底部操作条 */
+.ui-pop.tb-compare-pop { width: 96vw; height: 92vh; max-width: none; max-height: none;
+                         display: flex; padding: 0; overflow: hidden; }
+.tbws { display: flex; flex-direction: column; width: 100%; min-height: 0; }
+.tbws-head { display: flex; gap: 10px; align-items: center; padding: 12px 18px 8px; flex: none; }
+.tbws-count { font-weight: 700; color: var(--primary); font-size: var(--fs-md); white-space: nowrap; }
+.tbws-body { flex: 1; min-height: 0; display: grid; gap: 16px; padding: 4px 18px; }
+.tbws-body.tbws-both { grid-template-columns: minmax(30%, 44%) 1fr; }
+.tbws-body.tbws-img { grid-template-columns: 1fr; }
+.tbws-body.tbws-grid { grid-template-columns: 1fr; }
+.tbws-body.tbws-img .tbws-grid, .tbws-body.tbws-grid .tbws-img { display: none; }
+.tbws-img { overflow: auto; }
+.tbws-img img { max-width: 100%; border: 1px solid var(--border); border-radius: var(--r-sm);
+                background: #fff; cursor: zoom-in; }
+.tbws-grid { display: flex; flex-direction: column; min-height: 0; }
+.tbws-grid .tb-grid-wrap { flex: 1; }
+.tbws-foot { display: flex; gap: 6px; align-items: center; padding: 10px 18px;
+             border-top: 1px solid var(--border); flex: none; background: var(--panel); }
+.tbws-hint { font-size: var(--fs-xs); }
+@media (max-width: 900px) { .tbws-body.tbws-both { grid-template-columns: 1fr; grid-template-rows: 40% 1fr; } }
 .tb-grid-wrap { max-height: 60vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-sm); }
 .tb-edit-grid th, .tb-edit-grid td { position: relative; min-width: 60px; }
 .tb-edit-grid [contenteditable]:focus { outline: 2px solid var(--tint-primary-2); background: var(--tint-primary); }

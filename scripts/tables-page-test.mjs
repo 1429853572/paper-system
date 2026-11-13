@@ -136,11 +136,15 @@ await window.tbCompare('tb1');
 await sleep(400);
 const pop = window.document.querySelector('.ui-pop.tb-compare-pop');
 const trs = window.document.querySelectorAll('#tb-edit-grid tr').length;
-const tds = [...window.document.querySelectorAll('#tb-edit-grid td[contenteditable]')];
+const tds = [...window.document.querySelectorAll('#tb-edit-grid td[contenteditable="true"]')];
+const navBar = [...(pop?.querySelectorAll('.tbws-foot .btn') || [])].map(b => b.textContent.trim()).join(',');
+const count = pop?.querySelector('.tbws-count')?.textContent;
+const imgOk = !!pop?.querySelector('.tbws-img img');
 const cellV = tds.at(-1)?.textContent;
-ok('4 对照弹层（截图位 + 可编辑网格）',
-   !!pop && trs === 2 && cellV === '25.1',
-   `pop=${!!pop} trs=${trs} cell=${cellV} n=${tds.length}`);
+ok('4 对照工作台（全屏 + 截图 + 网格 + 翻页操作条）',
+   !!pop && trs === 2 && cellV === '25.1' && imgOk &&
+   navBar.includes('下一张') && navBar.includes('剔除并下一张') && /^\d+ \/ \d+$/.test(count || ''),
+   `pop=${!!pop} trs=${trs} cell=${cellV} nav=${navBar.slice(0, 40)} count=${count}`);
 await window.tbGridSave('tb1', null);
 await sleep(300);
 ok('5 编辑保存 PATCH（写整理版）', patchCalls.length === 1 && Array.isArray(patchCalls[0].cells), JSON.stringify(patchCalls[0]).slice(0, 60));

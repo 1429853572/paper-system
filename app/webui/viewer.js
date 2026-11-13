@@ -7473,53 +7473,153 @@ window.tbExportSel = btn => tbExport([...(state._tbSel || new Set())], btn);   /
 window.tbLoadMore = () => { state._tbPage = (state._tbPage || 1) + 1; loadTables(); };
 window.tbSearch = v => { state._tbQ = v; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
 
-/* ---------- 对照编辑弹层（左原图 · 右可编辑网格） ---------- */
+/* ---------- 全屏对照审阅工作台（连续翻页核验：←→ 翻表 / X 剔除并下一张） ---------- */
 let _tbCompareTab = 'ai';
-let _tbCmpPop = null;                       // 当前对照弹层实例（防叠层 + grid 随实例）
-window.tbCompareClose = () => { _tbCmpPop?.close(); _tbCmpPop = null; };
+let _tbCmpPop = null;
+const _tbCmp = {idx: 0, dirty: false, layout: 'both', tid: null, items: []};
+
+window.tbCompareClose = () => {
+  if (_tbCmp.dirty) tbCmpAutoSave();          // 离开自动保存——编辑永不丢
+  _tbCmp.keyHandler && document.removeEventListener('keydown', _tbCmp.keyHandler);
+  _tbCmp.keyHandler = null;
+  _tbCmpPop?.close();
+  _tbCmpPop = null;
+  loadTables();                               // 审阅后的状态/统计刷新
+};
+
+function _tbItems() { return state._tbData?.items || []; }
+
 window.tbCompare = async tid => {
-  _tbCmpPop?.close();                       // 切页签/换表先关旧层
+  _tbCmpPop?.close();
   const {pop, close} = openPop('tb-compare-pop');
   _tbCmpPop = {pop, close};
-  pop.innerHTML = `<div class="ui-pop-title">${icon('stack')} 表格对照
-    <button class="btn small" style="margin-left:auto" onclick="this.closest('.ui-backdrop').remove()">${icon('close')}</button></div>
-    <div style="margin:10px 0"><span class="spin"></span> 加载…</div>`;
+  _tbCmp.items = _tbItems();
+  _tbCmp.idx = Math.max(0, _tbCmp.items.findIndex(x => x.id === tid));
+  _tbCmp.dirty = false;
+  // 全局快捷键（编辑单元格时不劫持方向键）
+  if (!_tbCmp.keyHandler) {
+    _tbCmp.keyHandler = e => {
+      if (!_tbCmpPop?.pop?.isConnected) {       // Esc 已拆层——自清
+        document.removeEventListener('keydown', _tbCmp.keyHandler);
+        _tbCmp.keyHandler = null;
+        return;
+      }
+      if (e.target?.isContentEditable || /INPUT|SELECT|TEXTAREA/.test(e.target?.tagName || '')) return;
+      if (e.key === 'ArrowRight') { e.preventDefault(); tbCmpNav(1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); tbCmpNav(-1); }
+      else if (e.key === 'x' || e.key === 'X') { e.preventDefault(); tbCmpReview('deleted'); }
+      else if (e.key === 'j' || e.key === 'J') { e.preventDefault(); tbCmpReview('pending'); }
+    };
+    document.addEventListener('keydown', _tbCmp.keyHandler);
+  }
+  pop.innerHTML = `<div style="padding:40px;text-align:center"><span class="spin"></span> 加载…</div>`;
+  await tbCmpRender();
+};
+
+async function tbCmpRender() {
+  const it = _tbCmp.items[_tbCmp.idx];
+  if (!it) { window.tbCompareClose(); return; }
+  const pop = _tbCmpPop?.pop;
+  if (!pop) return;
   let d;
-  try { d = await api(`/api/tables/${tid}`); }
-  catch (e) { pop.children[1].textContent = friendlyError(e); return; }
-  _tbCompareTab = d.ai_cells ? 'ai' : 'orig';
+  try { d = await api(`/api/tables/${it.id}`); }
+  catch (e) { pop.innerHTML = `<div style="padding:40px">${esc(friendlyError(e))}</div>`; return; }
+  if (_tbCmp.tid !== d.id) { _tbCompareTab = d.ai_cells ? 'ai' : 'orig'; }   // 换表重置页签
+  _tbCmp.tid = d.id;
+  _tbCmp.dirty = false;
   const gridOf = tab => {
     if (tab === 'ai' && d.ai_cells) { try { return JSON.parse(d.ai_cells); } catch { /* 落回原始 */ } }
     return JSON.parse(d.cells || '[]');
   };
+  window._tbGrid = gridOf(_tbCompareTab);
+  const st = _TB_ST[it.ai_status] || ['', 'dim'];
   pop.innerHTML = `
-  <div class="ui-pop-title">${icon('stack')} ${esc((d.caption || '表格对照').slice(0, 60))}
-    <button class="btn small" style="margin-left:auto" onclick="tbCompareClose()">${icon('close')}</button></div>
-  <div class="muted" style="font-size:var(--fs-xs);padding:0 4px">${esc(d.paper_title)} · 第 ${d.page_index + 1} 页</div>
-  ${d.ai_status === 'mismatch' ? `<div class="tb-mis-bar">${icon('warn')} ${esc(d.ai_note || '模型输出与原表不一致')}——请人工修整右侧数据后保存</div>` : ''}
-  <div class="tb-cmp">
-    <div class="tb-cmp-left">
-      <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">原始截图（MinerU 裁剪）</div>
-      ${d.img_url ? `<img src="${d.img_url}" onerror="this.closest('.tb-cmp-left').innerHTML='<div class=\\'tb-thumb-fallback\\'>截图缺失——以原始提取网格为准</div>'">`
-                  : '<div class="tb-thumb-fallback">无截图</div>'}
-    </div>
-    <div class="tb-cmp-right">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-        <span class="chip-btn ${_tbCompareTab === 'ai' ? 'on' : ''}" onclick="tbCmpTab('ai', '${tid}')">AI 整理${d.ai_cells ? '' : '（未整理）'}</span>
-        <span class="chip-btn ${_tbCompareTab === 'orig' ? 'on' : ''}" onclick="tbCmpTab('orig', '${tid}')">原始提取</span>
-        <span style="margin-left:auto"></span>
-        <button class="btn small" onclick="tbGridAddRow('${tid}')">+行</button>
-        <button class="btn small" onclick="tbGridAddCol('${tid}')">+列</button>
-        <button class="btn small primary" onclick="tbGridSave('${tid}', this)">${icon('check')} 保存</button>
+  <div class="tbws">
+    <div class="tbws-head">
+      <div style="flex:1;min-width:0">
+        <b style="font-size:var(--fs-md)">${esc((d.caption || '（无表题）').slice(0, 90))}</b>
+        <div class="muted" style="font-size:var(--fs-xs)">${esc(d.paper_title)} · 第 ${d.page_index + 1} 页 · ${window._tbGrid.length}×${window._tbGrid[0]?.length || 0}
+          ${tbStatusBadge(it.ai_status)}${it.review === 'kept' ? '<span class="badge ok">保留</span>' : ''}${it.review === 'deleted' ? '<span class="badge dim">已剔除</span>' : ''}</div>
       </div>
-      <div class="tb-grid-wrap"><table class="tbl-md tb-edit-grid" id="tb-edit-grid" contenteditable="true"></table></div>
-      <div class="muted" style="font-size:var(--fs-xs);margin-top:4px">点击单元格直接改；行首/表头 ✕ 删行删列；表头行即列名；保存写回整理版（原始提取永不改动）</div>
+      <span class="tbws-count">${_tbCmp.idx + 1} / ${_tbCmp.items.length}</span>
+      <span class="chip-btn ${_tbCmp.layout === 'both' ? 'on' : ''}" onclick="tbCmpLayout('both')">并排</span>
+      <span class="chip-btn ${_tbCmp.layout === 'img' ? 'on' : ''}" onclick="tbCmpLayout('img')">仅截图</span>
+      <span class="chip-btn ${_tbCmp.layout === 'grid' ? 'on' : ''}" onclick="tbCmpLayout('grid')">仅表格</span>
+      <button class="btn small" onclick="tbCompareClose()" title="关闭（Esc）">${icon('close')}</button>
+    </div>
+    ${d.ai_status === 'mismatch' ? `<div class="tb-mis-bar">${icon('warn')} ${esc(d.ai_note || '模型输出与原表不一致')}——人工修整后保存即转为已整理</div>` : ''}
+    <div class="tbws-body tbws-${_tbCmp.layout}">
+      <div class="tbws-img">
+        <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">原始截图（点击放大）</div>
+        ${d.img_url ? `<img src="${d.img_url}" onclick="tbCmpZoom('${d.img_url}')" title="点击放大">
+          <div class="muted" style="font-size:var(--fs-xs);margin-top:4px">MinerU 裁剪 · ${esc(d.asset_name || '')}</div>`
+          : '<div class="tb-thumb-fallback" style="padding:40px 0">无截图（以原始提取网格为准）</div>'}
+      </div>
+      <div class="tbws-grid">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+          <span class="chip-btn ${_tbCompareTab === 'ai' ? 'on' : ''}" onclick="tbCmpTab('ai')">AI 整理${d.ai_cells ? '' : '（未整理）'}</span>
+          <span class="chip-btn ${_tbCompareTab === 'orig' ? 'on' : ''}" onclick="tbCmpTab('orig')">原始提取</span>
+          <span style="flex:1"></span>
+          <button class="btn small" onclick="tbGridAddRow()">+行</button>
+          <button class="btn small" onclick="tbGridAddCol()">+列</button>
+          <button class="btn small primary" onclick="tbGridSave('${d.id}', this)">${icon('check')} 保存</button>
+        </div>
+        <div class="tb-grid-wrap"><table class="tbl-md tb-edit-grid" id="tb-edit-grid" contenteditable="true"></table></div>
+        <div class="muted" style="font-size:var(--fs-xs);margin-top:4px">点击单元格直接改；行首/表头 ✕ 删行删列；翻页/关闭自动保存修改</div>
+      </div>
+    </div>
+    <div class="tbws-foot">
+      <button class="btn small" onclick="tbCmpNav(-1)" ${_tbCmp.idx === 0 ? 'disabled' : ''}>‹ 上一张</button>
+      <button class="btn small ${it.review === 'kept' ? 'primary' : ''}" onclick="tbCmpReview('kept')" title="快捷键 J">保留</button>
+      <button class="btn small danger" onclick="tbCmpReview('deleted')" title="快捷键 X">剔除并下一张</button>
+      <button class="btn small" onclick="tbTidyOne('${d.id}', this)">${icon('bolt')} 重整理</button>
+      <button class="btn small" onclick="tbExport(['${d.id}'], this)">${icon('download')} 下载</button>
+      <button class="btn small" onclick="tbLocate('${d.paper_id}', ${d.page_index})">${icon('library')} 原文</button>
+      <span style="flex:1"></span>
+      <span class="muted tbws-hint">← → 翻表 · X 剔除 · J 保留 · 编辑自动保存</span>
+      <button class="btn small primary" onclick="tbCmpNav(1)" ${_tbCmp.idx >= _tbCmp.items.length - 1 ? 'disabled' : ''}>下一张 ›</button>
     </div>
   </div>`;
-  window._tbGrid = gridOf(_tbCompareTab);
-  window._tbOrigGrid = JSON.parse(d.cells || '[]');
   tbRenderGrid(window._tbGrid);
+  // 网格任何编辑 → dirty（翻页/关闭时自动保存）
+  $('#tb-edit-grid')?.addEventListener('input', () => { _tbCmp.dirty = true; });
+}
+window.tbCmpLayout = mode => { _tbCmp.layout = mode; tbCmpRender(); };
+window.tbCmpTab = tab => { if (_tbCmp.dirty) tbCmpAutoSave(); _tbCompareTab = tab; tbCmpRender(); };
+window.tbCmpZoom = url => {
+  const {pop, close} = openPop('tb-zoom-pop');
+  pop.innerHTML = `<img src="${url}" style="max-width:92vw;max-height:86vh;display:block;cursor:zoom-out"
+    onclick="this.closest('.ui-backdrop').remove()">`;
 };
+async function tbCmpAutoSave() {
+  if (!_tbCmp.dirty || !_tbCmp.tid) return;
+  _tbCmp.dirty = false;
+  const grid = _tbCollectGrid();
+  try {
+    await api(`/api/tables/${_tbCmp.tid}`, {method: 'PATCH', body: JSON.stringify({cells: grid})});
+    toast('修改已自动保存', 2000);
+  } catch (e) { toast(friendlyError(e, '自动保存失败——修改未保存')); _tbCmp.dirty = true; }
+}
+window.tbCmpNav = async dir => {
+  const next = _tbCmp.idx + dir;
+  if (next < 0 || next >= _tbCmp.items.length) { toast(dir > 0 ? '已是最后一张' : '已是第一张'); return; }
+  await tbCmpAutoSave();
+  _tbCmp.idx = next;
+  await tbCmpRender();
+};
+window.tbCmpReview = async rv => {
+  const it = _tbCmp.items[_tbCmp.idx];
+  if (!it) return;
+  await tbCmpAutoSave();
+  try {
+    await api(`/api/tables/${it.id}/review`, {method: 'POST', body: JSON.stringify({review: rv})});
+    it.review = rv;                            // 本地同步（KPI 在关闭时刷新）
+    toast(rv === 'deleted' ? '已剔除' : '已标记保留', 1800);
+    if (rv === 'deleted' && _tbCmp.idx < _tbCmp.items.length - 1) await tbCmpNav(1);
+    else await tbCmpRender();
+  } catch (e) { toast(friendlyError(e, '操作失败')); }
+};
+
 function tbRenderGrid(grid) {
   const t = $('#tb-edit-grid');
   if (!t) return;
@@ -7529,12 +7629,8 @@ function tbRenderGrid(grid) {
       ? `<th class="tb-cel"><span contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</span><b class="tb-col-x" title="删除此列" onclick="event.stopPropagation();tbGridDelCol(${c})">✕</b></th>`
       : `<td contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</td>`).join('')}</tr>`).join('');
 }
-window.tbCmpTab = (tab, tid) => {
-  _tbCompareTab = tab;
-  window.tbCompare(tid);   // 重开（tab 状态保留在 _tbCompareTab）
-};
 function _tbCollectGrid() {
-  // 从 DOM 读回（contenteditable 的实时文本）
+  // 从 DOM 读回（contenteditable 的实时文本；✕ 在 span 外不会混入）
   const grid = window._tbGrid.map(r => [...r]);
   document.querySelectorAll('#tb-edit-grid [contenteditable][data-r]').forEach(td => {
     grid[+td.dataset.r][+td.dataset.c] = (td.textContent ?? '').replace(/\u00a0/g, ' ').trim();
@@ -7545,31 +7641,34 @@ window.tbGridDelRow = r => {
   window._tbGrid = _tbCollectGrid();
   if (window._tbGrid.length <= 1) { toast('至少保留一行'); return; }
   window._tbGrid.splice(r, 1);
+  _tbCmp.dirty = true;
   tbRenderGrid(window._tbGrid);
 };
 window.tbGridDelCol = c => {
   window._tbGrid = _tbCollectGrid();
   if ((window._tbGrid[0] || []).length <= 1) { toast('至少保留一列'); return; }
   window._tbGrid.forEach(row => row.splice(c, 1));
+  _tbCmp.dirty = true;
   tbRenderGrid(window._tbGrid);
 };
 window.tbGridAddRow = () => {
   window._tbGrid = _tbCollectGrid();
   const w = (window._tbGrid[0] || []).length;
   window._tbGrid.push(Array(w).fill(null));
+  _tbCmp.dirty = true;
   tbRenderGrid(window._tbGrid);
 };
 window.tbGridAddCol = () => {
   window._tbGrid = _tbCollectGrid();
   window._tbGrid.forEach(row => row.push(null));
+  _tbCmp.dirty = true;
   tbRenderGrid(window._tbGrid);
 };
 window.tbGridSave = async (tid, btn) => {
   const grid = _tbCollectGrid();
+  _tbCmp.dirty = false;
   await withBusy(btn, async () => {
     const r = await api(`/api/tables/${tid}`, {method: 'PATCH', body: JSON.stringify({cells: grid})});
     toast(`已保存（${r.rows} 行 × ${r.cols} 列）——导出 xlsx 用这份整理版`);
-    window.tbCompareClose?.();
-    loadTables();
   }, '保存失败');
 };
