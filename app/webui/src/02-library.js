@@ -163,6 +163,8 @@ async function loadPapers(append = false) {
   if (state.scope === 'untranslated') {
     const st = state._statuses || {};
     papers = papers.filter(p => st[p.id]?.translate_job?.status !== 'done');
+  } else if (state.scope === 'unread') {
+    papers = papers.filter(p => !p.read_status);
   } else if (state.scope === 'parsing') {
     papers = papers.filter(p => ['parsing', 'pending'].includes(p.parse_status));
   } else if (state.scope === 'private') {
@@ -222,7 +224,7 @@ function renderPapers() {
     <div class="paper-item ${state.current?.id === p.id ? 'sel' : ''}" data-id="${p.id}">
       <div class="info">
         <div class="name">${esc(p.title || p.id)}</div>
-        <div class="meta">${statusBadge(p)}
+        <div class="meta">${p.read_status ? '' : '<span class="unread-dot" title="未读"></span>'}${statusBadge(p)}
           ${p.visibility === 'private' ? '<span class="badge priv">私人</span>' : ''}
           ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" title="上传者">· ${esc(p.owner_name)}</span>` : ''}
           <span>${(p.page_count || '?')}页</span><span>${p.file_size ? (p.file_size/1048576).toFixed(1) + 'M' : ''}</span>

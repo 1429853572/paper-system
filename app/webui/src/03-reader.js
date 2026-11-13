@@ -23,6 +23,9 @@ function dprFor(cssW, cssH, budget) {
 }
 
 async function openPaper(id) {
+    // 阅读追踪：fire-and-forget（不 await 不 toast——零打扰）
+    api(`/api/papers/${id}/read`, {method: 'POST'}).catch(() => {});
+
   const PAGE = 40;
   const dp = $('#discover-pop');
   if (dp) dp.hidden = true;   // 切论文关掉「找相关」浮层，避免新论文配旧数据

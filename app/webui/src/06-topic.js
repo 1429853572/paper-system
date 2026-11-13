@@ -717,6 +717,15 @@ async function watchJobs() {
       if (JSON.stringify(state.parseProg[ev.paper_id] || null) !== prev) renderPapers();
     }
     // 导读任务完成 → 重拉并重绘气泡（此前只在生成页轮询，切走或超时就看不到结果）
+    // 讨论区新消息 → 同论文讨论面板实时追加（refreshOnData 已在 else-if 处理全量刷新）
+    if (ev.type === 'data' && ev.entity === 'discussion') {
+      const dp = document.querySelector('#discuss-msgs');
+      if (dp && !document.querySelector('#discuss-panel').hidden) {
+        // 面板开着 → 直接重拉（load 在 12-reader-ui 闭包内——用 fetch 简化：重触发点击）
+        document.querySelector('#discuss-open')?.click();
+        document.querySelector('#discuss-open')?.click();   // toggle × 2 = 重载
+      }
+    }
     if (ev.job_type === 'summary' && ['done', 'failed', 'canceled'].includes(ev.status)) {
       refreshSummaryFor(ev.paper_id, ev.status);
     }

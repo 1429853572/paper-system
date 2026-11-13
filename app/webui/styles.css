@@ -254,6 +254,7 @@ table.list th { color: var(--muted); font-weight: 500; }
 .progress { height: 6px; background: var(--line-soft); border-radius: var(--r-xs); overflow: hidden; min-width: 80px; }
 .progress i { display: block; height: 100%; background: var(--primary); }
 .muted { color: var(--muted); }
+.unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); display: inline-block; margin-right: 4px; flex: none; }
 .row-actions { display: flex; gap: 6px; }
 
 /* 配置自检 */

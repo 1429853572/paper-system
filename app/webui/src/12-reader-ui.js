@@ -783,3 +783,81 @@ if (!new URLSearchParams(location.search).has('debug')) {
 
 /* ================= 命令面板（Ctrl+K）+ 全局快捷键 + 帮助层 =================
    功能多了之后入口藏得深——面板把 页面/动作/论文/设置 变成一键可达。 */
+
+/* ===== 论文讨论区（组内成员共享；阅读页右栏按钮 → 面板） ===== */
+(() => {
+  const btn = $('#discuss-open'), panel = $('#discuss-panel');
+  if (!btn || !panel) return;
+  panel.innerHTML = `
+    <div style="padding:8px 12px;font-weight:600;font-size: var(--fs-base);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px">
+      ${icon('chat')} 论文讨论
+      <span class="spacer"></span>
+      <button class="btn small" id="discuss-close">${icon('close')}</button>
+    </div>
+    <div id="discuss-msgs" style="max-height:60vh;overflow-y:auto;padding:8px 12px"></div>
+    <div style="display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--border)">
+      <input id="discuss-input" placeholder="写一条讨论…" style="flex:1;min-width:0"
+             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDiscuss()}">
+      <button class="btn small primary" id="discuss-send">发送</button>
+    </div>`;
+
+  let curPaper = null;
+
+  async function load() {
+    if (!curPaper) return;
+    try {
+      const d = await api(`/api/papers/${curPaper}/discuss`);
+      const el = $('#discuss-msgs');
+      if (!el) return;
+      el.innerHTML = (d.messages || []).map(m => `
+        <div class="discuss-msg" data-mid="${m.id}">
+          <div style="display:flex;align-items:center;gap:6px">
+            <b style="font-size: var(--fs-xs)">${esc(m.username || m.author_id)}</b>
+            <span class="muted" style="font-size: var(--fs-xs)">${relTime(m.created_at)}</span>
+            ${m.author_id === state.me?.id ? `<button class="btn small hover-only" style="padding:0 4px" onclick="delDiscuss('${curPaper}','${m.id}')" title="删除">${icon('trash', 12)}</button>` : ''}
+          </div>
+          <div style="font-size: var(--fs-sm);margin-top:2px;white-space:pre-wrap">${esc(m.content)}</div>
+        </div>`).join('') || '<p class="muted" style="padding:8px;font-size: var(--fs-sm)">还没有讨论——写第一条</p>';
+      el.scrollTop = el.scrollHeight;
+    } catch (e) { /* 静默 */ }
+  }
+
+  btn.addEventListener('click', () => {
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) {
+      curPaper = state.current?.id || null;
+      panel.style.position = 'fixed';
+      panel.style.right = '12px';
+      panel.style.top = '38px';
+      panel.style.zIndex = '70';
+      panel.style.width = '360px';
+      panel.style.maxWidth = '94vw';
+      panel.style.background = 'var(--panel)';
+      panel.style.border = '1px solid var(--border)';
+      panel.style.borderRadius = 'var(--r-lg)';
+      panel.style.boxShadow = '0 12px 36px rgba(0,0,0,.18)';
+      if (curPaper) load();
+    }
+  });
+  $('#discuss-close')?.addEventListener('click', () => panel.hidden = true);
+  // 点外关闭
+  document.addEventListener('click', e => {
+    if (!panel.hidden && !panel.contains(e.target) && e.target !== btn && !btn.contains(e.target)) panel.hidden = true;
+  });
+
+  $('#discuss-send')?.addEventListener('click', async () => {
+    const inp = $('#discuss-input');
+    const content = (inp?.value || '').trim();
+    if (!content || !curPaper) return;
+    inp.value = '';
+    try {
+      await api(`/api/papers/${curPaper}/discuss`, {method: 'POST', body: JSON.stringify({content})});
+      await load();
+    } catch (e) { toast(friendlyError(e, '发送失败')); }
+  });
+})();
+
+window.delDiscuss = async (pid, mid) => {
+  await api(`/api/papers/${pid}/discuss/${mid}`, {method: 'DELETE'});
+  toast('已删除');
+};

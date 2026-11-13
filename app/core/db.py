@@ -17,7 +17,7 @@ import re as _re
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # 重建表时会连带删除其上的索引（DROP TABLE 会删索引）——这些表重建后需逐个恢复。
 # 索引定义与 _SCHEMA / _init_schema 中的保持一致。
@@ -123,6 +123,22 @@ CREATE TABLE IF NOT EXISTS collections (
     name       TEXT NOT NULL,
     owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     parent_id  TEXT,                                  -- 三级库：NULL=顶层库
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS paper_reads (
+    user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    paper_id       TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    status         TEXT NOT NULL DEFAULT 'read',
+    last_opened_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, paper_id)
+);
+
+CREATE TABLE IF NOT EXISTS paper_discussion_messages (
+    id        TEXT PRIMARY KEY,
+    paper_id  TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content   TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -398,6 +414,10 @@ class Database:
                 self._migrate(c, row["version"])
             self._ensure_columns(c)   # 幂等兜底：任何形态的库都补齐列（新装/老库/中途版本）
             # 依赖兜底列的索引放在列补齐之后建（任意形态旧库都不炸）
+            c.execute("CREATE INDEX IF NOT EXISTS idx_paper_reads_user "
+                      "ON paper_reads(user_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_discussion_paper "
+                      "ON paper_discussion_messages(paper_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_pc_coll "
                       "ON paper_collections(collection_id)")
             # blocks 详情排序消 TEMP B-TREE（EQP 实测）；badge 高频轮询的 partial index；

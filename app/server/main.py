@@ -593,6 +593,63 @@ async def set_parse_filter(request: Request):
     return {"ok": True, **d}
 
 
+@app.post("/api/papers/{paper_id}/read")
+def mark_paper_read(paper_id: str, u: dict = Depends(require)):
+    """阅读追踪：openPaper 时 fire-and-forget 调用（per-user per-paper）。"""
+    with db.write() as c:
+        c.execute(
+            "INSERT INTO paper_reads(user_id, paper_id, status, last_opened_at) "
+            "VALUES(?, ?, 'read', datetime('now')) "
+            "ON CONFLICT(user_id, paper_id) DO UPDATE SET "
+            "last_opened_at=datetime('now')",
+            (u["id"], paper_id),
+        )
+    return {"ok": True}
+
+
+@app.get("/api/papers/{paper_id}/discuss")
+def get_discussion(paper_id: str, u: dict = Depends(require)):
+    """论文讨论区消息（团队共享；_require_visible 控可见）。"""
+    _require_visible(u, _get_paper_or_404(paper_id, u))
+    rows = db.all(
+        "SELECT m.id, m.author_id, m.content, m.created_at, u.username "
+        "FROM paper_discussion_messages m "
+        "LEFT JOIN users u ON u.id=m.author_id "
+        "WHERE m.paper_id=? ORDER BY m.created_at", (paper_id,))
+    return {"messages": [dict(r) for r in rows]}
+
+
+@app.post("/api/papers/{paper_id}/discuss")
+async def add_discussion_message(paper_id: str, request: Request):
+    u = require(request)
+    body = await request.json()
+    content = (body.get("content") or "").strip()
+    if not content:
+        raise HTTPException(400, "内容为空")
+    _require_visible(u, _get_paper_or_404(paper_id, u))
+    mid = "d" + secrets.token_hex(8)
+    with db.write() as c:
+        c.execute(
+            "INSERT INTO paper_discussion_messages(id, paper_id, author_id, content) "
+            "VALUES(?,?,?,?)", (mid, paper_id, u["id"], content[:5000]))
+    emit_data("discussion")
+    return {"ok": True, "id": mid}
+
+
+@app.delete("/api/papers/{paper_id}/discuss/{mid}")
+def delete_discussion_message(paper_id: str, mid: str, u: dict = Depends(require)):
+    row = db.one("SELECT author_id FROM paper_discussion_messages WHERE id=? AND paper_id=?",
+                 (mid, paper_id))
+    if row is None:
+        raise HTTPException(404, "消息不存在")
+    if row["author_id"] != u["id"] and u["role"] != "admin":
+        raise HTTPException(403, "只能删除自己的消息")
+    with db.write() as c:
+        c.execute("DELETE FROM paper_discussion_messages WHERE id=?", (mid,))
+    emit_data("discussion")
+    return {"ok": True}
+
+
 def _with_collection_ids(row) -> dict:
     """json_group_array 返回 JSON 字符串 → 解析为数组（sqlite 无数组类型）。"""
     row = dict(row)
@@ -646,7 +703,8 @@ def list_papers(q: str = "", status: str = "", trash: int = 0,
            f"p.file_size,p.parse_status,p.journal,p.created_at,p.deleted_at,"
            f"u.username AS owner_name,"
            f"(SELECT json_group_array(pc.collection_id) FROM paper_collections pc "
-           f"WHERE pc.paper_id=p.id) AS collection_ids "
+           f"WHERE pc.paper_id=p.id) AS collection_ids,"
+           f"(SELECT status FROM paper_reads pr WHERE pr.user_id={u['id']} AND pr.paper_id=p.id) AS read_status "
            f"FROM papers p LEFT JOIN users u ON u.id=p.owner_id "
            f"WHERE {cond}{vis} ORDER BY p.created_at DESC")
     if all:
