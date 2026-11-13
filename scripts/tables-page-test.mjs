@@ -182,6 +182,14 @@ ok('9 收表调用（勾选篇 + auto_tidy）',
    harvestCalls.length === 1 && harvestCalls[0].paper_ids.length === 1 && harvestCalls[0].auto_tidy === true,
    JSON.stringify(harvestCalls[0]));
 
+// 6b. 上传链入口
+await window.tbUploadOpen();
+await sleep(200);
+ok('6b 上传弹层（文件+自动整理勾选）',
+   !!window.document.querySelector('#tb-up-files') &&
+   window.document.querySelector('#tb-up-tidy')?.checked === true);
+window._tbUpClose();
+
 // 7. 导出（单表）
 exportCalls = [];
 await window.tbExport(['tb1'], null);

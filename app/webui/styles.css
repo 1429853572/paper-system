@@ -568,6 +568,11 @@ table.list th { color: var(--muted); font-weight: 500; }
 .tk-sug-item { padding: 7px 10px; border-radius: var(--r-sm); cursor: pointer; display: flex; gap: 8px; align-items: center; }
 .tk-sug-item:hover { background: var(--tint-primary); }
 
+.tb-up-list { max-height: 200px; overflow-y: auto; margin-top: 6px; font-size: var(--fs-xs); }
+.tb-up-list .ok { color: var(--primary); }
+.tb-up-list .err { color: var(--err); }
+.tb-up-list div { padding: 2px 0; }
+
 /* ---- 表格工作台 ---- */
 .tb-wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-bottom: 12px; }
 .tb-card { display: flex; gap: 10px; padding: 10px; }

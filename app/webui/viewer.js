@@ -7261,6 +7261,7 @@ async function loadTables() {
       <input id="tb-q" placeholder="搜表题/论文…" value="${esc(q)}" style="width:180px"
              onkeydown="if(event.key==='Enter'){tbSearch(this.value)}">
       <span style="margin-left:auto"></span>
+      <button class="btn small" onclick="tbUploadOpen()">${icon('upload')} 上传解析</button>
       <button class="btn small" onclick="tbHarvestOpen()">${icon('plus')} 收表</button>
       <button class="btn small primary" onclick="tbTidyBatch(this, false)" title="把当前筛选里的待整理表批量入队（LLM 整理）">${icon('bolt')} 整理待办${working ? '（进行中…）' : ''}</button>
     </div>
@@ -7672,3 +7673,85 @@ window.tbGridSave = async (tid, btn) => {
     toast(`已保存（${r.rows} 行 × ${r.cols} 列）——导出 xlsx 用这份整理版`);
   }, '保存失败');
 };
+
+/* ---------- 上传解析 → 自动收表 → 自动整理（一条链） ---------- */
+let _tbUpPop = null;
+window._tbUpClose = () => { _tbUpPop?.close(); _tbUpPop = null; };
+window.tbUploadOpen = () => {
+  _tbUpPop?.close();
+  const {pop, close} = openPop('tb-upload-pop');
+  _tbUpPop = {pop, close};
+  pop.innerHTML = `
+  <div class="ui-pop-title">${icon('upload')} 上传 PDF → 解析 → 自动收表
+    <button class="btn small" style="margin-left:auto" onclick="_tbUpClose()">${icon('close')}</button></div>
+  <div style="margin-top:10px" class="tb-up-body">
+    <label class="tk-fld">选择文件（可多选 PDF/图片/Office）
+      <input id="tb-up-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx"></label>
+    <label class="tk-inline" style="margin-top:8px">
+      <input type="checkbox" id="tb-up-tidy" checked> 解析完成后自动收表并 AI 整理（走月预算闸）</label>
+    <div id="tb-up-status" style="margin-top:10px;font-size:var(--fs-sm)"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn primary" onclick="tbUploadGo(this)">上传并跟踪</button>
+    </div>
+    <div class="muted" style="font-size:var(--fs-xs);margin-top:8px">
+      上传 → MinerU 解析（1-3 分钟/篇，页数多更久）→ 自动收割此批论文的表格 → 勾选整理则批量过 LLM。
+      也可以随时关掉此窗口——解析完不会自动收表，稍后用「收表」手动圈这批论文即可。</div>
+  </div>`;
+};
+
+window.tbUploadGo = async btn => {
+  const files = [...($('#tb-up-files')?.files || [])];
+  const st = $('#tb-up-status');
+  if (!files.length) { toast('先选择文件'); return; }
+  await withBusy(btn, async () => {
+    const ids = [];
+    for (const f of files) {
+      st.innerHTML = `上传中：${esc(f.name)}（${ids.length + 1}/${files.length}）…`;
+      try {
+        const fd = new FormData();
+        fd.append('files', f);
+        const r = await fetch('/api/papers/upload?visibility=shared', {method: 'POST', body: fd});
+        const d = await r.json();
+        const res = (d.results || [])[0] || {};
+        if (res.paper_id && res.status !== 'rejected') ids.push(res.paper_id);
+        else st.insertAdjacentHTML('beforeend', `<div style="color:var(--err)">${esc(f.name)}：${esc(res.reason || res.status || '上传失败')}</div>`);
+      } catch (e) {
+        st.insertAdjacentHTML('beforeend', `<div style="color:var(--err)">${esc(f.name)}：上传失败 ${esc(e.message)}</div>`);
+      }
+    }
+    if (!ids.length) { st.insertAdjacentHTML('beforeend', '<div style="color:var(--err)">没有成功上传的文件</div>'); return; }
+    await tbTrackParse(ids, $('#tb-up-tidy')?.checked);
+  }, '上传失败');
+};
+
+async function tbTrackParse(ids, autoTidy) {
+  const st = $('#tb-up-status');
+  const names = {};
+  for (;;) {
+    try {
+      const d = await api(`/api/statuses?paper_ids=${ids.join(',')}`);
+      const ss = d.statuses || {};
+      const rows = ids.map(pid => {
+        const x = ss[pid] || {};
+        const ps = x.parse_status || 'pending';
+        return {pid, ps, label: {pending: '排队中', parsing: '解析中', parsed: '✓ 完成', failed: '✗ 失败', skipped: '跳过'}[ps] || ps};
+      });
+      const done = rows.filter(r => ['parsed', 'failed', 'skipped'].includes(r.ps));
+      st.innerHTML = `等待解析（${done.length}/${ids.length}）——完成后自动收表${autoTidy ? '并整理' : ''}<div class="tb-up-list">${
+        rows.map(r => `<div class="${r.ps === 'parsed' ? 'ok' : r.ps === 'failed' ? 'err' : 'muted'}">${r.label} · ${esc(names[r.pid] || r.pid.slice(0, 10))}</div>`).join('')}</div>`;
+      if (done.length === ids.length) break;
+    } catch { /* 网络抖动下轮再试 */ }
+    await new Promise(r => setTimeout(r, 4000));
+  }
+  // 全部到达终态 → 收表（失败/跳过的自然被 harvest 的 parsed 过滤排除）
+  const okIds = ids;   // harvest 只收 parsed
+  try {
+    const h = await api('/api/tables/harvest', {method: 'POST', body: JSON.stringify({paper_ids: okIds, auto_tidy: !!autoTidy})});
+    st.insertAdjacentHTML('beforeend',
+      `<div style="margin-top:6px;color:var(--primary)">收表完成：${h.found} 张（新收 ${h.inserted}）${h.job_id ? '，整理已排队' : ''}</div>`);
+    toast(`新一批就绪：收进 ${h.inserted} 张表${autoTidy ? '，AI 整理进行中' : ''}`, 5000);
+    setTimeout(() => { window._tbUpClose?.(); loadTables(); }, 1200);
+  } catch (e) {
+    st.insertAdjacentHTML('beforeend', `<div style="color:var(--err)">收表失败：${esc(friendlyError(e))}——稍后用「收表」手动圈这批论文</div>`);
+  }
+}

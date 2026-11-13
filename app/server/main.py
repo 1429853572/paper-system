@@ -2657,7 +2657,7 @@ def papers_statuses(paper_ids: str = "", limit: int = 0, u: dict = Depends(requi
     if hit and time.time() - hit[0] < 30:
         return hit[1]
     vis = "" if u["role"] == "admin" else " AND (visibility='shared' OR owner_id=?)"
-    args = () if u["role"] == "admin" else (u["id"],)
+    args: list = [] if u["role"] == "admin" else [u["id"]]   # 曾是元组——带 paper_ids 即 .extend 崩 500
     if paper_ids:
         ids = [x for x in paper_ids.split(",") if x]
         if ids:
