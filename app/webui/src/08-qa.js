@@ -694,8 +694,7 @@ $('#qa-open').onclick = () => {
 /* ---------------- 命令标签（zotero-gpt 式：短按执行 / 长按编辑） ---------------- */
 /* 划词浮条专用 prompt（浮条与命令标签原是同一功能两入口——b2/b3 已从标签排移除） */
 const SEL_TAGS = {
-  explain: {id: 'sel-explain', label: '解读', prompt: '解释这段文字的含义与上下文（涉及的概念、方法、为什么重要）：\n「{选中文字}」'},
-  ask: {id: 'sel-ask', label: '提问', prompt: '', prefill: '关于这段文字：「{选中文字}」\n我的问题：'},
+  explain: {id: 'sel-explain', label: 'AI 解读', prompt: '解释这段文字的含义与上下文（涉及的概念、方法、为什么重要）：\n「{选中文字}」'},
 };
 const BUILTIN_TAGS = [
   {id: 'b1', label: '📝 快速总结', prompt: '总结本篇论文：核心问题、方法要点、主要结果与局限，5 句以内。（需要 9 字段结构化导读请点「生成导读」）'},
@@ -800,11 +799,10 @@ function showSelBar(sel, text) {
   hideSelBar();
   const rect = sel.getRangeAt(0).getBoundingClientRect();
   const bar = Object.assign(document.createElement('div'), {className: 'sel-bar', id: 'sel-bar'});
-  bar.innerHTML = `<button data-a="explain" title="解读选中文字">解读</button>
-    <button data-a="ask" title="拿选中文字提问">提问</button>
-    <button data-a="quote" title="引用到问答输入框（作为上下文）">引用</button>
-    <button data-a="translate" title="翻译选中文字">译</button>
-    <button data-a="cite" title="智能提取：选中参考文献条目一键入库（Zotero 智能提取式）">引文</button>`;
+  bar.innerHTML = `<button data-a="explain" title="AI 解读这段文字的含义与上下文">AI 解读</button>
+    <button data-a="ask" title="把选中文字作为上下文，输入你的问题">提问</button>
+    <button data-a="translate" title="翻译选中文字">翻译</button>
+    <button data-a="cite" title="选中参考文献条目后点这里——识别该文献并收进文献库">文献入库</button>`;
   bar.style.top = Math.max(8, rect.top - 36) + 'px';
   bar.style.left = Math.min(innerWidth - 140, Math.max(8, rect.left)) + 'px';
   document.body.appendChild(bar);
@@ -812,13 +810,14 @@ function showSelBar(sel, text) {
     hideSelBar();
     if (b.dataset.a === 'translate') translateSelection(text);
     else if (b.dataset.a === 'cite') importCitation(text);
-    else if (b.dataset.a === 'quote') {
-      // 引用到问答输入框（旧划词条的有用能力，保留）
+    else if (b.dataset.a === 'ask') {
+      // 选中文字挂为引用上下文（带页码），输入框聚焦等用户写问题
       switchPage('reader');
       if (!state.qaOpen) openQaDock();
       setQuote(text, state.pageNum - 1);
+      $('#qa-text')?.focus();
     }
-    else executeTag(SEL_TAGS[b.dataset.a === 'explain' ? 'explain' : 'ask']);
+    else executeTag(SEL_TAGS.explain);
   });
 }
 
