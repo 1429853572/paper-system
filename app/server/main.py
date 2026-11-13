@@ -10,12 +10,13 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from core import auth, ingest, qa, retrieval, summarizer, synthesis, tracker_mail
+from core import auth, ingest, qa, retrieval, summarizer, synthesis, tables as tables_mod, tracker_mail
 from core.config import (DATA_DIR, MINERU_BASE_URL, OLLAMA_BASE_URL,
                            PAPERSYS_API_TOKEN, config)
 from core.db import db
@@ -3598,6 +3599,228 @@ async def tracker_smtp_test(request: Request):
         raise HTTPException(500, f"发送失败：{str(e)[:200]}")
     return {"ok": True, "to": to}
 
+
+# ---------------- 表格工作台（收割 → LLM 整理 → 取舍 → xlsx） ----------------
+_TABLE_REVIEW = ("active", "pending", "kept", "deleted", "all")
+
+def _own_table(u: dict, tid: str, full: bool = False):
+    te = db.one("SELECT * FROM table_extracts WHERE id=?", (tid,))
+    if te is None:
+        raise HTTPException(404, "表格不存在")
+    if te["user_id"] != u["id"] and u["role"] != "admin":
+        raise HTTPException(403, "不是你的表格")
+    return te
+
+@app.get("/api/tables/list")
+def tables_list(request: Request, review: str = "active", q: str = "", paper_id: str = "",
+                page: int = 1, page_size: int = 60):
+    """卡片列表（轻量：不带网格）+ 全量统计 + 按论文聚合。review: active=未剔除。"""
+    u = require(request)
+    if review not in _TABLE_REVIEW:
+        review = "active"
+    page = max(1, page)
+    page_size = max(1, min(200, page_size))
+    where, args = ["t.user_id=?"], [u["id"]]
+    if review == "active":
+        where.append("t.review IN ('pending','kept')")
+    elif review != "all":
+        where.append("t.review=?")
+        args.append(review)
+    if paper_id:
+        where.append("t.paper_id=?")
+        args.append(paper_id)
+    if q.strip():
+        where.append("(t.caption LIKE ? OR p.title LIKE ?)")
+        args += [f"%{q.strip()}%"] * 2
+    wsql = " AND ".join(where)
+    total = db.one(f"SELECT COUNT(*) n FROM table_extracts t JOIN papers p ON p.id=t.paper_id "
+                   f"WHERE {wsql}", tuple(args))["n"]
+    rows = db.all(
+        f"SELECT t.id, t.paper_id, t.page_index, t.caption, t.review, t.ai_status, t.ai_note, "
+        f"t.asset_name, t.created_at, p.title paper_title, "
+        f"json_array_length(t.cells) n_rows, json_array_length(t.cells, '$[0]') n_cols "
+        f"FROM table_extracts t JOIN papers p ON p.id=t.paper_id WHERE {wsql} "
+        f"ORDER BY p.title, t.page_index, t.created_at LIMIT ? OFFSET ?",
+        (*args, page_size, (page - 1) * page_size))
+    return {"items": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size,
+            **tables_mod.stats(u["id"])}
+
+@app.get("/api/tables/sources")
+def tables_sources(request: Request):
+    """可收割论文清单（已解析 + 各篇表块数）——收表弹层数据。"""
+    u = require(request)
+    # 只列本人可见论文（shared 或本人的 private；admin 全见——与列表口径一致）
+    vis = "" if u["role"] == "admin" else "AND (p.visibility='shared' OR p.owner_id=?)"
+    args: tuple = () if u["role"] == "admin" else (u["id"],)
+    rows = db.all(
+        "SELECT b.paper_id, p.title, COUNT(*) n_tables FROM blocks b "
+        "JOIN papers p ON p.id = b.paper_id "
+        f"WHERE b.type='table' AND p.deleted_at IS NULL AND p.parse_status='parsed' {vis} "
+        "GROUP BY b.paper_id, p.title ORDER BY n_tables DESC, p.title", args)
+    harvested = {r["paper_id"]: r["n"] for r in db.all(
+        "SELECT paper_id, COUNT(*) n FROM table_extracts WHERE user_id=? GROUP BY paper_id",
+        (u["id"],))}
+    return {"sources": [{**dict(r), "in_bench": harvested.get(r["paper_id"], 0)} for r in rows]}
+
+@app.get("/api/tables/{tid}")
+def tables_detail(tid: str, request: Request):
+    u = require(request)
+    te = _own_table(u, tid)
+    p = db.one("SELECT title FROM papers WHERE id=?", (te["paper_id"],))
+    d = dict(te)
+    d["paper_title"] = p["title"] if p else ""
+    d["img_url"] = f"/api/papers/{te['paper_id']}/images/{te['asset_name']}" if te["asset_name"] else None
+    return d
+
+@app.post("/api/tables/harvest")
+async def tables_harvest(request: Request):
+    u = require(request)
+    b = await request.json()
+    ids = b.get("paper_ids") or []
+    r = tables_mod.harvest(u["id"], ids or None)
+    job_id = None
+    if b.get("auto_tidy") and r["inserted_ids"]:
+        job_id = scheduler.enqueue(u["id"], "table_tidy", None,
+                                   {"ids": r["inserted_ids"]}, progress_total=len(r["inserted_ids"]))
+    emit_data("tables")
+    return {**{k: v for k, v in r.items() if k != "inserted_ids"}, "job_id": job_id}
+
+def _table_filter_ids(u: dict, review: str, q: str, paper_id: str) -> list[str]:
+    where, args = ["t.user_id=?"], [u["id"]]
+    if review == "active":
+        where.append("t.review IN ('pending','kept')")
+    elif review != "all":
+        where.append("t.review=?")
+        args.append(review)
+    if paper_id:
+        where.append("t.paper_id=?")
+        args.append(paper_id)
+    if q.strip():
+        where.append("(t.caption LIKE ? OR p.title LIKE ?)")
+        args += [f"%{q.strip()}%"] * 2
+    return [r["id"] for r in db.all(
+        f"SELECT t.id FROM table_extracts t JOIN papers p ON p.id=t.paper_id WHERE "
+        f"{' AND '.join(where)}", tuple(args))]
+
+@app.post("/api/tables/tidy-batch")
+async def tables_tidy_batch(request: Request):
+    """批量整理入队：显式 ids 或按当前筛选圈表（跳过已剔除/进行中；force=重整理已完成的）。"""
+    u = require(request)
+    b = await request.json()
+    ids = b.get("ids")
+    if not ids:
+        f = b.get("filtered") or {}
+        ids = _table_filter_ids(u, f.get("review") or "active", f.get("q") or "", f.get("paper_id") or "")
+    if not ids:
+        raise HTTPException(400, "没有可整理的表格（先收表或调整筛选）")
+    force = bool(b.get("force"))
+    if ids:
+        marks = ",".join("?" * len(ids[:1000]))
+        rows = db.all(f"SELECT id FROM table_extracts WHERE user_id=? AND id IN ({marks}) "
+                      "AND review != 'deleted' AND (ai_status NOT IN ('done','queued','running') OR ?)",
+                      (u["id"], *ids[:1000], force))
+        ids = [r["id"] for r in rows]
+    if not ids:
+        raise HTTPException(400, "所选表格都已完成整理（勾选「重新整理」可强制重跑）")
+    job_id = scheduler.enqueue(u["id"], "table_tidy", None, {"ids": ids}, progress_total=len(ids))
+    return {"ok": True, "job_id": job_id, "count": len(ids)}
+
+@app.patch("/api/tables/{tid}")
+async def tables_edit(tid: str, request: Request):
+    """保存编辑后的网格（写 ai_cells=工作副本，原始 cells 永不动）。
+    mismatch/failed 状态下的人工修改视为已核对 → ai_status=done。"""
+    u = require(request)
+    te = _own_table(u, tid)
+    b = await request.json()
+    cells = b.get("cells")
+    if (not isinstance(cells, list) or len(cells) < 1 or len(cells) > 500
+            or any(not isinstance(r, list) or len(r) < 1 or len(r) > 100
+                   or any(v is not None and not isinstance(v, (str, int, float)) for v in r)
+                   for r in cells)):
+        raise HTTPException(400, "网格数据不合法（≤500 行 × 100 列，单元格为文本或 null）")
+    norm = [[None if v is None else str(v) for v in r] for r in cells]
+    new_status = "done" if te["ai_status"] in ("mismatch", "failed") else te["ai_status"]
+    with db.write() as c:
+        c.execute("UPDATE table_extracts SET ai_cells=?, ai_status=?, updated_at=datetime('now') WHERE id=?",
+                  (json.dumps(norm, ensure_ascii=False), new_status, tid))
+    emit_data("tables")
+    return {"ok": True, "rows": len(norm), "cols": len(norm[0]) if norm else 0}
+
+@app.post("/api/tables/{tid}/review")
+async def tables_review(tid: str, request: Request):
+    u = require(request)
+    _own_table(u, tid)
+    b = await request.json()
+    rv = b.get("review")
+    if rv not in ("pending", "kept", "deleted"):
+        raise HTTPException(400, "review 取值非法")
+    with db.write() as c:
+        c.execute("UPDATE table_extracts SET review=?, updated_at=datetime('now') WHERE id=?", (rv, tid))
+    emit_data("tables")
+    return {"ok": True}
+
+@app.post("/api/tables/batch-review")
+async def tables_batch_review(request: Request):
+    u = require(request)
+    b = await request.json()
+    ids, rv = b.get("ids") or [], b.get("review")
+    if not ids or rv not in ("pending", "kept", "deleted"):
+        raise HTTPException(400, "ids 与 review(pending/kept/deleted) 必填")
+    for chunk in [ids[i:i + 500] for i in range(0, len(ids), 500)]:
+        marks = ",".join("?" * len(chunk))
+        with db.write() as c:
+            c.execute(f"UPDATE table_extracts SET review=?, updated_at=datetime('now') "
+                      f"WHERE user_id=? AND id IN ({marks})", (rv, u["id"], *chunk))
+    emit_data("tables")
+    return {"ok": True, "count": len(ids)}
+
+@app.delete("/api/tables/{tid}")
+def tables_delete(tid: str, request: Request):
+    u = require(request)
+    _own_table(u, tid)
+    with db.write() as c:
+        c.execute("DELETE FROM table_extracts WHERE id=?", (tid,))
+    emit_data("tables")
+    return {"ok": True}
+
+@app.post("/api/tables/export")
+async def tables_export(request: Request):
+    """导出 xlsx（每表一 sheet）：ids 指定，或 kept_only=全部保留。"""
+    u = require(request)
+    b = await request.json()
+    ids = b.get("ids")
+    if ids:
+        marks = ",".join("?" * len(ids[:1000]))
+        rows = db.all(f"SELECT t.*, p.title paper_title FROM table_extracts t "
+                      f"JOIN papers p ON p.id=t.paper_id "
+                      f"WHERE t.user_id=? AND t.id IN ({marks}) AND t.review != 'deleted'",
+                      (u["id"], *ids[:1000]))
+    elif b.get("kept_only"):
+        rows = db.all("SELECT t.*, p.title paper_title FROM table_extracts t "
+                      "JOIN papers p ON p.id=t.paper_id "
+                      "WHERE t.user_id=? AND t.review != 'deleted' ORDER BY p.title, t.page_index",
+                      (u["id"],))
+    else:
+        raise HTTPException(400, "ids 或 kept_only 二选一")
+    if not rows:
+        raise HTTPException(400, "没有可导出的表格")
+    items = []
+    for r in rows:
+        grid = None
+        if r["ai_cells"]:
+            try:
+                grid = json.loads(r["ai_cells"])
+            except Exception:  # noqa: BLE001
+                grid = None
+        if not grid:
+            grid = json.loads(r["cells"] or "[]")
+        items.append({"caption": r["caption"], "paper_title": r["paper_title"],
+                      "page_index": r["page_index"], "grid": grid})
+    data = tables_mod.build_xlsx(items)
+    fname = f"tables_{time.strftime('%Y%m%d_%H%M')}.xlsx"
+    return Response(content=data,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"})
 
 # ---------------- 问答（SSE 流式） ----------------
 @app.post("/api/chat/stream")

@@ -136,6 +136,12 @@ if [[ -n "${FIRST_SYN:-}" ]]; then
     CODE=$(curl -sf -b "$CJ2" -o /dev/null -w '%{http_code}' "$BASE/api/syntheses/$FIRST_SYN/progress")
     [[ "$CODE" == 200 ]] && ok "GET /api/syntheses/{id}/progress" || bad "progress HTTP $CODE"
 fi
+# 表格工作台（列表 200 即可——收割/整理为写操作由专项测试覆盖）
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/tables/list")
+[[ "$CODE" == 200 ]] && ok "GET /api/tables/list" || bad "GET /api/tables/list HTTP $CODE"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/tables/sources")
+[[ "$CODE" == 200 ]] && ok "GET /api/tables/sources" || bad "GET /api/tables/sources HTTP $CODE"
+
 # 文献追踪端点（subs 列表 + 收件箱 + admin SMTP 配置读取）
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/tracker/subs")
 [[ "$CODE" == 200 ]] && ok "GET /api/tracker/subs" || bad "GET /api/tracker/subs HTTP $CODE"

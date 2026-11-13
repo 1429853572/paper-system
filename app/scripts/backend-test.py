@@ -440,6 +440,130 @@ with _tdb.write() as c:
     c.execute("DELETE FROM papers WHERE id='pexists'")
     c.execute("DELETE FROM users WHERE id=9001")
 
+# == 表格工作台（tables）==
+print("== 表格工作台（html_to_grid/宽容JSON/整理校验/收割幂等/worker批量/xlsx）==")
+from core import tables as tb
+
+# html_to_grid 表驱动
+g = tb.html_to_grid('<table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>')
+ok("grid 基本解析", g == [["a", "b"], ["c", "d"]], str(g))
+g = tb.html_to_grid('<table><tr><td colspan="2">H</td></tr><tr><td>x</td><td>y</td></tr></table>')
+ok("colspan 拍平复制值", g == [["H", "H"], ["x", "y"]], str(g))
+g = tb.html_to_grid('<table><tr><td rowspan="2">V</td><td>1</td></tr><tr><td>2</td></tr></table>')
+ok("rowspan 拍平复制值", g == [["V", "1"], ["V", "2"]], str(g))
+g = tb.html_to_grid('<table><tr><td>Mix <eq>E=mc^2</eq> &amp; more</td></tr></table>')
+ok("eq 标签剥文本 + 实体解码", g and g[0][0] == "Mix E=mc^2 & more", str(g))
+ok("残缺 HTML 兜底（未闭合 td 补全）", tb.html_to_grid('<table><tr><td>only') != [])
+ok("无表格返回空", tb.html_to_grid("no table here") == [])
+cap, html = tb.split_caption("Table 1. Results\n<table><tr><td>1</td></tr></table>")
+ok("caption/HTML 拆分", cap == "Table 1. Results" and html.startswith("<table"))
+
+# 宽容 JSON 解析（模型三种形态）
+ok("裸 JSON", tb._parse_json_relaxed('{"rows":[[1]]}') == {"rows": [[1]]})
+ok("围栏 JSON", tb._parse_json_relaxed('```json\n{"rows":[[1]]}\n```') == {"rows": [[1]]})
+ok("前后缀夹杂", tb._parse_json_relaxed('结果如下：\n{"rows":[[1]]} 以上') == {"rows": [[1]]})
+ok("垃圾返回 None", tb._parse_json_relaxed("not json at all") is None)
+
+# tidy_one 行列校验（mock LLMClient）
+import json as _json
+class _FakeResp:
+    def __init__(self, rows): self._rows = rows
+class _FakeClient:
+    text_rows = None
+    def __init__(self, *a, **k): pass
+    def complete(self, msgs, max_tokens=0):
+        return _json.dumps({"rows": _FakeClient.text_rows, "note": "n"})
+from core import llm as _llm
+_orig_client = _llm.LLMClient
+_llm.LLMClient = _FakeClient
+# tables 模块 from-import 持有自己的引用——两个命名空间都要打补丁
+_orig_resolve, tb.resolve_llm = tb.resolve_llm, (lambda uid, p: object())
+_te = {"caption": "T", "cells": _json.dumps([["a", "b"], ["1", "2"]])}
+_FakeClient.text_rows = [["a-b", "a-b"], ["1", "2"]]
+r = tb.tidy_one(1, dict(_te))
+ok("整理成功（行列一致）", r["ai_status"] == "done" and _json.loads(r["ai_cells"])[0] == ["a-b", "a-b"])
+_FakeClient.text_rows = [["a"], ["1"]]                       # 列数错
+r = tb.tidy_one(1, dict(_te))
+ok("列数不一致 → mismatch", r["ai_status"] == "mismatch" and r["ai_cells"] is None)
+_FakeClient.text_rows = [["a", "b"]]                          # 数据行丢失
+r = tb.tidy_one(1, dict(_te))
+ok("数据行丢失 → mismatch", r["ai_status"] == "mismatch")
+_FakeClient.text_rows = [["a", "b"], ["1", "2"]]              # 行数不变
+r = tb.tidy_one(1, dict(_te))
+ok("行数不变 → done", r["ai_status"] == "done")
+_FakeClient.text_rows = [["a", "b"], ["1", "2"], ["x", "y"]]  # 多出一行
+r = tb.tidy_one(1, dict(_te))
+ok("多行 → mismatch", r["ai_status"] == "mismatch")
+_llm.LLMClient = _orig_client
+tb.resolve_llm = _orig_resolve
+
+# 收割 + 幂等 + stats + worker（临时库）
+with db.write() as c:
+    c.execute("INSERT INTO users(id, username, password_hash, role) VALUES(9101, 'tbtest', 'x', 'admin')")
+    c.execute("INSERT INTO papers(id, owner_id, file_hash, title, parse_status) "
+              "VALUES('ptb1', 9101, 'htb1', '表格测试论文', 'parsed')")
+    c.execute("INSERT INTO parse_runs(id, paper_id, tier, status) VALUES('runtb', 'ptb1', 'standard', 'done')")
+    c.execute("INSERT INTO blocks(paper_id, parse_run_id, block_id, type, page_index, block_index, text, asset_path) "
+              "VALUES('ptb1', 'runtb', 'ptb1-b1', 'table', 2, 1, "
+              "'Table 1. Demo\n<table><tr><td>M</td><td>PSNR</td></tr><tr><td>A</td><td>25,1</td></tr></table>', "
+              "'images/page_2_table_1.jpg')")
+    c.execute("INSERT INTO blocks(paper_id, parse_run_id, block_id, type, page_index, block_index, text) "
+              "VALUES('ptb1', 'runtb', 'ptb1-b2', 'table', 3, 2, '<table><tr><td>only one row</td></tr></table>')")
+r1 = tb.harvest(9101, ["ptb1"])
+ok("收割：好表入、烂表跳", r1["inserted"] == 1 and r1["skipped"] == 1, str(r1))
+r2 = tb.harvest(9101, ["ptb1"])
+ok("收割幂等（二次 0 新增）", r2["inserted"] == 0, str(r2))
+st = tb.stats(9101)
+ok("stats 聚合（总量/按论文）", st["counts"]["total"] == 1 and len(st["by_paper"]) == 1
+   and st["by_paper"][0]["title"] == "表格测试论文", str(st))
+
+# worker 批量：3 表 1 失败不拖垮 + 预算中断可续跑
+with db.write() as c:
+    for i in range(3):
+        c.execute("INSERT INTO table_extracts(id, user_id, paper_id, page_index, caption, html, cells, src_hash) "
+                  "VALUES(?,?,?,?,?,?,?,?)",
+                  (f"tbw{i}", 9101, "ptb1", i, f"T{i}", "<table></table>",
+                   _json.dumps([["a", "b"], ["1", "2"]]), f"hash{i}"))
+from core.jobs import Scheduler
+_sch = Scheduler()
+_calls = {"n": 0}
+def _tidy_fake(uid, te):
+    _calls["n"] += 1
+    if te["id"] == "tbw0":
+        raise RuntimeError("boom")
+    if te["id"] == "tbw2":
+        from core.costing import BudgetExceeded
+        raise BudgetExceeded(100, 100)
+    return {"ai_cells": '[["ok","ok"]]', "ai_note": "n", "ai_status": "done"}
+tb.tidy_one = _tidy_fake
+_sch._run_table_tidy({"id": 990001, "user_id": 9101, "payload": _json.dumps({"ids": ["tbw0", "tbw1", "tbw2"]})})
+rows = {r["id"]: r["ai_status"] for r in db.all("SELECT id, ai_status FROM table_extracts WHERE user_id=9101 AND id LIKE 'tbw%'")}
+ok("worker：失败隔离 + 预算中断回待整理", rows.get("tbw0") == "failed" and rows.get("tbw1") == "done"
+   and rows.get("tbw2") == "none", str(rows))
+
+# xlsx 产物
+data = tb.build_xlsx([
+    {"paper_title": "P/一", "page_index": 0, "caption": "T[1]", "grid": [["M", "S"],["A", "25.1"]]},
+    {"paper_title": "P/一", "page_index": 0, "caption": "T[1]", "grid": [["X", "Y"]]},
+])
+import io as _io, zipfile as _zf
+ok("xlsx 是合法 zip", data[:2] == b"PK" and _zf.ZipFile(_io.BytesIO(data)).testzip() is None)
+from openpyxl import load_workbook
+wb = load_workbook(_io.BytesIO(data))
+ok("sheet 命名清洗 + 冲突去重", len(wb.sheetnames) == 2 and "[" not in wb.sheetnames[0]
+   and wb.sheetnames[0] != wb.sheetnames[1], str(wb.sheetnames))
+ws = wb[wb.sheetnames[0]]
+ok("数值单元格 + 表头冻结", ws.cell(row=2, column=2).value == 25.1 and ws.freeze_panes == "A2",
+   f"B2={ws.cell(row=2, column=2).value}")
+
+with db.write() as c:
+    c.execute("DELETE FROM table_extracts WHERE user_id=9101")
+    c.execute("DELETE FROM blocks WHERE paper_id='ptb1'")
+    c.execute("DELETE FROM parse_runs WHERE id='runtb'")
+    c.execute("DELETE FROM papers WHERE id='ptb1'")
+    c.execute("DELETE FROM jobs WHERE id=990001")
+    c.execute("DELETE FROM users WHERE id=9101")
+
 print(f"\n结果: {PASS} 通过, {FAIL} 失败")
 # 导入 server.main 会启动调度器线程（非 daemon）——进程退出被吊住，用 os._exit 硬退
 import os

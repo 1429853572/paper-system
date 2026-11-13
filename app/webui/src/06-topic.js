@@ -567,6 +567,8 @@ const refreshOnData = throttle(entity => {
   if (entity === 'tracker' && window.refreshTrackerBadge) window.refreshTrackerBadge();
   const tp = $('#page-tracker');
   if (entity === 'tracker' && tp && tp.style.display !== 'none') window.renderTrackerPage?.();
+  const tbpg = $('#page-tables');
+  if (entity === 'tables' && tbpg && tbpg.style.display !== 'none') window.renderTablesPage?.();
   // QA 选文 papers 重拉（选文面板开着时）
   api('/api/papers').then(d => {
     state.qaAllPapers = d.papers;
@@ -575,6 +577,7 @@ const refreshOnData = throttle(entity => {
 }, 3000);
 const refreshSidebarOnParse = throttle(() => loadCollections().catch(() => {}), 3000);
 const refreshTrackerOnParse = throttle(() => { window.renderTrackerPage?.(); }, 4000);   // 追踪页阶段条跟随解析进度
+const refreshTablesOnTidy = throttle(() => { window.renderTablesPage?.(); }, 3000);       // 表格工作台跟随批量整理进度
 
 /* ---------------- 找相关（Semantic Scholar 三模式排卡，llm-for-zotero /discover_related 式） ----
    推荐/参考文献/引证三页签；勾选一键导入（DOI/标题自动查重，无公开 PDF 不可导）。 */
@@ -722,6 +725,11 @@ async function watchJobs() {
       // 追踪页：收进条目的解析阶段条跟随进度（节流）
       const tpg = $('#page-tracker');
       if (tpg && tpg.style.display !== 'none' && typeof refreshTrackerOnParse === 'function') refreshTrackerOnParse();
+      // 表格工作台：批量整理进度翻牌
+      if (ev.job_type === 'table_tidy') {
+        const tbp = $('#page-tables');
+        if (tbp && tbp.style.display !== 'none') refreshTablesOnTidy();
+      }
     }
     // 导读任务完成 → 重拉并重绘气泡（此前只在生成页轮询，切走或超时就看不到结果）
     // 讨论区新消息 → 同论文讨论面板实时追加（refreshOnData 已在 else-if 处理全量刷新）

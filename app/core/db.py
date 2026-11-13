@@ -17,7 +17,7 @@ import re as _re
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 # 重建表时会连带删除其上的索引（DROP TABLE 会删索引）——这些表重建后需逐个恢复。
 # 索引定义与 _SCHEMA / _init_schema 中的保持一致。
@@ -167,6 +167,26 @@ CREATE TABLE IF NOT EXISTS tracker_subs (
     last_run_at     TEXT,
     last_error      TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 表格工作台：从已解析论文收割的表格（原始提取 + AI 整理 + 取舍状态）
+CREATE TABLE IF NOT EXISTS table_extracts (
+    id          TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    paper_id    TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    page_index  INTEGER NOT NULL DEFAULT 0,
+    caption     TEXT NOT NULL DEFAULT '',
+    html        TEXT NOT NULL DEFAULT '',          -- MinerU 原始 <table> HTML（含 caption）
+    cells       TEXT NOT NULL DEFAULT '[]',        -- 原始提取网格 JSON（colspan/rowspan 已拍平）
+    ai_cells    TEXT,                              -- AI 整理版网格 JSON（用户编辑也写这里；原始永不动）
+    ai_note     TEXT,                              -- AI 整理说明
+    review      TEXT NOT NULL DEFAULT 'pending',   -- pending|kept|deleted（软删可恢复）
+    ai_status   TEXT NOT NULL DEFAULT 'none',      -- none|queued|running|done|failed|mismatch
+    src_hash    TEXT NOT NULL,                     -- sha1(caption+前3行)——重解析后幂等去重
+    asset_name  TEXT,                              -- 原图裁剪文件名（images/page_N_table_M.jpg）
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, paper_id, src_hash)
 );
 
 -- 文献追踪：收件箱条目（巡逻结果，审阅后收进文献库成为正式论文）
@@ -477,6 +497,13 @@ class Database:
                       "ON tracker_items(user_id, status, created_at DESC)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_tracker_items_sub "
                       "ON tracker_items(sub_id, arxiv_id)")
+            # 表格工作台：卡片列表按状态/论文过滤、批量整理按状态圈表
+            c.execute("CREATE INDEX IF NOT EXISTS idx_table_extracts_user "
+                      "ON table_extracts(user_id, review, created_at DESC)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_table_extracts_paper "
+                      "ON table_extracts(paper_id, page_index)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_table_extracts_status "
+                      "ON table_extracts(user_id, ai_status)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_pc_coll "
                       "ON paper_collections(collection_id)")
             # blocks 详情排序消 TEMP B-TREE（EQP 实测）；badge 高频轮询的 partial index；

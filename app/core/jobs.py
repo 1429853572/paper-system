@@ -100,6 +100,7 @@ class Scheduler:
             ("acquire-worker", self._acquire_loop),
             ("janitor", self._janitor_loop),
             ("tracker", self._tracker_loop),
+            ("table-tidy", self._table_tidy_loop),
         ):
             t = threading.Thread(target=fn, name=name, daemon=True)
             t.start()
@@ -722,6 +723,84 @@ class Scheduler:
             except Exception:  # noqa: BLE001
                 log.exception("janitor 异常")
             time.sleep(3600)
+
+    # ================= 表格整理 worker（LLM 同步调用，单并发，批内逐表） =================
+    @staticmethod
+    def _chunked(ids: list, size: int = 500) -> list[list]:
+        return [ids[i:i + size] for i in range(0, len(ids), size)]
+
+    def _revert_tidy_state(self, user_id: int, ids: list) -> None:
+        """批量收工：未处理到的 queued/running 回到 none（待整理——「继续整理」可再圈）。"""
+        for chunk in self._chunked(ids):
+            marks = ",".join("?" * len(chunk))
+            with db.write() as c:
+                c.execute(f"UPDATE table_extracts SET ai_status='none' WHERE user_id=? "
+                          f"AND id IN ({marks}) AND ai_status IN ('queued','running')",
+                          (user_id, *chunk))
+
+    def _table_tidy_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                job = self._next_job("table_tidy")
+                if job is None:
+                    time.sleep(3)
+                    continue
+                if not self._claim(job["id"]):
+                    continue
+                self._run_table_tidy(job)
+            except Exception:  # noqa: BLE001
+                log.exception("table_tidy worker 异常")
+                time.sleep(3)
+
+    def _run_table_tidy(self, job: Any) -> None:
+        """一个 job = 一批表（payload.ids）。逐表 LLM 整理：
+        预算尽/无 key → 剩余回「待整理」提前收工（job 不算失败）；单表异常隔离。"""
+        from . import tables as tables_mod
+        from .costing import BudgetExceeded
+        from .llm import NoKeyError
+        ids = (json.loads(job["payload"] or "{}").get("ids") or [])
+        uid = job["user_id"]
+        total, done = len(ids), 0
+        self._update(job["id"], status="running", progress_total=total, progress_done=0)
+        for chunk in self._chunked(ids):
+            marks = ",".join("?" * len(chunk))
+            with db.write() as c:
+                c.execute(f"UPDATE table_extracts SET ai_status='queued', updated_at=datetime('now') "
+                          f"WHERE user_id=? AND id IN ({marks})", (uid, *chunk))
+        no_key = budget_stop = False
+        for tid in ids:
+            te = db.one("SELECT * FROM table_extracts WHERE id=? AND user_id=?", (tid, uid))
+            if te is None or te["review"] == "deleted" or te["ai_status"] == "done":
+                done += 1
+                continue
+            with db.write() as c:
+                c.execute("UPDATE table_extracts SET ai_status='running' WHERE id=?", (tid,))
+            try:
+                r = tables_mod.tidy_one(uid, te)
+                with db.write() as c:
+                    c.execute("UPDATE table_extracts SET ai_cells=?, ai_note=?, ai_status=?, "
+                              "updated_at=datetime('now') WHERE id=?",
+                              (r["ai_cells"], r["ai_note"], r["ai_status"], tid))
+            except NoKeyError:
+                no_key = True
+                break
+            except BudgetExceeded:
+                budget_stop = True
+                break
+            except Exception as e:  # noqa: BLE001 —— 单表失败不拖垮整批
+                with db.write() as c:
+                    c.execute("UPDATE table_extracts SET ai_status='failed', ai_note=? WHERE id=?",
+                              (str(e)[:200], tid))
+            done += 1
+            self._update(job["id"], progress_done=done)
+        self._revert_tidy_state(uid, ids)
+        if no_key:
+            self._update(job["id"], status="failed", progress_done=done,
+                         error="未配置 LLM key——AI 整理需要可用模型（设置页配置或联系管理员）")
+        else:
+            self._update(job["id"], status="done", progress_done=done,
+                         error=("预算已用尽——剩余表保持待整理，可稍后「继续整理」" if budget_stop else None))
+        bus.publish({"type": "data", "entity": "tables", "user_id": None})
 
     def _tracker_loop(self) -> None:
         """文献追踪巡逻：30 分钟醒一次，跑所有到期的订阅；有新条目则 SSE 广播。"""
