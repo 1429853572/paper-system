@@ -3346,6 +3346,15 @@ async def tracker_sub_create(request: Request):
     email_to = (b.get("email_to") or "").strip()[:120]
     if email_to and "@" not in email_to:
         raise HTTPException(400, "收件邮箱格式不正确")
+    # 订阅数配额：每订阅都是持续的巡逻负载（arXiv/OpenAlex 轮询 + LLM 富化）
+    overrides = _quota_overrides(u["id"])
+    limit = overrides.get("tracker_subs")
+    if limit is None:
+        limit = config.get("limits", "tracker_subs")
+    limit = max(1, int(limit or 10))
+    n_subs = db.one("SELECT COUNT(*) n FROM tracker_subs WHERE user_id=?", (u["id"],))["n"]
+    if n_subs >= limit:
+        raise HTTPException(400, f"订阅数量已达上限（{limit} 个）——可删除不用的订阅，或联系管理员调整限额")
     run_at = (b.get("run_at_time") or "").strip()
     import re as _re
     if run_at and not _re.match(r"^\d{1,2}:\d{2}$", run_at):

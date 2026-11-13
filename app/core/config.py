@@ -36,6 +36,7 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "translate_concurrency": 2,
         "disk_quota_gb": 20,
         "global_daily_parse": 600,
+        "tracker_subs": 10,          # 每成员订阅数上限（文献追踪；可在成员限额里按人覆盖）
     },
     "scheduler": {
         "translate_workers": 4,

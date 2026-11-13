@@ -172,7 +172,7 @@ async function renderAdminZone() {
   const auditRows = (audit.rows || []).filter(r => r.action !== 'login');
 
   const quotaSummary = ov => {
-    const keys = ['daily_parse_papers', 'max_file_mb', 'max_pages', 'max_disk_gb', 'monthly_budget_cny'];
+    const keys = ['daily_parse_papers', 'max_file_mb', 'max_pages', 'max_disk_gb', 'monthly_budget_cny', 'tracker_subs'];
     const hit = keys.filter(k => ov[k] !== undefined && ov[k] !== null);
     return hit.length
       ? `<span class="badge run" title="${hit.join('、')}">${hit.length} 项自定义</span>`
@@ -316,6 +316,7 @@ function openQuotaDialog(uid) {
       ${f('pp', 'max_pages', '单篇页数', '500', 1)}
       ${f('dk', 'max_disk_gb', '磁盘上限 GB', '20', 1)}
       ${f('bg', 'monthly_budget_cny', '月预算 ¥', '不限', 0)}
+      ${f('ts', 'tracker_subs', '订阅数上限', '10', 1)}
     </div>
     <div class="muted" style="font-size: var(--fs-xs);margin-top:6px">预算超限会在调用前拦截；解析篇数/页数/磁盘按上限校验。</div>
     <div class="ui-pop-foot">
