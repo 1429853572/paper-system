@@ -24,10 +24,15 @@ function dprFor(cssW, cssH, budget) {
 
 async function openPaper(id) {
     // 阅读追踪：fire-and-forget（不 await 不 toast——零打扰）
+    // 同时更新本地 state.papers 的 read_status → 侧栏圆点即时消失（否则要等下次拉列表）
     try {
       const pos = JSON.parse(localStorage.getItem('ps-pos-' + id) || 'null');
       api(`/api/papers/${id}/read`, {method: 'POST',
-        body: JSON.stringify({page: pos?.page || null, bid: pos?.bid || null})}).catch(() => {});
+        body: JSON.stringify({page: pos?.page || null, bid: pos?.bid || null})}).then(() => {
+        const lp = state.papers.find(x => x.id === id);
+        if (lp) lp.read_status = 'read';
+        renderPapers();
+      }).catch(() => {});
     } catch { api(`/api/papers/${id}/read`, {method: 'POST'}).catch(() => {}); }
 
   const PAGE = 40;
