@@ -45,20 +45,46 @@ def build() -> str:
     return "".join(chunks)
 
 
+
+def check_css_balance() -> bool:
+    """styles.css 括号必须平衡——一条未闭合规则会杀死其后全部样式（真机踩过：
+    多行规则被部分替换后丢掉闭合 }，全站界面散架）。"""
+    import re as _re
+    css = (ROOT / "app" / "webui" / "styles.css").read_text(encoding="utf-8")
+    css = _re.sub(r"/\*.*?\*/", "", css, flags=_re.S)
+    depth, neg = 0, 0
+    for ch in css:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                neg += 1
+                depth = 0
+    ok = depth == 0 and neg == 0
+    print(("✓ styles.css 括号平衡" if ok else f"✗ styles.css 括号不平衡（余 {depth}，负 {neg}）——"
+          "未闭合规则会使其后全部样式失效"))
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="只校验产物是否最新")
     args = ap.parse_args()
 
     content = build()
+    css_ok = check_css_balance()
     if args.check:
         cur = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
         if cur != content:
             print("✗ viewer.js 与 src/ 不同步——请运行 python3 scripts/build-webui.py")
             return 1
         print("✓ viewer.js 与 src/ 同步")
-        return 0
+        return 0 if css_ok else 1
 
+    if not css_ok:
+        print("✗ styles.css 括号不平衡——拒绝写入产物，先修复样式")
+        return 1
     OUT.write_text(content, encoding="utf-8")
     n = len(content.split("\n"))
     print(f"✓ 构建 viewer.js（{n} 行，{len(list(SRC.glob('*.js')))} 个源分片）")

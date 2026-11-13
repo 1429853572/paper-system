@@ -556,8 +556,6 @@ table.list th { color: var(--muted); font-weight: 500; }
   .tk-grid2 { grid-template-columns: 1fr; } .tk-kpis { grid-template-columns: repeat(2, 1fr); } }
 
 .tbl-wrap { overflow-x: auto; margin: 10px 0; border: 1px solid var(--border);
-
-.tbl-wrap { overflow-x: auto; margin: 10px 0; border: 1px solid var(--border);
              border-radius: var(--r-md); background: var(--panel); max-width: 100%; }
 .tbl-md { border-collapse: collapse; font-size: var(--fs-sm); width: 100%; min-width: max-content; }
 .tbl-md th, .tbl-md td { padding: 6px 10px; text-align: left; white-space: nowrap;
