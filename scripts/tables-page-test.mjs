@@ -25,6 +25,7 @@ const ITEMS = [
     ai_status: 'none', ai_note: null, asset_name: null, paper_title: 'Paper B', n_rows: 4, n_cols: 5 },
 ];
 const LIST = { items: ITEMS, total: 3, page: 1, page_size: 60,
+  by_batch: [{batch: '上传批次 · 11-14 10:00', n: 3, done: 1, deleted: 0, last_at: 'x'}],
   counts: { total: 3, pending: 2, kept: 0, deleted: 1, done: 1, mismatch: 1, queued: 0, running: 0, none: 2, failed: 0, working: 0 },
   by_paper: [
     { paper_id: 'p1', title: 'Paper A', n: 2, done: 1, mismatch: 1, deleted: 0 },
@@ -39,7 +40,7 @@ const DETAIL = { id: 'tb1', paper_id: 'p1', page_index: 2, caption: 'Table 1: Ab
 const DATA = {
   '/api/me': { id: 1, username: 'tester', role: 'admin', llm_configured: { chat: true, translate: true } },
   '/api/chat/sessions': { sessions: [] },
-  '/api/collections': { total: 0, collections: [], shared_libs: [] },
+  '/api/collections': { total: 1, collections: [{id: 'c9', name: '测试库'}], shared_libs: [] },
   '/api/statuses': { statuses: {} },
   '/api/papers': { total: 0, papers: [] },
   '/api/batches': { batches: [] },
@@ -111,9 +112,9 @@ window.switchPage('tables');
 await sleep(500);
 
 // 1. 双栏 + KPI + 左栏聚合
-ok('1 页面渲染：KPI 6 卡 + 左栏聚合（全部+2 篇论文）',
+ok('1 页面渲染：KPI 6 卡 + 左栏聚合（批次+全部+2 篇论文）',
    window.document.querySelectorAll('#tb-kpis .tk-kpi').length === 6 &&
-   window.document.querySelectorAll('#tb-rail-list .tk-rail-item').length === 3 &&
+   window.document.querySelectorAll('#tb-rail-list .tk-rail-item').length === 4 &&
    window.document.querySelector('#tb-rail-list .tk-rail-item .tk-rail-badge').textContent === '3');
 ok('1b 左栏论文行带状态微标（✓1）',
    window.document.querySelector('#tb-rail-list .tb-rail-mini')?.textContent.includes('✓1'));
@@ -181,6 +182,15 @@ await sleep(300);
 ok('9 收表调用（勾选篇 + auto_tidy）',
    harvestCalls.length === 1 && harvestCalls[0].paper_ids.length === 1 && harvestCalls[0].auto_tidy === true,
    JSON.stringify(harvestCalls[0]));
+
+// 5b. 左栏批次区 + 按库下拉
+const secs = [...window.document.querySelectorAll('.tb-rail-sec')].map(x => x.textContent);
+ok('5b 左栏批次/论文两区', secs.join(',') === '批次,论文', JSON.stringify(secs));
+const batchItem = window.document.querySelector('.tk-rail-item');
+ok('5c 批次项渲染（名+张数）', batchItem && batchItem.textContent.includes('上传批次') && batchItem.textContent.includes('3'),
+   batchItem?.textContent.slice(0, 30));
+const collSel = window.document.querySelector('#tb-toolbar select');
+ok('5d 按库下拉（全部+测试库）', collSel && collSel.options.length === 2 && collSel.options[1].textContent === '测试库');
 
 // 6b. 上传链入口
 await window.tbUploadOpen();

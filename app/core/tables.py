@@ -133,7 +133,8 @@ def split_caption(block_text: str) -> tuple[str, str]:
 
 
 # ---------------- 收割（幂等） ----------------
-def harvest(user_id: int, paper_ids: list[str] | None = None, is_admin: bool = False) -> dict:
+def harvest(user_id: int, paper_ids: list[str] | None = None, is_admin: bool = False,
+            batch: str | None = None) -> dict:
     """扫描 table 块入工作台。先查 UNIQUE 键再插入（幂等）；
     paper_ids=None → 全部已解析论文。返回 {papers, found, inserted, skipped}。"""
     # 可见性口径与 /api/tables/sources 一致：admin 全见，成员=shared+本人；
@@ -180,10 +181,10 @@ def harvest(user_id: int, paper_ids: list[str] | None = None, is_admin: bool = F
             with db.write() as c:
                 c.execute(
                     "INSERT INTO table_extracts(id, user_id, paper_id, page_index, "
-                    "caption, html, cells, src_hash, asset_name) VALUES(?,?,?,?,?,?,?,?,?)",
+                    "caption, html, cells, src_hash, asset_name, batch) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (tid, user_id, b["paper_id"], b["page_index"],
                      caption[:300], html, json.dumps(grid, ensure_ascii=False), src,
-                     (b["asset_path"] or "").rsplit("/", 1)[-1] or None))
+                     (b["asset_path"] or "").rsplit("/", 1)[-1] or None, batch))
         except Exception:  # noqa: BLE001 —— 并发收割撞 UNIQUE：计跳过不 500
             skipped += 1
             continue
@@ -279,7 +280,14 @@ def stats(user_id: int) -> dict:
         "FROM table_extracts te JOIN papers p ON p.id = te.paper_id "
         "WHERE te.user_id=? GROUP BY te.paper_id, p.title ORDER BY n DESC, p.title",
         (user_id,))]
-    return {"counts": counts, "by_paper": by_paper}
+    by_batch = [dict(r) for r in db.all(
+        "SELECT batch, COUNT(*) n, "
+        "SUM(CASE WHEN ai_status='done' THEN 1 ELSE 0 END) done, "
+        "SUM(CASE WHEN review='deleted' THEN 1 ELSE 0 END) deleted, "
+        "MAX(created_at) last_at "
+        "FROM table_extracts WHERE user_id=? AND batch IS NOT NULL "
+        "GROUP BY batch ORDER BY last_at DESC LIMIT 12", (user_id,))]
+    return {"counts": counts, "by_paper": by_paper, "by_batch": by_batch}
 
 
 # ---------------- xlsx 导出 ----------------

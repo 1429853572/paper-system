@@ -45,21 +45,36 @@ async function loadTables() {
   const page = state._tbPage || 1;
   let d;
   try {
-    d = await api(`/api/tables/list?review=${review}&q=${encodeURIComponent(q)}&paper_id=${paperF}&page=${page}&page_size=60`);
+    d = await api(`/api/tables/list?review=${review}&q=${encodeURIComponent(q)}&paper_id=${paperF}` +
+                 `&collection_id=${state._tbColl || ''}&batch=${encodeURIComponent(state._tbBatch || '')}&page=${page}&page_size=60`);
   } catch (e) {
     rail.innerHTML = `<div class="empty-note" style="padding:8px">${esc(friendlyError(e))}</div>`;
     return;
   }
   state._tbData = d;
+  if (!state._tbColls) {
+    try {
+      const c = await api('/api/collections');
+      state._tbColls = [...(c.collections || []), ...((c.shared_libs || []).map(x => ({...x, name: x.name + '（共享）'})))];
+    } catch { state._tbColls = []; }
+  }
 
-  /* ---- 左栏：按论文导航（统计即导航——哪篇有哪些表、多少张） ---- */
+  /* ---- 左栏：批次 + 论文导航 ---- */
   const qLower = (state._tbRailQ || '').toLowerCase();
   const papers = (d.by_paper || []).filter(p => !qLower || (p.title || '').toLowerCase().includes(qLower));
   const railItem = (label, count, onclick, on, extra = '') => `
     <div class="tk-rail-item ${on ? 'on' : ''}" onclick="${onclick}">
       <span class="tk-rail-name">${esc(label)}</span>${extra}
       ${count != null ? `<span class="tk-rail-badge ${on ? '' : 'dim'}">${count}</span>` : ''}</div>`;
+  const batches = (d.by_batch || []).slice(0, 8);
   rail.innerHTML =
+    (batches.length ? `<div class="tb-rail-sec">批次</div>` +
+      batches.map(bt => `
+      <div class="tk-rail-item ${state._tbBatch === bt.batch ? 'on' : ''}" onclick="tbBatchF('${esc(bt.batch).replace(/'/g, '')}')" title="${esc(bt.batch)}">
+        <span class="tk-rail-name">${esc(bt.batch)}</span>
+        <span class="tb-rail-mini">${bt.done ? `✓${bt.done}` : ''}</span>
+        <span class="tk-rail-badge ${state._tbBatch === bt.batch ? '' : 'dim'}">${bt.n}</span></div>`).join('') : '') +
+    `<div class="tb-rail-sec">论文</div>` +
     railItem(`全部表格`, d.counts.total, "tbPaperF('')", !paperF) +
     papers.map(p => railItem(
       p.title || '(无标题)', p.n, `tbPaperF('${p.paper_id}')`, paperF === p.paper_id,
@@ -87,9 +102,15 @@ async function loadTables() {
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
       ${paperF ? `<span class="tk-subtag">${icon('library')} ${esc((d.by_paper.find(p => p.paper_id === paperF) || {}).title || '…')}
         <b class="muted" style="font-weight:400;cursor:pointer" onclick="tbPaperF('')" title="查看全部">✕</b></span>` : ''}
+      ${state._tbBatch ? `<span class="tk-subtag">${icon('stack')} ${esc(state._tbBatch)}
+        <b class="muted" style="font-weight:400;cursor:pointer" onclick="tbBatchClear()" title="查看全部">✕</b></span>` : ''}
       ${chips}
-      <input id="tb-q" placeholder="搜表题/论文…" value="${esc(q)}" style="width:180px"
+      <input id="tb-q" placeholder="搜表题/论文…" value="${esc(q)}" style="width:160px"
              onkeydown="if(event.key==='Enter'){tbSearch(this.value)}">
+      <select onchange="tbCollF(this.value)" title="按文献库筛选" style="width:auto;max-width:170px">
+        <option value="">全部文献库</option>
+        ${(state._tbColls || []).map(c => `<option value="${c.id}" ${state._tbColl === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+      </select>
       <span style="margin-left:auto"></span>
       <button class="btn small" onclick="tbUploadOpen()">${icon('upload')} 上传解析</button>
       <button class="btn small" onclick="tbHarvestOpen()">${icon('plus')} 收表</button>
@@ -126,6 +147,9 @@ async function loadTables() {
 }
 window.tbReviewF = v => { state._tbReview = v; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
 window.tbPaperF = id => { state._tbPaper = id; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
+window.tbBatchF = b => { state._tbBatch = state._tbBatch === b ? '' : b; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
+window.tbCollF = id => { state._tbColl = id; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
+window.tbBatchClear = () => { state._tbBatch = ''; state._tbPage = 1; loadTables(); };
 window.tbRailFilter = debounce(v => { state._tbRailQ = v; loadTables(); }, 250);
 window.tbCkClear = () => { state._tbSel = new Set(); loadTables(); };
 
@@ -590,11 +614,12 @@ async function tbTrackParse(ids, autoTidy) {
   // 全部到达终态 → 收表（失败/跳过的自然被 harvest 的 parsed 过滤排除）
   const okIds = ids;   // harvest 只收 parsed
   try {
-    const h = await api('/api/tables/harvest', {method: 'POST', body: JSON.stringify({paper_ids: okIds, auto_tidy: !!autoTidy})});
+    const h = await api('/api/tables/harvest', {method: 'POST', body: JSON.stringify({paper_ids: okIds, auto_tidy: !!autoTidy, from_upload: true})});
     st.insertAdjacentHTML('beforeend',
       `<div style="margin-top:6px;color:var(--primary)">收表完成：${h.found} 张（新收 ${h.inserted}）${h.job_id ? '，整理已排队' : ''}</div>`);
     const collName = $('#tb-up-coll')?.selectedOptions?.[0]?.text || '默认文献库';
-    toast(`新一批就绪：论文已入「${collName}」，收进 ${h.inserted} 张表${autoTidy ? '，AI 整理进行中' : ''}`, 5000);
+    toast(`新一批「${h.batch || '批次'}」就绪：论文已入「${collName}」，收进 ${h.inserted} 张表${autoTidy ? '，AI 整理进行中' : ''}`, 6000);
+    state._tbBatch = h.batch || '';      // 视图切到该批次——所见即所收
     setTimeout(() => { window._tbUpClose?.(); loadTables(); }, 1200);
   } catch (e) {
     st.insertAdjacentHTML('beforeend', `<div style="color:var(--err)">收表失败：${esc(friendlyError(e))}——稍后用「收表」手动圈这批论文</div>`);

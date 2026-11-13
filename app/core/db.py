@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS table_extracts (
     review      TEXT NOT NULL DEFAULT 'pending',   -- pending|kept|deleted（软删可恢复）
     ai_status   TEXT NOT NULL DEFAULT 'none',      -- none|queued|running|done|failed|mismatch
     src_hash    TEXT NOT NULL,                     -- sha1(caption+前3行)——重解析后幂等去重
+    batch       TEXT,                              -- 收割批次标签（上传链/手动收表各成一批；左栏批次视图）
     asset_name  TEXT,                              -- 原图裁剪文件名（images/page_N_table_M.jpg）
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -490,6 +491,7 @@ class Database:
             self._add_col(c, "tracker_items", "cited_by", "INTEGER")
             self._add_col(c, "tracker_items", "accepted_to", "TEXT")
             self._add_col(c, "tracker_subs", "run_at_time", "TEXT")
+            self._add_col(c, "table_extracts", "batch", "TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS idx_discussion_paper "
                       "ON paper_discussion_messages(paper_id)")
             # 文献追踪：收件箱列表按状态过滤 + 订阅聚合；arxiv_id 幂等去重点查

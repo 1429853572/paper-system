@@ -3623,14 +3623,20 @@ def _own_table(u: dict, tid: str, full: bool = False):
 
 @app.get("/api/tables/list")
 def tables_list(request: Request, review: str = "active", q: str = "", paper_id: str = "",
-                page: int = 1, page_size: int = 60):
-    """卡片列表（轻量：不带网格）+ 全量统计 + 按论文聚合。review: active=未剔除。"""
+                collection_id: str = "", batch: str = "", page: int = 1, page_size: int = 60):
+    """卡片列表（轻量：不带网格）+ 全量统计 + 按论文/批次聚合。review: active=未剔除。"""
     u = require(request)
     if review not in _TABLE_REVIEW:
         review = "active"
     page = max(1, page)
     page_size = max(1, min(200, page_size))
     where, args = ["t.user_id=?"], [u["id"]]
+    if collection_id:
+        where.append("t.paper_id IN (SELECT paper_id FROM paper_collections WHERE collection_id=?)")
+        args.append(collection_id)
+    if batch:
+        where.append("t.batch=?")
+        args.append(batch)
     if review == "active":
         where.append("t.review IN ('pending','kept')")
     elif review != "all":
@@ -3687,13 +3693,16 @@ async def tables_harvest(request: Request):
     u = require(request)
     b = await request.json()
     ids = b.get("paper_ids") or []
-    r = tables_mod.harvest(u["id"], ids or None, is_admin=u["role"] == "admin")
+    label = (b.get("batch") or "").strip()[:80] or (
+        f"{'上传' if b.get('from_upload') else '收表'}批次 · {time.strftime('%m-%d %H:%M')}")
+    r = tables_mod.harvest(u["id"], ids or None, is_admin=u["role"] == "admin", batch=label)
     job_id = None
     if b.get("auto_tidy") and r["inserted_ids"]:
         job_id = scheduler.enqueue(u["id"], "table_tidy", None,
                                    {"ids": r["inserted_ids"]}, progress_total=len(r["inserted_ids"]))
     emit_data("tables")
-    return {**{k: v for k, v in r.items() if k != "inserted_ids"}, "job_id": job_id}
+    return {**{k: v for k, v in r.items() if k != "inserted_ids"}, "job_id": job_id,
+            "batch": label if r["inserted"] else None}
 
 def _table_filter_ids(u: dict, review: str, q: str, paper_id: str) -> list[str]:
     where, args = ["t.user_id=?"], [u["id"]]
@@ -3735,7 +3744,8 @@ async def tables_tidy_batch(request: Request):
         ids = picked
     if not ids:
         raise HTTPException(400, "所选表格都已完成整理（勾选「重新整理」可强制重跑）")
-    job_id = scheduler.enqueue(u["id"], "table_tidy", None, {"ids": ids}, progress_total=len(ids))
+    job_id = scheduler.enqueue(u["id"], "table_tidy", None, {"ids": ids},
+                               batch_id=new_batch_id(), progress_total=len(ids))
     emit_data("tables")
     return {"ok": True, "job_id": job_id, "count": len(ids)}
 
