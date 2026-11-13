@@ -188,6 +188,8 @@ CREATE TABLE IF NOT EXISTS tracker_items (
     tier        TEXT NOT NULL DEFAULT 'eco',           -- core|proxy|eco|noise
     is_fallback INTEGER NOT NULL DEFAULT 0,
     status      TEXT NOT NULL DEFAULT 'new',           -- new|dismissed|accepted
+    rank        TEXT,                                  -- 期刊分区/IF JSON（cas/jcr/impact_factor）
+    cited_by    INTEGER,                               -- 被引数（OpenAlex/S2，arXiv 新文常为空）
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     accepted_at TEXT
 );
@@ -462,6 +464,8 @@ class Database:
             c.execute("CREATE INDEX IF NOT EXISTS idx_paper_reads_user "
                       "ON paper_reads(user_id)")
             self._add_col(c, "paper_discussion_messages", "reply_to", "TEXT")
+            self._add_col(c, "tracker_items", "rank", "TEXT")
+            self._add_col(c, "tracker_items", "cited_by", "INTEGER")
             c.execute("CREATE INDEX IF NOT EXISTS idx_discussion_paper "
                       "ON paper_discussion_messages(paper_id)")
             # 文献追踪：收件箱列表按状态过滤 + 订阅聚合；arxiv_id 幂等去重点查

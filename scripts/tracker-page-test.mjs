@@ -23,6 +23,7 @@ const ITEMS = [
     authors: 'A', abstract: 'we study splatting', zh_summary: '这篇提出了一种新的泼溅方法。', doi: '10.1/1',
     arxiv_id: '2611.1', pdf_url: 'https://arxiv.org/pdf/2611.1', code_url: 'https://github.com/a/b',
     venue: 'arXiv', published: '2026-11-12', tier: 'core', is_fallback: 0, status: 'new',
+    rank: '{"cas": "综合性期刊3区", "jcr": "Q1", "impact_factor": "4.9"}', cited_by: 3,
     created_at: '2026-11-13', accepted_at: null },
   { id: 'tia2', sub_id: 'tsa1', user_id: 1, paper_id: null, title: 'Filler Item', zh_title: null,
     authors: 'B', abstract: 'unrelated', zh_summary: null, doi: '', arxiv_id: '2611.2', pdf_url: '',
@@ -79,6 +80,11 @@ window.fetch = async (url, opts = {}) => {
   if (u === '/api/tracker/smtp' && opts.method === 'PUT') {
     smtpSaves.push(JSON.parse(opts.body || '{}'));
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  }
+  if (u === '/api/tracker/journal-suggest') {
+    return { ok: true, status: 200, json: async () => ({ items: [
+      { name: 'Scientific Reports', hint: 'JCR Q1 · IF 3.8' },
+      { name: 'Nature Communications', hint: '中科院1区 · IF 14.1' }] }) };
   }
   if (u.startsWith('/api/tracker/items')) {
     const q = String(url);
@@ -143,6 +149,9 @@ ok('2 行渲染完整（核心徽章/中文摘要/代码链接/三按钮）',
    row.textContent.includes('代码 ↗') &&
    [...row.querySelectorAll('.btn')].filter(b => b.textContent.includes('收进文献库')).length === 1 &&
    [...row.querySelectorAll('.btn')].some(b => b.textContent.includes('忽略')));
+ok('2b 分区/被引徽章渲染',
+   row.textContent.includes('中科院综合性期刊3区') && row.textContent.includes('JCR Q1') &&
+   row.textContent.includes('IF 4.9') && row.textContent.includes('被引 3'));
 ok('3 补足灰标只在 is_fallback 行',
    [...window.document.querySelectorAll('#tk-stream .tracker-item')].filter(x => x.textContent.includes('补足')).length === 1);
 
@@ -190,36 +199,42 @@ ok('8 新建订阅：chip 联动输入框 + POST payload 正确',
    subSaves[0].keywords === 'neural fields' && subSaves[0].llm_auto === 'core',
    JSON.stringify({ catVal, save: subSaves[0] }));
 
-// 9. SMTP 配置卡（admin 可见）+ 保存调用
-const smtpCard = window.document.querySelector('#tk-rail-foot');
-ok('9 左栏邮件入口（admin 可见+未配置徽章）', !!smtpCard && smtpCard.textContent.includes('未配置'), '');
-window.trackerSmtpOpen();
-await sleep(400);
-window.document.querySelector('#smtp-host').value = 'smtp.qq.com';
-window.document.querySelector('#smtp-sender').value = 'a@qq.com';
-window.document.querySelector('#smtp-pass').value = 'authcode';
-smtpSaves = [];
-await window.trackerSaveSmtp(window.document.querySelector('.ui-pop [onclick*="trackerSaveSmtp"]'));
+// 9. 左栏邮件入口：状态 + admin「前往设置」链接（SMTP 表单已迁管理后台）
+const foot = window.document.querySelector('#tk-rail-foot');
+ok('9 左栏邮件状态（未配置徽章+前往设置链接）',
+   foot.textContent.includes('邮件发送') && foot.textContent.includes('未配置') &&
+   !!foot.querySelector('a'), foot.textContent.slice(0, 40));
+
+// 9b. 期刊搜索选择器：建议下拉 + 点选加 chip + 保存 payload 带期刊
+window.trackerEdit('tsa1');
 await sleep(300);
-ok('10 SMTP 保存 payload（host/sender/密码）',
-   smtpSaves.length === 1 && smtpSaves[0].host === 'smtp.qq.com' && smtpSaves[0].password === 'authcode',
-   JSON.stringify(smtpSaves[0] || {}));
+const sugBox = window.document.querySelector('#tk-jr-sug');
+await window.trackerJrSuggest('report');
+await sleep(600);
+ok('9b 期刊建议下拉渲染', sugBox && !sugBox.hidden && sugBox.textContent.includes('Scientific Reports'),
+   sugBox?.textContent?.slice(0, 40));
+window.trackerJrPick('Scientific Reports');
+await sleep(200);
+const jrChip = window.document.querySelector('#tk-jr-chips .tk-chip.jr[data-j="Scientific Reports"]');
+ok('9c 点选加期刊 chip', !!jrChip, '');
 
 // 11. 角标
 const badge = window.document.querySelector('#tbadge');
 ok('11 未读角标显示收件箱数', badge && !badge.hidden && badge.textContent === '2',
    `hidden=${badge?.hidden} text=${badge?.textContent}`);
 
-// 12. 编辑订阅表单：预填 + PUT
+// 12. 编辑订阅表单：预填 + 期刊选择 + PUT
 subSaves = [];
 window.trackerEdit('tsa1');
 await sleep(300);
 const prefill = window.document.querySelector('#tk-keywords')?.value;
+window.trackerJrPick('Scientific Reports');
 window.document.querySelector('#tk-name').value = '改名';
 await window.trackerSave('tsa1');
 await sleep(300);
-ok('12 编辑订阅：预填关键词 + PUT 保存', prefill === 'gaussian splatting' &&
-   subSaves.length === 1 && subSaves[0].name === '改名', JSON.stringify(subSaves[0] || {}));
+ok('12 编辑订阅：预填关键词 + PUT 保存（含所选期刊）', prefill === 'gaussian splatting' &&
+   subSaves.length === 1 && subSaves[0].name === '改名' && subSaves[0].journals === 'Scientific Reports',
+   JSON.stringify(subSaves[0] || {}));
 
 ok('零 JS 异常', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);

@@ -3467,6 +3467,42 @@ async def tracker_item_accept(iid: str, request: Request):
     emit_data("tracker")
     return {"ok": True, "paper_id": r["paper_id"], "status": r["status"], "duplicate": r["status"] == "duplicate"}
 
+@app.get("/api/tracker/journal-suggest")
+def tracker_journal_suggest(request: Request, q: str = ""):
+    """期刊名建议：本地 easyScholar 缓存优先 + OpenAlex 数据源搜索兜底。
+    订阅表单的期刊搜索选择器用——用户不必知道期刊全称。"""
+    require(request)
+    q = q.strip()
+    if len(q) < 2:
+        return {"items": []}
+    out, seen = [], set()
+    for r in db.all("SELECT journal, data FROM journal_ranks WHERE journal LIKE ? LIMIT 5",
+                    (f"%{q.lower()}%",)):
+        try:
+            d = json.loads(r["data"])
+        except Exception:  # noqa: BLE001
+            continue
+        name = d.get("journal") or r["journal"]
+        hint = d.get("cas") or d.get("jcr") or ""
+        if d.get("impact_factor"):
+            hint += (f" · IF {d['impact_factor']}" if hint else f"IF {d['impact_factor']}")
+        if name.lower() not in seen:
+            seen.add(name.lower())
+            out.append({"name": name, "hint": hint})
+    import httpx
+    try:
+        r = httpx.get("https://api.openalex.org/sources",
+                      params={"search": q, "per-page": 8}, timeout=15)
+        for s0 in (r.json() or {}).get("results", []):
+            name = s0.get("display_name") or ""
+            if name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            out.append({"name": name, "hint": f"{s0.get('works_count', 0)} 篇"})
+    except httpx.HTTPError:
+        pass
+    return {"items": out[:10]}
+
 @app.post("/api/tracker/items/{iid}/dismiss")
 def tracker_item_dismiss(iid: str, request: Request):
     u = require(request)

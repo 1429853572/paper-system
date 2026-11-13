@@ -4490,11 +4490,13 @@ function auditActionName(a) { return AUDIT_ACT[a] || a; }
 async function renderAdminZone() {
   const el = $('#page-admin');
   if (!el) return;
-  const [users, pool, audit] = await Promise.all([
+  const [users, pool, audit, smtp] = await Promise.all([
     api('/api/admin/users'),
     api('/api/admin/pool').catch(() => ({enabled: false})),
     api('/api/admin/audit?limit=50').catch(() => ({rows: []})),
+    api('/api/tracker/smtp').catch(() => ({configured: false})),
   ]);
+  state._smtpReady = !!smtp.configured;
   const list = users.users || [];
   const memberN = list.filter(u => u.role !== 'admin' && u.disabled !== 2).length;
   const adminN = list.filter(u => u.role === 'admin').length;
@@ -4524,6 +4526,31 @@ async function renderAdminZone() {
       <div class="adm-stat"><span class="muted">磁盘</span><b>${fmtGB(diskN).toFixed(1)}</b><span class="muted">GB 已用</span></div>
       <div class="adm-stat"><span class="muted">本月花费</span><b>¥${costN.toFixed(2)}</b><span class="muted">LLM 调用估算</span></div>
     </div>
+
+    <div class="set-card">
+      <div class="set-head">${icon('inbox')} 邮件发送（文献追踪日报的全局发件邮箱）
+        <span class="badge ${state._smtpReady ? 'ok' : 'dim'}" style="margin-left:8px">${state._smtpReady ? '已配置' : '未配置'}</span>
+        <button class="btn small" style="margin-left:auto" onclick="admSmtpToggle()">${state._smtpOpen ? '收起' : '配置'}</button></div>
+      ${state._smtpOpen ? `
+      <div style="display:grid;gap:8px;padding:4px 14px 12px">
+        <div style="display:flex;gap:8px">
+          <label class="tk-fld" style="flex:1">SMTP 主机
+            <input id="smtp-host" value="${esc(state._smtpHost || '')}" placeholder="smtp.qq.com"></label>
+          <label class="tk-fld" style="width:120px">端口
+            <input id="smtp-port" value="${esc(String(state._smtpPort || 465))}"></label>
+          <label class="tk-fld" style="flex:1.2">发件邮箱
+            <input id="smtp-sender" value="${esc(state._smtpSender || '')}" placeholder="xxx@qq.com"></label>
+          <label class="tk-fld" style="flex:1">授权码（留空=不改）
+            <input id="smtp-pass" type="password" placeholder="${state._smtpReady ? '已保存' : 'SMTP 授权码'}"></label>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn primary" onclick="admSaveSmtp(this)">保存配置</button>
+          <label class="tk-inline" style="margin-left:auto">测试发到
+            <input id="smtp-test-to" placeholder="收件邮箱" style="width:200px"></label>
+          <button class="btn" onclick="admTestSmtp(this)">发送测试</button>
+        </div>
+        <div class="muted" style="font-size: var(--fs-xs)">QQ/163 等邮箱需先开启 SMTP 并生成「授权码」（不是登录密码）；465=SSL，587=STARTTLS。配置一次全站共用——成员在文献追踪订阅里只填收件邮箱。</div>
+      </div>` : ''}</div>
 
     <div class="set-card">
       <div class="set-head">${icon('user')} 成员管理
@@ -4903,6 +4930,43 @@ state._libPage = 1; state._libPageSize = 25;                // 文库表格真�
 state.libLevel = 1;                                         // 管理页层级: 1=库列表 2=库内
 state.libView = 'card';                                     // 库列表视图: card | list
 state._libQTimer = 0;
+
+
+/* ---- 管理后台：邮件发送（全局发件 SMTP） ---- */
+window.admSmtpToggle = async () => {
+  state._smtpOpen = !state._smtpOpen;
+  if (state._smtpOpen && !state._smtpLoaded) {
+    try {
+      const cfg = await api('/api/tracker/smtp');
+      state._smtpHost = cfg.host || ''; state._smtpPort = cfg.port || 465; state._smtpSender = cfg.sender || '';
+      state._smtpLoaded = true;
+    } catch {}
+  }
+  renderAdminZone();
+};
+window.admSaveSmtp = async btn => {
+  await withBusy(btn, async () => {
+    const host = $('#smtp-host')?.value || '', sender = $('#smtp-sender')?.value || '';
+    if (!host || !sender.includes('@')) { toast('SMTP 主机与发件邮箱必填'); return; }
+    state._smtpHost = host; state._smtpPort = $('#smtp-port')?.value || 465; state._smtpSender = sender;
+    await api('/api/tracker/smtp', {method: 'PUT', body: JSON.stringify({
+      host, port: parseInt(state._smtpPort, 10) || 465, sender,
+      password: $('#smtp-pass')?.value || '', sender_name: 'paper-system'})});
+    state._smtpReady = true;
+    toast('SMTP 配置已保存');
+    renderAdminZone();
+  }, '保存失败');
+};
+window.admTestSmtp = async btn => {
+  const to = $('#smtp-test-to')?.value || '';
+  if (!to.includes('@')) { toast('先填测试收件邮箱'); return; }
+  await withBusy(btn, async () => {
+    try {
+      await api('/api/tracker/smtp/test', {method: 'POST', body: JSON.stringify({to})});
+      toast(`测试邮件已发到 ${to}——收到即配置成功`, 5000);
+    } catch (e) { toast(friendlyError(e, '发送失败——检查主机/端口/授权码')); }
+  }, '发送中…');
+};
 /* ===== 11-libmgr.js —— 文库管理页：库列表/批量操作/选题 =====
    由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
    请勿直接改 app/webui/viewer.js（构建产物）。 */
@@ -6629,10 +6693,16 @@ async function loadTracker() {
   const page = state._trackerPage || 1;
   let subs, inbox;
   try {
+    const collP = api('/api/collections').then(d => {
+      const opts = [{id: '', name: '默认文献库'},
+        ...(d.collections || []), ...(d.shared_libs || []).map(x => ({...x, name: x.name + '（共享）'}))];
+      state._trackerCollOpts = opts.map(o => `<option value="${o.id}" ${o.id === (state._trackerCollId || '') ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+    }).catch(() => {});
     [subs, inbox] = await Promise.all([
       api('/api/tracker/subs'),
       api(`/api/tracker/items?status=${st}&tier=${tier}&sub_id=${subF}&page=${page}&page_size=30`),
-    ]);
+      collP,
+    ]).then(([a, b]) => [a, b]);
   } catch (e) {
     rail.innerHTML = `<div class="empty-note" style="padding:8px">${esc(friendlyError(e))}</div>`;
     return;
@@ -6656,11 +6726,11 @@ async function loadTracker() {
     `<div class="tk-rail-sep"></div>` +
     railItem('已收进', counts.accepted, "trackerStatus('accepted')", st === 'accepted', {dim: 1}) +
     railItem('已忽略', counts.dismissed, "trackerStatus('dismissed')", st === 'dismissed', {dim: 1});
-  foot.innerHTML = me.role === 'admin'
-    ? `<div style="display:flex;align-items:center;gap:6px">邮件发送
-         <span class="badge ${subs.smtp_ready ? 'ok' : 'dim'}">${subs.smtp_ready ? '已配置' : '未配置'}</span>
-         <button class="btn small" style="margin-left:auto" onclick="trackerSmtpOpen()">${subs.smtp_ready ? '管理' : '配置'}</button></div>`
-    : `邮件发送 ${subs.smtp_ready ? '<span class="badge ok">已配置</span>' : '<span class="badge dim">未配置（联系管理员）</span>'}`;
+  foot.innerHTML = `<div style="display:flex;align-items:center;gap:6px">邮件发送
+      <span class="badge ${subs.smtp_ready ? 'ok' : 'dim'}">${subs.smtp_ready ? '已配置' : '未配置'}</span>
+      ${me.role === 'admin'
+        ? `<a href="#" style="margin-left:auto;color:var(--primary)" onclick="switchPage('admin');return false">前往设置</a>`
+        : '<span class="muted" style="margin-left:auto">联系管理员</span>'}</div>`;
 
   /* ---- 右栏：KPI 统计带 ---- */
   kpis.innerHTML = [
@@ -6679,7 +6749,10 @@ async function loadTracker() {
         <b class="muted" style="font-weight:400;cursor:pointer" onclick="trackerSubF('')" title="查看全部订阅">✕</b></span>
         <button class="btn small" onclick="trackerRun('${curSub.id}')">${icon('bolt')} 巡逻</button>` : ''}
       ${tierChips}
-      <span style="margin-left:auto" class="muted">共 ${inbox.total} 条</span>
+      <span style="margin-left:auto"></span>
+      <label class="tk-inline">收进目标库
+        <select id="tk-target-coll" style="width:auto;max-width:200px" onchange="trackerCollChange(this)">${state._trackerCollOpts || '<option value="">默认文献库</option>'}</select></label>
+      <span class="muted">共 ${inbox.total} 条</span>
     </div>
     ${st === 'new' && selMapSize() ? `<div class="lib-batch" style="display:flex;gap:8px;align-items:center;margin-top:8px">
       已选 ${selMapSize()} 篇
@@ -6712,14 +6785,27 @@ window.trackerSubF = id => { state._trackerSub = id; state._trackerStatus = 'new
 window.trackerTierF = v => { state._trackerTier = v === state._trackerTier ? '' : v; state._trackerPage = 1; loadTracker(); };
 window.trackerLoadMore = () => { state._trackerPage = (state._trackerPage || 1) + 1; loadTracker(); };
 window.trackerCkClear = () => { state._trackerSel = new Set(); loadTracker(); };
+window.trackerCollChange = el => { state._trackerCollId = el.value; };
 
 /* ---------- 收件箱行 ---------- */
+function trackerRankBadge(it) {
+  if (!it.rank) return '';
+  try {
+    const r = JSON.parse(it.rank);
+    const bits = [];
+    if (r.cas) bits.push(`中科院${r.cas}`);
+    if (r.jcr) bits.push(`JCR ${r.jcr}`);
+    if (r.impact_factor) bits.push(`IF ${r.impact_factor}`);
+    return bits.length ? `<span class="badge ok" title="期刊分区（easyScholar）">${esc(bits.join(' · '))}</span>` : '';
+  } catch { return ''; }
+}
+
 function trackerItemHtml(it, selMap, st) {
   const checked = selMap.has(it.id) ? 'checked' : '';
   const zh = it.zh_title ? `<div style="color:var(--text);margin-top:2px">${esc(it.zh_title)}</div>` : '';
   const code = it.code_url ? ` · <a href="${esc(it.code_url)}" target="_blank" rel="noopener" style="color:var(--primary)">代码 ↗</a>` : '';
   const pdf = it.pdf_url ? ` · <a href="${esc(it.pdf_url)}" target="_blank" rel="noopener" style="color:var(--text-2)">PDF ↗</a>` : '';
-  const sum = it.zh_summary ? `<div style="color:var(--text-2);font-size:var(--fs-sm);margin-top:6px;line-height:1.6">${esc(it.zh_summary)}</div>` : '';
+  const cite = it.cited_by != null && it.cited_by > 0 ? ` · 被引 ${it.cited_by}` : '';
   const isNew = it.status === 'new' && st !== 'accepted' && st !== 'dismissed';
   const ck = isNew && st === 'new'
     ? `<input type="checkbox" class="tk-ck" data-iid="${it.id}" ${checked} onchange="trackerCk(this)" style="margin-top:3px">`
@@ -6729,23 +6815,41 @@ function trackerItemHtml(it, selMap, st) {
        ${!it.zh_summary ? `<button class="btn small" onclick="trackerEnrich('${it.id}', this)" title="LLM 生成中文总结与标题翻译">AI 摘要</button>` : ''}
        <button class="btn small danger hover-only" onclick="trackerDismiss('${it.id}', this)">忽略</button>`
     : `<span class="badge dim">${it.status === 'accepted' ? '已收进' : '已忽略'}</span>`;
+  // 总结优先，无总结显示原摘要；超过 3 行折叠，点击展开/收起
+  const bodyText = it.zh_summary || it.abstract || '';
+  const isZh = !!it.zh_summary;
+  let body = '';
+  if (bodyText) {
+    const label = isZh ? 'AI 总结' : '摘要';
+    body = `<div class="tk-abs" data-iid="${it.id}">
+      <span class="tk-abs-tag">${label}</span>
+      <span class="tk-abs-text clamp">${esc(bodyText)}</span>
+      ${bodyText.length > 110 ? '<b class="tk-abs-toggle" onclick="trackerToggleAbs(this)">展开</b>' : ''}
+    </div>`;
+  }
   return `
   <div class="card tracker-item" data-iid="${it.id}" style="padding:12px 14px;margin:0 0 10px">
     <div style="display:flex;gap:10px;align-items:flex-start">
       ${ck}
       <div style="flex:1;min-width:0">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          ${trackerTierBadge(it.tier)}${it.is_fallback ? '<span class="badge dim" title="核心/相关不足时的补足项">补足</span>' : ''}
+          ${trackerTierBadge(it.tier)}${trackerRankBadge(it)}${it.is_fallback ? '<span class="badge dim" title="核心/相关不足时的补足项">补足</span>' : ''}
+          ${it.cited_by != null && it.cited_by > 0 ? `<span class="badge dim" title="被引数">被引 ${it.cited_by}</span>` : ''}
           <span class="muted" style="font-size:var(--fs-xs)">${esc(it.published || '')} · ${esc(it.venue || '')}
-            · ${esc((it.authors || '').slice(0, 80))}${code}${pdf}</span>
+            · ${esc((it.authors || '').slice(0, 110))}${code}${pdf}</span>
         </div>
         <div style="font-weight:600;margin-top:4px">${esc(it.title)}</div>
-        ${zh}${sum}
+        ${zh}${body}
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;flex:none">${actions}</div>
     </div>
   </div>`;
 }
+window.trackerToggleAbs = el => {
+  const txt = el.parentElement.querySelector('.tk-abs-text');
+  const open = txt.classList.toggle('clamp') === false;
+  el.textContent = open ? '收起' : '展开';
+};
 
 /* ---------- 事件 ---------- */
 window.trackerCk = async (ck) => {
@@ -6759,8 +6863,8 @@ window.trackerCk = async (ck) => {
 
 async function trackerAccept(id, btn) {
   await withBusy(btn, async () => {
-    // collection_id 留空 → 服务端落入默认文献库
-    const r = await api(`/api/tracker/items/${id}/accept`, {method: 'POST', body: JSON.stringify({collection_id: ''})});
+    const cid = state._trackerCollId || '';
+    const r = await api(`/api/tracker/items/${id}/accept`, {method: 'POST', body: JSON.stringify({collection_id: cid})});
     toast(r.duplicate ? '已在文献库中（已自动挂库）' : '已收进文献库——解析已排队，进度见「任务」页', 4500);
   }, '收进失败');
 }
@@ -6773,7 +6877,7 @@ async function trackerBatchAccept(btn) {
     let ok = 0, dup = 0;
     for (const id of sel) {
       try {
-        const r = await api(`/api/tracker/items/${id}/accept`, {method: 'POST', body: JSON.stringify({})});
+        const r = await api(`/api/tracker/items/${id}/accept`, {method: 'POST', body: JSON.stringify({collection_id: state._trackerCollId || ''})});
         if (r.duplicate) dup++; else ok++;
       } catch (e) { /* 单条失败继续 */ }
     }
@@ -6836,8 +6940,17 @@ function trackerFormHtml(s = null) {
     <div class="tk-grid2">
       <label class="tk-fld">排除词（逗号分隔，命中即不收）
         <input id="tk-exclude" value="${esc(s ? s.exclude : '')}" placeholder="survey, review"></label>
-      <label class="tk-fld">顶刊期刊（逗号分隔，可空）
-        <input id="tk-journals" value="${esc(s ? s.journals : '')}" placeholder="Nature, IEEE TPAMI"></label>
+      <div class="tk-fld">顶刊期刊（搜索选择，可多个；不必知道全称）
+        <div id="tk-jr-chips" style="display:flex;gap:5px;flex-wrap:wrap;${s && s.journals ? '' : 'display:none'}">
+          ${(s ? s.journals : '').split(',').map(x => x.trim()).filter(Boolean).map(j =>
+            `<span class="tk-chip jr" data-j="${esc(j)}">${esc(j)}
+               <b style="cursor:pointer;margin-left:2px" onclick="trackerJrRemove(this)">✕</b></span>`).join('')}
+        </div>
+        <input id="tk-jr-q" placeholder="输入期刊名关键词（如 nature、ieee、report），从下拉选择"
+               autocomplete="off" oninput="trackerJrSuggest(this.value)">
+        <div id="tk-jr-sug" hidden style="border:1px solid var(--border);border-radius:var(--r-md);
+             background:var(--panel);max-height:200px;overflow-y:auto;margin-top:4px"></div>
+      </div>
     </div>
     <div class="tk-row">
       <label class="tk-fld" style="flex:1">收件邮箱（接收巡逻日报）
@@ -6885,7 +6998,7 @@ async function trackerSave(id) {
     keywords: g('#tk-keywords')?.value || '',
     categories: g('#tk-cats')?.value || '',
     exclude: g('#tk-exclude')?.value || '',
-    journals: g('#tk-journals')?.value || '',
+    journals: (window.trackerJrSelected?.() || []).join(','),
     frequency_hours: parseInt(g('#tk-freq')?.value || '24', 10),
     llm_auto: g('#tk-auto')?.value || 'core',
     email_to: g('#tk-email')?.value || '',
@@ -6918,6 +7031,44 @@ async function trackerRun(id) {
 }
 window.trackerRun = trackerRun;
 
+let _jrSugTimer = null;
+window.trackerJrSuggest = q => {
+  clearTimeout(_jrSugTimer);
+  const box = $('#tk-jr-sug');
+  if (!box) return;
+  if ((q || '').trim().length < 2) { box.hidden = true; return; }
+  _jrSugTimer = setTimeout(async () => {
+    try {
+      const d = await api(`/api/tracker/journal-suggest?q=${encodeURIComponent(q.trim())}`);
+      const have = new Set([...document.querySelectorAll('#tk-jr-chips .tk-chip.jr')].map(x => x.dataset.j.toLowerCase()));
+      box.innerHTML = (d.items || []).filter(x => !have.has(x.name.toLowerCase())).map(x => `
+        <div class="tk-sug-item" onclick="trackerJrPick('${esc(x.name).replace(/'/g, '')}')">
+          <b>${esc(x.name)}</b> ${x.hint ? `<span class="muted" style="font-size:var(--fs-xs)">${esc(x.hint)}</span>` : ''}
+        </div>`).join('') || '<div class="muted" style="padding:6px 10px">无匹配期刊</div>';
+      box.hidden = false;
+    } catch { box.hidden = true; }
+  }, 350);
+};
+window.trackerJrPick = name => {
+  const box = $('#tk-jr-chips');
+  const have = new Set([...box.querySelectorAll('.tk-chip.jr')].map(x => x.dataset.j.toLowerCase()));
+  if (![...have].includes(name.toLowerCase())) {
+    box.insertAdjacentHTML('beforeend',
+      `<span class="tk-chip jr" data-j="${esc(name)}">${esc(name)}
+         <b style="cursor:pointer;margin-left:2px" onclick="trackerJrRemove(this)">✕</b></span>`);
+  }
+  box.style.display = 'flex';
+  const q = $('#tk-jr-q'); if (q) q.value = '';
+  const sug = $('#tk-jr-sug'); if (sug) sug.hidden = true;
+};
+window.trackerJrRemove = b => {
+  b.closest('.tk-chip').remove();
+  const box = $('#tk-jr-chips');
+  if (box && !box.children.length) box.style.display = 'none';
+};
+window.trackerJrSelected = () =>
+  [...document.querySelectorAll('#tk-jr-chips .tk-chip.jr')].map(x => x.dataset.j);
+
 window.trackerToggleCat = (el, cat) => {
   el.classList.toggle('on');
   const inp = $('#tk-cats');
@@ -6926,61 +7077,3 @@ window.trackerToggleCat = (el, cat) => {
   if (el.classList.contains('on')) cats.add(cat); else cats.delete(cat);
   inp.value = [...cats].join(' ');
 };
-
-/* ---------- SMTP 配置（admin，弹层） ---------- */
-window.trackerSmtpOpen = async () => {
-  if (_trackerFormPop) _trackerFormPop.close();
-  const {pop, close} = openPop('tk-smtp-pop');
-  _trackerFormPop = {pop, close};
-  let cfg = {host: '', port: 465, sender: ''};
-  try { cfg = {...cfg, ...(await api('/api/tracker/smtp'))}; } catch {}
-  pop.innerHTML = `<div class="ui-pop-title">${icon('inbox')} 邮件发送（全局发件邮箱）
-    <button class="btn small" style="margin-left:auto" onclick="trackerCloseForm()">${icon('close')}</button></div>
-    <div style="display:grid;gap:8px;margin-top:10px">
-      <div style="display:flex;gap:8px">
-        <label class="tk-fld" style="flex:1">SMTP 主机
-          <input id="smtp-host" value="${esc(cfg.host || '')}" placeholder="smtp.qq.com"></label>
-        <label class="tk-fld" style="width:120px">端口
-          <input id="smtp-port" value="${cfg.port || 465}"></label>
-        <label class="tk-fld" style="flex:1.2">发件邮箱
-          <input id="smtp-sender" value="${esc(cfg.sender || '')}" placeholder="xxx@qq.com"></label>
-        <label class="tk-fld" style="flex:1">授权码（留空=不改）
-          <input id="smtp-pass" type="password" placeholder="${cfg.configured ? '已保存' : 'SMTP 授权码'}"></label>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn primary" onclick="trackerSaveSmtp(this)">保存配置</button>
-        <label class="tk-inline" style="margin-left:auto">测试发到
-          <input id="smtp-test-to" placeholder="收件邮箱" style="width:200px"></label>
-        <button class="btn" onclick="trackerTestSmtp(this)">发送测试</button>
-      </div>
-      <div class="muted" style="font-size:var(--fs-xs)">QQ/163 等邮箱需先开启 SMTP 并生成「授权码」（不是登录密码）；465=SSL，587=STARTTLS。配置一次全站共用——用户订阅里只填收件邮箱。</div>
-    </div>`;
-};
-window.trackerSmtpToggle = window.trackerSmtpOpen;
-
-async function trackerSaveSmtp(btn) {
-  await withBusy(btn, async () => {
-    const host = $('#smtp-host')?.value || '', sender = $('#smtp-sender')?.value || '';
-    if (!host || !sender.includes('@')) { toast('SMTP 主机与发件邮箱必填'); return; }
-    state._smtpHost = host; state._smtpPort = $('#smtp-port')?.value || 465; state._smtpSender = sender;
-    await api('/api/tracker/smtp', {method: 'PUT', body: JSON.stringify({
-      host, port: parseInt(state._smtpPort, 10) || 465, sender,
-      password: $('#smtp-pass')?.value || '', sender_name: 'paper-system'})});
-    toast('SMTP 配置已保存');
-    trackerCloseForm();
-    loadTracker();
-  }, '保存失败');
-}
-window.trackerSaveSmtp = trackerSaveSmtp;
-
-async function trackerTestSmtp(btn) {
-  const to = $('#smtp-test-to')?.value || '';
-  if (!to.includes('@')) { toast('先填测试收件邮箱'); return; }
-  await withBusy(btn, async () => {
-    try {
-      await api('/api/tracker/smtp/test', {method: 'POST', body: JSON.stringify({to})});
-      toast(`测试邮件已发到 ${to}——收到即配置成功`, 5000);
-    } catch (e) { toast(friendlyError(e, '发送失败——检查主机/端口/授权码')); }
-  }, '发送中…');
-}
-window.trackerTestSmtp = trackerTestSmtp;

@@ -6,6 +6,7 @@ LLM 中文摘要富化（复用 llm.py 的预算闸与用量记账）。patrol �
 tracker_loop 守护线程按订阅的 frequency_hours 周期触发，也可手动立即执行。
 """
 import difflib
+import json
 import re
 import secrets
 import time
@@ -14,7 +15,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import llm
+from . import journal, llm
 from .db import db
 
 _ARXIV_API = "https://export.arxiv.org/api/query"
@@ -112,6 +113,27 @@ def _oa_abstract(inv: dict) -> str:
     return " ".join(pos[i] for i in sorted(pos))
 
 
+def resolve_source_ids(journals: list[str]) -> dict:
+    """期刊名（模糊）→ OpenAlex source id。显示名与查询名相似度≥0.6 才采纳。"""
+    out = {}
+    for j in journals:
+        try:
+            r = _HTTP.get("https://api.openalex.org/sources",
+                          params={"search": j, "per-page": 1})
+            r.raise_for_status()
+            res = (r.json() or {}).get("results") or []
+            if not res:
+                continue
+            s0 = res[0]
+            name = s0.get("display_name") or ""
+            if difflib.SequenceMatcher(None, j.lower(), name.lower()).ratio() >= 0.6:
+                out[j] = (s0.get("id") or "").rsplit("/", 1)[-1]   # S…id
+        except httpx.HTTPError:
+            continue
+        time.sleep(0.3)
+    return out
+
+
 def fetch_journal_articles(sub: dict, lookback_hours: int) -> list[dict]:
     journals = [j.strip() for j in (sub["journals"] or "").split(",") if j.strip()]
     if not journals:
@@ -119,31 +141,38 @@ def fetch_journal_articles(sub: dict, lookback_hours: int) -> list[dict]:
     date_from = datetime.now(timezone.utc).timestamp() - lookback_hours * 3600
     date_str = datetime.fromtimestamp(date_from, timezone.utc).strftime("%Y-%m-%d")
     kws = [k.strip() for k in (sub["keywords"] or "").split(",") if k.strip()]
+    src_ids = resolve_source_ids(journals)
+    if not src_ids:
+        return []
+    id_pipe = "|".join(src_ids.values())
+    filt = f"primary_location.source.id:{id_pipe},from_publication_date:{date_str}"
+    params = {"filter": filt, "sort": "publication_date:desc", "per-page": 50}
+    if kws:
+        params["filter"] += ",title_and_abstract.search:" + "|".join(kws)
+    try:
+        r = _HTTP.get(_OPENALEX_API, params=params)
+        r.raise_for_status()
+    except httpx.HTTPError:
+        return []
+    id2name = {v: k for k, v in src_ids.items()}
     out = []
-    for j in journals:
-        params = {"filter": f"primary_location.source.display_name.search:{j},from_publication_date:{date_str}",
-                  "sort": "publication_date:desc", "per-page": 50}
-        if kws:
-            params["search"] = " OR ".join(kws)
-        try:
-            r = _HTTP.get(_OPENALEX_API, params=params)
-            r.raise_for_status()
-        except httpx.HTTPError:
-            continue          # 单刊失败不影响其余（last_error 由 patrol 记录）
-        for w in (r.json() or {}).get("results", []):
-            loc = w.get("best_oa_location") or w.get("primary_location") or {}
-            doi = (w.get("doi") or "").replace("https://doi.org/", "")
-            out.append({
-                "title": (w.get("display_name") or "").strip(),
-                "authors": ", ".join(a.get("author", {}).get("display_name", "")
-                                     for a in (w.get("authorships") or [])[:12]),
-                "abstract": _oa_abstract(w.get("abstract_inverted_index")),
-                "doi": doi,
-                "arxiv_id": ((w.get("ids") or {}).get("arxiv") or "").rsplit("/", 1)[-1],
-                "pdf_url": loc.get("pdf_url") or "",
-                "venue": (w.get("primary_location", {}).get("source") or {}).get("display_name") or j,
-                "published": (w.get("publication_date") or "")[:10],
-            })
+    for w in (r.json() or {}).get("results", []):
+        loc = w.get("best_oa_location") or w.get("primary_location") or {}
+        src = (w.get("primary_location") or {}).get("source") or {}
+        sid = (src.get("id") or "").rsplit("/", 1)[-1]
+        doi = (w.get("doi") or "").replace("https://doi.org/", "")
+        out.append({
+            "title": (w.get("display_name") or "").strip(),
+            "authors": ", ".join(a.get("author", {}).get("display_name", "")
+                                 for a in (w.get("authorships") or [])[:12]),
+            "abstract": _oa_abstract(w.get("abstract_inverted_index")),
+            "doi": doi,
+            "arxiv_id": ((w.get("ids") or {}).get("arxiv") or "").rsplit("/", 1)[-1],
+            "pdf_url": loc.get("pdf_url") or "",
+            "venue": src.get("display_name") or id2name.get(sid) or "",
+            "published": (w.get("publication_date") or "")[:10],
+            "cited_by": w.get("cited_by_count") or 0,
+        })
         time.sleep(1)         # 礼貌延迟
     seen, dedup = set(), []
     for x in out:
@@ -152,6 +181,20 @@ def fetch_journal_articles(sub: dict, lookback_hours: int) -> list[dict]:
         seen.add(x["title"].lower())
         dedup.append(x)
     return dedup
+
+
+def fetch_cited_by(item: dict) -> int | None:
+    """缺被引数时按 DOI 查 S2（顺带拿摘要）；无 DOI 返回 None。"""
+    if not item.get("doi"):
+        return None
+    try:
+        r = _HTTP.get("https://api.semanticscholar.org/graph/v1/paper/DOI:" + item["doi"],
+                      params={"fields": "citationCount"})
+        if r.status_code == 200:
+            return (r.json() or {}).get("citationCount")
+    except httpx.HTTPError:
+        pass
+    return None
 
 
 # ---------------- 去重 ----------------
@@ -321,23 +364,36 @@ def patrol(sub: dict, is_admin: bool = True, email_fn=None) -> dict:
                 continue
             new_rows.append(it)
 
+    # 分区/被引/摘要富化全部在写事务外（get_journal_rank 内部自带写锁——
+    # 嵌套在 with db.write() 里 = 非重入锁自死锁，v1.7.0 的 P0 老坑）
+    rank_cache: dict = {}
     for it in new_rows:
         it["abstract"] = enrich_abstract(it) or it.get("abstract") or ""
         it["code_url"] = extract_code_url(it["abstract"])
+        if it.get("cited_by") is None:
+            it["cited_by"] = fetch_cited_by(it)
+        venue = (it.get("venue") or "").strip()
+        if venue and venue.lower() != "arxiv" and venue not in rank_cache:
+            r = journal.get_journal_rank(venue)
+            rank_cache[venue] = (json.dumps(
+                {k: r.get(k) for k in ("cas", "jcr", "impact_factor")}, ensure_ascii=False)
+                if r.get("found") else None)
 
     inserted = []
     with db.write() as c:
         for it in new_rows:
+            rank_json = rank_cache.get((it.get("venue") or "").strip())
             iid = _sid("ti")
             try:
                 c.execute(
                     "INSERT INTO tracker_items(id, sub_id, user_id, title, authors, abstract, "
-                    "zh_summary, doi, arxiv_id, pdf_url, code_url, venue, published, tier, is_fallback, status) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'new')",
+                    "zh_summary, doi, arxiv_id, pdf_url, code_url, venue, published, tier, is_fallback, "
+                    "rank, cited_by, status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'new')",
                     (iid, sub["id"], user_id, it["title"], it.get("authors") or "", it.get("abstract") or "",
                      None, it.get("doi") or None, it.get("arxiv_id") or None, it.get("pdf_url") or None,
                      it.get("code_url") or None, it.get("venue") or None, it.get("published") or None,
-                     it["tier"], 1 if it.get("is_fallback") else 0))
+                     it["tier"], 1 if it.get("is_fallback") else 0, rank_json,
+                     it.get("cited_by") if it.get("cited_by") is not None else None))
                 inserted.append({**it, "id": iid})
             except Exception:  # noqa: BLE001 —— 唯一性冲突等单条失败跳过
                 continue

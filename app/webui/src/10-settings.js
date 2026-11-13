@@ -156,11 +156,13 @@ function auditActionName(a) { return AUDIT_ACT[a] || a; }
 async function renderAdminZone() {
   const el = $('#page-admin');
   if (!el) return;
-  const [users, pool, audit] = await Promise.all([
+  const [users, pool, audit, smtp] = await Promise.all([
     api('/api/admin/users'),
     api('/api/admin/pool').catch(() => ({enabled: false})),
     api('/api/admin/audit?limit=50').catch(() => ({rows: []})),
+    api('/api/tracker/smtp').catch(() => ({configured: false})),
   ]);
+  state._smtpReady = !!smtp.configured;
   const list = users.users || [];
   const memberN = list.filter(u => u.role !== 'admin' && u.disabled !== 2).length;
   const adminN = list.filter(u => u.role === 'admin').length;
@@ -190,6 +192,31 @@ async function renderAdminZone() {
       <div class="adm-stat"><span class="muted">磁盘</span><b>${fmtGB(diskN).toFixed(1)}</b><span class="muted">GB 已用</span></div>
       <div class="adm-stat"><span class="muted">本月花费</span><b>¥${costN.toFixed(2)}</b><span class="muted">LLM 调用估算</span></div>
     </div>
+
+    <div class="set-card">
+      <div class="set-head">${icon('inbox')} 邮件发送（文献追踪日报的全局发件邮箱）
+        <span class="badge ${state._smtpReady ? 'ok' : 'dim'}" style="margin-left:8px">${state._smtpReady ? '已配置' : '未配置'}</span>
+        <button class="btn small" style="margin-left:auto" onclick="admSmtpToggle()">${state._smtpOpen ? '收起' : '配置'}</button></div>
+      ${state._smtpOpen ? `
+      <div style="display:grid;gap:8px;padding:4px 14px 12px">
+        <div style="display:flex;gap:8px">
+          <label class="tk-fld" style="flex:1">SMTP 主机
+            <input id="smtp-host" value="${esc(state._smtpHost || '')}" placeholder="smtp.qq.com"></label>
+          <label class="tk-fld" style="width:120px">端口
+            <input id="smtp-port" value="${esc(String(state._smtpPort || 465))}"></label>
+          <label class="tk-fld" style="flex:1.2">发件邮箱
+            <input id="smtp-sender" value="${esc(state._smtpSender || '')}" placeholder="xxx@qq.com"></label>
+          <label class="tk-fld" style="flex:1">授权码（留空=不改）
+            <input id="smtp-pass" type="password" placeholder="${state._smtpReady ? '已保存' : 'SMTP 授权码'}"></label>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn primary" onclick="admSaveSmtp(this)">保存配置</button>
+          <label class="tk-inline" style="margin-left:auto">测试发到
+            <input id="smtp-test-to" placeholder="收件邮箱" style="width:200px"></label>
+          <button class="btn" onclick="admTestSmtp(this)">发送测试</button>
+        </div>
+        <div class="muted" style="font-size: var(--fs-xs)">QQ/163 等邮箱需先开启 SMTP 并生成「授权码」（不是登录密码）；465=SSL，587=STARTTLS。配置一次全站共用——成员在文献追踪订阅里只填收件邮箱。</div>
+      </div>` : ''}</div>
 
     <div class="set-card">
       <div class="set-head">${icon('user')} 成员管理
@@ -569,3 +596,40 @@ state._libPage = 1; state._libPageSize = 25;                // 文库表格真�
 state.libLevel = 1;                                         // 管理页层级: 1=库列表 2=库内
 state.libView = 'card';                                     // 库列表视图: card | list
 state._libQTimer = 0;
+
+
+/* ---- 管理后台：邮件发送（全局发件 SMTP） ---- */
+window.admSmtpToggle = async () => {
+  state._smtpOpen = !state._smtpOpen;
+  if (state._smtpOpen && !state._smtpLoaded) {
+    try {
+      const cfg = await api('/api/tracker/smtp');
+      state._smtpHost = cfg.host || ''; state._smtpPort = cfg.port || 465; state._smtpSender = cfg.sender || '';
+      state._smtpLoaded = true;
+    } catch {}
+  }
+  renderAdminZone();
+};
+window.admSaveSmtp = async btn => {
+  await withBusy(btn, async () => {
+    const host = $('#smtp-host')?.value || '', sender = $('#smtp-sender')?.value || '';
+    if (!host || !sender.includes('@')) { toast('SMTP 主机与发件邮箱必填'); return; }
+    state._smtpHost = host; state._smtpPort = $('#smtp-port')?.value || 465; state._smtpSender = sender;
+    await api('/api/tracker/smtp', {method: 'PUT', body: JSON.stringify({
+      host, port: parseInt(state._smtpPort, 10) || 465, sender,
+      password: $('#smtp-pass')?.value || '', sender_name: 'paper-system'})});
+    state._smtpReady = true;
+    toast('SMTP 配置已保存');
+    renderAdminZone();
+  }, '保存失败');
+};
+window.admTestSmtp = async btn => {
+  const to = $('#smtp-test-to')?.value || '';
+  if (!to.includes('@')) { toast('先填测试收件邮箱'); return; }
+  await withBusy(btn, async () => {
+    try {
+      await api('/api/tracker/smtp/test', {method: 'POST', body: JSON.stringify({to})});
+      toast(`测试邮件已发到 ${to}——收到即配置成功`, 5000);
+    } catch (e) { toast(friendlyError(e, '发送失败——检查主机/端口/授权码')); }
+  }, '发送中…');
+};
