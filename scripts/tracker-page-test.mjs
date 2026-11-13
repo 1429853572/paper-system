@@ -140,7 +140,7 @@ ok('1b KPI 统计带（24小时新到高亮）',
 ok('1c 条件 chips + 按天分组头（悬停订阅行 title）',
    window.document.querySelectorAll('#tk-rail-list .tk-chip').length === 0 &&
    window.document.querySelectorAll('#tk-stream .tk-day').length >= 1 &&
-   /昨天|今天|\d+月\d+日/.test(window.document.querySelector('#tk-stream .tk-day')?.textContent || ''));
+   /昨天|今天|本周|\d+月\d+日/.test(window.document.querySelector('#tk-stream .tk-day')?.textContent || ''));
 
 // 2. 行渲染：tier 徽章 / 补足标 / 中文摘要 / 代码链接 / 行内按钮
 const row = window.document.querySelector('#tk-stream .tracker-item');

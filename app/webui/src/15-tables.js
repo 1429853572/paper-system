@@ -89,7 +89,7 @@ async function loadTables() {
         <b class="muted" style="font-weight:400;cursor:pointer" onclick="tbPaperF('')" title="查看全部">✕</b></span>` : ''}
       ${chips}
       <input id="tb-q" placeholder="搜表题/论文…" value="${esc(q)}" style="width:180px"
-             onkeydown="if(event.key==='Enter'){state._tbQ=this.value;state._tbPage=1;state._tbSel=new Set();loadTables()}">
+             onkeydown="if(event.key==='Enter'){tbSearch(this.value)}">
       <span style="margin-left:auto"></span>
       <button class="btn small" onclick="tbHarvestOpen()">${icon('plus')} 收表</button>
       <button class="btn small primary" onclick="tbTidyBatch(this, false)" title="把当前筛选里的待整理表批量入队（LLM 整理）">${icon('bolt')} 整理待办${working ? '（进行中…）' : ''}</button>
@@ -99,7 +99,7 @@ async function loadTables() {
       <button class="btn small primary" onclick="tbTidySel(this)">整理选中</button>
       <button class="btn small" onclick="tbBatchReview(this,'kept')">标记保留</button>
       <button class="btn small danger" onclick="tbBatchReview(this,'deleted')">剔除</button>
-      <button class="btn small" onclick="tbExport([...(state._tbSel||new Set())], this)">导出选中</button>
+      <button class="btn small" onclick="tbExportSel(this)">导出选中</button>
       <button class="btn small" onclick="tbCkClear()">取消选择</button></div>` : ''}
     ${working ? `<div class="empty-note" style="margin-bottom:8px">${icon('clock')} 批量整理进行中（${working} 张在队列/处理）——完成会自动刷新；预算用尽时剩余保持待整理，可再点「整理待办」续跑</div>` : ''}
     ${c.mismatch ? `<div class="empty-note" style="margin-bottom:8px;color:var(--err)">${c.mismatch} 张需人工复核（模型输出与原表不一致）——点卡片「对照」人工修整后保存即转为已整理</div>` : ''}`;
@@ -119,7 +119,7 @@ async function loadTables() {
     <div class="tk-day"><span>${esc(g.title || '(无标题)')}</span><span class="tk-day-n">${g.items.length} 张</span><i></i></div>
     <div class="tb-wall">${g.items.map(it => tbCardHtml(it, sel, review)).join('')}</div>`).join('')
     + (d.total > page * 60 ? `<div style="text-align:center;padding:10px">
-      <button class="btn small" onclick="state._tbPage=(state._tbPage||1)+1;loadTables()">加载更多（${d.total - page * 60} 张未显示）</button></div>` : '')
+      <button class="btn small" onclick="tbLoadMore()">加载更多（${d.total - page * 60} 张未显示）</button></div>` : '')
     || `<div class="empty-state"><p class="t">还没有表格</p>
        <p>点「收表」从已解析论文批量收割表格（一键全部已解析论文）；或先在文库上传并解析 PDF</p></div>`;
 }
@@ -299,6 +299,9 @@ async function tbExport(ids, btn) {
   }
 }
 window.tbExport = tbExport;
+window.tbExportSel = btn => tbExport([...(state._tbSel || new Set())], btn);   // 内联 onclick 取不到模块 state
+window.tbLoadMore = () => { state._tbPage = (state._tbPage || 1) + 1; loadTables(); };
+window.tbSearch = v => { state._tbQ = v; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
 
 /* ---------- 对照编辑弹层（左原图 · 右可编辑网格） ---------- */
 let _tbCompareTab = 'ai';
