@@ -6136,12 +6136,26 @@ if (!new URLSearchParams(location.search).has('debug')) {
     </div>
     <div id="discuss-msgs" style="max-height:60vh;overflow-y:auto;padding:8px 12px"></div>
     <div style="display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--border)">
-      <input id="discuss-input" placeholder="写一条讨论…" style="flex:1;min-width:0"
-             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDiscuss()}">
+      <input id="discuss-input" placeholder="写一条讨论…" style="flex:1;min-width:0">
       <button class="btn small primary" id="discuss-send">发送</button>
     </div>`;
 
   let curPaper = null;
+  let _replyTo = null, _replyAuthor = '';
+
+  const emptyHint = '<p class="muted" style="padding:8px;font-size: var(--fs-sm)">还没有讨论——写第一条</p>';
+
+  const msgHtml = (m, pid) => `
+    <div class="discuss-msg" data-mid="${m.id}">
+      <div style="display:flex;align-items:center;gap:6px">
+        <b style="font-size: var(--fs-xs)">${esc(m.username || m.author_id)}</b>
+        <span class="muted" style="font-size: var(--fs-xs)">${relTime(m.created_at)}</span>
+        <button class="btn small hover-only" style="padding:0 4px" title="回复"
+                onclick="replyDiscuss('${m.id}','${esc((m.username || '').slice(0, 20))}')">${icon('chat', 12)}</button>
+        ${m.author_id === state.me?.id ? `<button class="btn small hover-only" style="padding:0 4px" onclick="delDiscuss('${pid}','${m.id}')" title="删除">${icon('trash', 12)}</button>` : ''}
+      </div>
+      <div style="font-size: var(--fs-sm);margin-top:2px;white-space:pre-wrap">${m.reply_to ? `<span class="muted" style="font-size: var(--fs-xs)">↳ 回复 @${m.reply_author || '…'}：</span>` : ''}${esc(m.content)}</div>
+    </div>`;
 
   async function load() {
     if (!curPaper) return;
@@ -6149,28 +6163,45 @@ if (!new URLSearchParams(location.search).has('debug')) {
       const d = await api(`/api/papers/${curPaper}/discuss`);
       const el = $('#discuss-msgs');
       if (!el) return;
-      el.innerHTML = (d.messages || []).map(m => `
-        <div class="discuss-msg" data-mid="${m.id}">
-          <div style="display:flex;align-items:center;gap:6px">
-            <b style="font-size: var(--fs-xs)">${esc(m.username || m.author_id)}</b>
-            <span class="muted" style="font-size: var(--fs-xs)">${relTime(m.created_at)}</span>
-            <button class="btn small hover-only" style="padding:0 4px" title="回复"
-                    onclick="replyDiscuss('${m.id}','${esc((m.username || '').slice(0, 20))}')">${icon('chat', 12)}</button>
-            ${m.author_id === state.me?.id ? `<button class="btn small hover-only" style="padding:0 4px" onclick="delDiscuss('${curPaper}','${m.id}')" title="删除">${icon('trash', 12)}</button>` : ''}
-          </div>
-          <div style="font-size: var(--fs-sm);margin-top:2px;white-space:pre-wrap">${m.reply_to ? `<span class="muted" style="font-size: var(--fs-xs)">↳ 回复 @${m.reply_author || '…'}：</span>` : ''}${esc(m.content)}</div>
-        </div>`).join('') || '<p class="muted" style="padding:8px;font-size: var(--fs-sm)">还没有讨论——写第一条</p>';
+      el.innerHTML = (d.messages || []).map(m => msgHtml(m, curPaper)).join('') || emptyHint;
       el.scrollTop = el.scrollHeight;
     } catch (e) { /* 静默 */ }
   }
+  window.delDiscuss = async (pid, mid) => {
+    try {
+      await api(`/api/papers/${pid}/discuss/${mid}`, {method: 'DELETE'});
+      toast('已删除');
+    } catch (e) { return toast(friendlyError(e, '删除失败')); }
+    // 删除后立即重拉（此前要关开面板才能看到变化）
+    if (pid === curPaper && !panel.hidden) load();
+  };
+  window.replyDiscuss = (mid, author) => {
+    _replyTo = mid; _replyAuthor = author;
+    const inp = document.querySelector('#discuss-input');
+    if (inp) { inp.value = `@${author} `; inp.focus(); }
+    const rep = document.querySelector('#discuss-reply-indicator');
+    if (rep) { rep.textContent = `回复 @${author}`; rep.hidden = false; }
+  };
+
+  const doSend = async () => {
+    const inp = $('#discuss-input');
+    const content = (inp?.value || '').trim();
+    if (!content || !curPaper) return;
+    inp.value = '';
+    const body = {content};
+    if (_replyTo) { body.reply_to = _replyTo; _replyTo = null; _replyAuthor = ''; repInd.hidden = true; }
+    try {
+      await api(`/api/papers/${curPaper}/discuss`, {method: 'POST', body: JSON.stringify(body)});
+      await load();
+    } catch (e) { toast(friendlyError(e, '发送失败')); }
+  };
 
   btn.addEventListener('click', () => {
+    // 没选中论文时不打开：讨论区是 per-paper 的，空面板只剩一个输入框（发送也静默无效）
+    if (panel.hidden && !state.current?.id) { toast('讨论区属于单篇论文——先在左侧选择一篇论文', 3000); return; }
     panel.hidden = !panel.hidden;
     if (!panel.hidden) {
       curPaper = state.current?.id || null;
-      panel.style.position = 'fixed';
-      panel.style.right = '12px';
-      panel.style.top = '38px';
       panel.style.zIndex = '70';
       panel.style.width = '360px';
       panel.style.maxWidth = '94vw';
@@ -6178,7 +6209,10 @@ if (!new URLSearchParams(location.search).has('debug')) {
       panel.style.border = '1px solid var(--border)';
       panel.style.borderRadius = 'var(--r-lg)';
       panel.style.boxShadow = '0 12px 36px rgba(0,0,0,.18)';
-      if (curPaper) load();
+      anchorPop(panel, btn);          // 锚到按钮下方（并清 left——tool-pop 样式表的 left:8px 不清会钉死左上角）
+      const el = $('#discuss-msgs');
+      if (el) { el.innerHTML = emptyHint; }   // 先给空态，加载完替换——面板不再只剩输入框
+      load();
     }
   });
   $('#discuss-close')?.addEventListener('click', () => panel.hidden = true);
@@ -6194,32 +6228,12 @@ if (!new URLSearchParams(location.search).has('debug')) {
   repInd.style.cssText = 'padding:4px 12px;font-size:var(--fs-xs);color:var(--primary);display:flex;align-items:center;gap:6px';
   panel.insertBefore(repInd, panel.querySelector('#discuss-msgs')?.nextSibling);
 
-  $('#discuss-send')?.addEventListener('click', async () => {
-    const inp = $('#discuss-input');
-    const content = (inp?.value || '').trim();
-    if (!content || !curPaper) return;
-    inp.value = '';
-    const body = {content};
-    if (_replyTo) { body.reply_to = _replyTo; _replyTo = null; _replyAuthor = ''; repInd.hidden = true; }
-    try {
-      await api(`/api/papers/${curPaper}/discuss`, {method: 'POST', body: JSON.stringify(body)});
-      await load();
-    } catch (e) { toast(friendlyError(e, '发送失败')); }
+  $('#discuss-send')?.addEventListener('click', doSend);
+  // Enter 发送（此前 onkeydown 调用的 sendDiscuss() 不存在——Enter 发送是死的）
+  $('#discuss-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
   });
 })();
-
-let _replyTo = null, _replyAuthor = '';
-window.replyDiscuss = (mid, author) => {
-  _replyTo = mid; _replyAuthor = author;
-  const inp = document.querySelector('#discuss-input');
-  if (inp) { inp.value = `@${author} `; inp.focus(); }
-  const rep = document.querySelector('#discuss-reply-indicator');
-  if (rep) { rep.textContent = `回复 @${author}`; rep.hidden = false; }
-};
-window.delDiscuss = async (pid, mid) => {
-  await api(`/api/papers/${pid}/discuss/${mid}`, {method: 'DELETE'});
-  toast('已删除');
-};
 /* ===== 13-cmd.js —— 命令面板与快捷键 =====
    由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
    请勿直接改 app/webui/viewer.js（构建产物）。 */
