@@ -66,8 +66,8 @@ window.fetch = async (url, opts = {}) => {
   }
   if (u === '/api/tables/sources') {
     return { ok: true, status: 200, json: async () => ({ sources: [
-      { paper_id: 'p1', title: 'Paper A', n_tables: 5, in_bench: 2 },
-      { paper_id: 'p3', title: 'Paper C', n_tables: 3, in_bench: 0 }] }) };
+      { paper_id: 'p1', title: 'Paper A', n_tables: 5, in_bench: 2, libs: ['默认文献库'] },
+      { paper_id: 'p3', title: 'Paper C', n_tables: 3, in_bench: 0, libs: ['测试库'] }], libs: ['默认文献库', '测试库'] }) };
   }
   if (u === '/api/tables/harvest') { harvestCalls.push(JSON.parse(opts.body || '{}')); return { ok: true, status: 200, json: async () => ({ papers: 1, found: 3, inserted: 3, skipped: 0, job_id: 7 }) }; }
   if (u === '/api/tables/tidy-batch') { tidyCalls.push(JSON.parse(opts.body || '{}')); return { ok: true, status: 200, json: async () => ({ ok: true, job_id: 9, count: 2 }) }; }
@@ -173,9 +173,11 @@ ok('7 批量剔除（batch-review 调用）',
 await window.tbHarvestOpen();
 await sleep(300);
 const srcItems = window.document.querySelectorAll('.tb-src-item');
-ok('8 收表弹层（来源清单 + 已收徽章）', srcItems.length === 2 &&
-   srcItems[0].textContent.includes('已收 2'));
-window.document.querySelector('.tb-src-item:nth-child(2) input').checked = true;
+ok('8 收表弹层（只看未收 → 仅 Paper C 可见）', srcItems.length === 1 &&
+   srcItems[0].textContent.includes('Paper C') &&
+   !!window.document.querySelector('#tb-src-q') &&
+   window.document.querySelectorAll('#tb-src-lib option').length === 3, `n=${srcItems.length}`);
+window.document.querySelector('.tb-src-item input').checked = true;
 harvestCalls = [];
 await window.tbHarvestGo(window.document.querySelector('.ui-pop.tb-harvest-pop .btn.primary'), false);
 await sleep(300);

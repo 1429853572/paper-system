@@ -221,32 +221,62 @@ window.tbHarvestOpen = async () => {
   try { d = await api('/api/tables/sources'); }
   catch (e) { pop.querySelector('div:last-child').textContent = friendlyError(e); return; }
   const srcs = d.sources || [];
+  window._tbSrcs = srcs;
   pop.innerHTML = `
   <div class="ui-pop-title">${icon('plus')} 从文库收表
     <button class="btn small" style="margin-left:auto" onclick="_tbHarvestClose()">${icon('close')}</button></div>
-  <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-    <span class="muted">共 ${srcs.length} 篇已解析论文 · ${srcs.reduce((n, s) => n + s.n_tables, 0)} 张表</span>
+  <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input id="tb-src-q" placeholder="搜论文标题…" style="width:150px" oninput="tbSrcRender()">
+    <select id="tb-src-lib" style="width:auto;max-width:150px" onchange="tbSrcRender()">
+      <option value="">全部文献库</option>
+      ${(d.libs || []).map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}
+    </select>
+    <label class="tk-inline"><input type="checkbox" id="tb-src-new" checked onchange="tbSrcRender()"> 只看未收</label>
     <span style="margin-left:auto"></span>
-    <button class="btn small" onclick="tbHarvestCkAll(this)">全选</button>
+    <button class="btn small" onclick="tbHarvestCkAll(this)">全选可见</button>
     <label class="tk-inline"><input type="checkbox" id="tb-auto" checked> 收完自动整理</label>
   </div>
-  <div class="tb-src-list">
-    ${srcs.map(s => `
+  <div class="tb-src-list" id="tb-src-list"></div>
+  <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+    <button class="btn primary" onclick="tbHarvestGo(this, false)">收割所选</button>
+    <button class="btn" onclick="tbHarvestGo(this, true)">收割全部未收</button>
+    <span class="muted" id="tb-src-stat" style="margin-left:auto;font-size:var(--fs-xs)"></span>
+  </div>`;
+  tbSrcRender();
+};
+window.tbSrcRender = () => {
+  const q = ($('#tb-src-q')?.value || '').toLowerCase();
+  const lib = $('#tb-src-lib')?.value || '';
+  const onlyNew = $('#tb-src-new')?.checked !== false;
+  const srcs = (window._tbSrcs || []).filter(s =>
+    (!q || (s.title || '').toLowerCase().includes(q))
+    && (!lib || (s.libs || []).includes(lib))
+    && (!onlyNew || !s.in_bench));
+  // 按首库分组（无库 → 未归类）
+  const groups = new Map();
+  for (const s of srcs) {
+    const g = (s.libs && s.libs[0]) || '未归类';
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(s);
+  }
+  const box = $('#tb-src-list');
+  if (!box) return;
+  box.innerHTML = [...groups.entries()].map(([g, items]) => `
+    <div class="tb-rail-sec">${esc(g)} <span class="muted">${items.length} 篇</span></div>
+    ${items.map(s => `
     <label class="tb-src-item"><input type="checkbox" class="tb-src-ck" value="${s.paper_id}" ${s.in_bench ? 'disabled' : ''}>
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.title)}">${esc(s.title)}</span>
       ${s.in_bench ? `<span class="badge dim">已收 ${s.in_bench}</span>` : ''}
-      <span class="muted">${s.n_tables} 张</span></label>`).join('') || '<div class="empty-note">没有已解析论文</div>'}
-  </div>
-  <div style="display:flex;gap:8px;margin-top:10px">
-    <button class="btn primary" onclick="tbHarvestGo(this, false)">收割所选</button>
-    <button class="btn" onclick="tbHarvestGo(this, true)" ${srcs.every(s => s.in_bench) ? 'disabled' : ''}>收割全部未收</button>
-  </div>`;
+      <span class="muted">${s.n_tables} 张</span></label>`).join('')}`).join('')
+    || '<div class="empty-note" style="padding:12px">没有匹配的论文（试试切换库或取消「只看未收」）</div>';
+  const visible = srcs.filter(s => !s.in_bench);
+  $('#tb-src-stat').textContent = `可见 ${srcs.length} 篇（可收 ${visible.length}）`;
 };
 window.tbHarvestCkAll = btn => {
   const cks = [...document.querySelectorAll('.tb-src-ck:not(:disabled)')];
   const on = cks.some(c => !c.checked);
   cks.forEach(c => c.checked = on);
-};
+};  // 只影响当前筛选可见项（隐藏的已不在 DOM）
 window.tbHarvestGo = async (btn, all) => {
   await withBusy(btn, async () => {
     const ids = all ? [] : [...document.querySelectorAll('.tb-src-ck:checked')].map(c => c.value);
