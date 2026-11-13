@@ -118,11 +118,19 @@ await sleep(600);
 // 1. 页面注册与渲染
 window.switchPage('tracker');
 await sleep(400);
-ok('1 页面切换并渲染（标题+订阅卡+收件箱）',
+ok('1 页面切换并渲染（标题+订阅横卡+SMTP卡+收件箱）',
    window.document.querySelector('#page-tracker').style.display !== 'none' &&
    window.document.querySelector('#page-title').textContent === '文献追踪' &&
-   window.document.querySelectorAll('#tracker-subs .set-card').length >= 1 &&
+   window.document.querySelectorAll('#tracker-subs .tk-sub').length === 1 &&
+   window.document.querySelector('#tracker-subs .tk-sub').textContent.includes('3DGS 前沿') &&
+   window.document.querySelectorAll('#tracker-subs .set-card').length === 1 &&
    window.document.querySelectorAll('#tracker-inbox .tracker-item').length === 2);
+ok('1b 条件 chips（关键词/分类着色）',
+   window.document.querySelectorAll('#tracker-subs .tk-chip.kw').length === 1 &&
+   window.document.querySelectorAll('#tracker-subs .tk-chip.cat').length === 2);
+ok('1c 收件箱按天分组（分组头出现）',
+   window.document.querySelectorAll('#tracker-inbox .tk-day').length >= 1 &&
+   /昨天|今天|\d+月\d+日/.test(window.document.querySelector('#tracker-inbox .tk-day')?.textContent || ''));
 
 // 2. 行渲染：tier 徽章 / 补足标 / 中文摘要 / 代码链接 / 行内按钮
 const row = window.document.querySelector('#tracker-inbox .tracker-item');

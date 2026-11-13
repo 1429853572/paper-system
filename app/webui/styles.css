@@ -501,6 +501,34 @@ table.list th { color: var(--muted); font-weight: 500; }
 /* 放大只看表格：居中弹层，宽表横向滚动 + 表头吸附（覆盖 .ui-pop 基础 max-width:360px） */
 .ui-pop.md-tbl-pop { width: 1200px; max-width: 94vw; max-height: 82vh; overflow: auto; }
 .ui-pop.md-tbl-pop .md-tbl-box:hover .md-tbl-bar, .ui-pop.md-tbl-pop .md-tbl-bar { opacity: 1; }
+/* ---- 文献追踪 ---- */
+/* 订阅横卡：主信息（名称+条件 chips）在左，状态与操作在右 */
+.tk-sub { display: flex; gap: 14px; align-items: center; padding: 12px 16px; margin: 0 0 10px;
+          background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); }
+.tk-sub-main { flex: 1; min-width: 0; }
+.tk-sub-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tk-sub-head b { font-size: var(--fs-base); }
+.tk-sub-conds { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.tk-chip { padding: 1px 9px; border-radius: var(--r-pill); font-size: var(--fs-xs); border: 1px solid transparent; }
+.tk-chip.kw { background: var(--tint-primary); color: var(--primary); }
+.tk-chip.cat { background: var(--hover); color: var(--text-2); }
+.tk-chip.jr { background: #eef3f8; color: #2b5a8c; }
+.tk-chip.ex { background: transparent; color: var(--muted); border-color: var(--border); text-decoration: line-through; }
+.tk-sub-side { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex: none; }
+/* 日期分组头 */
+.tk-day { display: flex; gap: 10px; align-items: baseline; margin: 16px 0 10px; }
+.tk-day span:first-child { font-weight: 600; font-size: var(--fs-base); color: var(--primary); }
+.tk-day-n { color: var(--muted); font-size: var(--fs-xs); }
+.tk-day i { flex: 1; border-top: 1px solid var(--border); align-self: center; }
+/* 表单弹层与通用行 */
+.ui-pop.tk-form-pop { width: 680px; max-width: 94vw; }
+.tk-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tk-fld { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); color: var(--text-2); }
+.tk-fld input, .tk-fld select { width: 100%; }
+.tk-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+.tk-inline { display: flex; gap: 6px; align-items: center; white-space: nowrap; font-size: var(--fs-sm); color: var(--text-2); }
+@media (max-width: 720px) { .tk-grid2 { grid-template-columns: 1fr; } .tk-sub { flex-direction: column; align-items: stretch; } .tk-sub-side { flex-direction: row; align-items: center; justify-content: space-between; } }
+
 .tbl-wrap { overflow-x: auto; margin: 10px 0; border: 1px solid var(--border);
              border-radius: var(--r-md); background: var(--panel); max-width: 100%; }
 .tbl-md { border-collapse: collapse; font-size: var(--fs-sm); width: 100%; min-width: max-content; }
