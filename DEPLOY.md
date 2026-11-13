@@ -134,3 +134,46 @@ curl -s http://127.0.0.1:8001/api/acquire/status
 - 知网首次检索会遇滑块验证码：在有头模式人工过一次，Cookie 持久化到 `~/.cnki_acquire_state.json` 后复用
 - `install.sh` 会自动装 `papersystem-acquire` systemd 单元（宿主无 playwright 时跳过并提示）
 - 容器通过 `host.docker.internal:8802` 访问（compose 已配 extra_hosts 与 token 注入）
+
+
+## 名字访问：局域网 `papers.local` + 外网域名 HTTPS
+
+### 局域网（已配好）
+
+- `http://papers.local`（80 口，免端口号）与 `http://<内网IP>:7861` 同后端
+- 原理：宿主 `avahi-alias.service`（`avahi-publish -a -R papers.local 192.168.106.191`）
+  发布 mDNS 记录 + Caddy 站点地址 `http://papers.local, :7861`（compose 绑宿主 80 口）
+- 支持 mDNS 的设备（macOS/iOS/Windows10+/多数 Linux）直接用名字；部分安卓不支持 mDNS，用 IP:7861
+
+### 外网 HTTPS（域名方案，一次性 10 分钟）
+
+架构：`浏览器 → https://paper.<你的域名>（VPS Caddy 自动 HTTPS）→ 127.0.0.1:7862（现有 frp 隧道）→ 本机 caddy:7861 → app`
+本机 frpc/frps **零改动**（7862 裸 TCP 透传，Host 头原样到达）。
+
+1. **买域名**：腾讯云/阿里云任选（.top/.xyz 首年 ¥10~30，.com ¥60+/年），实名后加一条解析：
+   `A | paper | 42.51.34.112 | TTL 默认`。以下假设得到 `paper.example.com`，替换成你的。
+2. **VPS 装 Caddy**（42.51.34.112，Debian/Ubuntu；先 `ss -tlnp | grep -E ':80 |:443 '` 确认空闲）：
+   ```bash
+   apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+   apt update && apt install -y caddy    # systemd 自动拉起 + 开机自启
+   ```
+3. **VPS Caddyfile** `/etc/caddy/Caddyfile`（替换域名；`flush_interval -1` 是 SSE 流式必需）：
+   ```caddyfile
+   paper.example.com {
+       reverse_proxy 127.0.0.1:7862 {
+           flush_interval -1
+       }
+   }
+   ```
+   `systemctl reload caddy`。DNS 生效后 Caddy 自动申请 Let's Encrypt 证书（需 80/443 公网可达）。
+4. **验证**（手机关 WiFi 走流量）：
+   `https://paper.example.com` → 登录页且地址栏带锁；
+   `nslookup paper.example.com` → 42.51.34.112。
+5. **可选加固**（推荐：外网只能走 HTTPS，裸端口仅本机 Caddy 可碰）：
+   ```bash
+   iptables -A INPUT -p tcp --dport 7862 -s 127.0.0.1 -j ACCEPT
+   iptables -A INPUT -p tcp --dport 7862 -j DROP
+   apt install -y iptables-persistent && netfilter-persistent save   # 重启后仍生效
+   ```
