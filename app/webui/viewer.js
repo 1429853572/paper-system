@@ -7677,16 +7677,28 @@ window.tbGridSave = async (tid, btn) => {
 /* ---------- 上传解析 → 自动收表 → 自动整理（一条链） ---------- */
 let _tbUpPop = null;
 window._tbUpClose = () => { _tbUpPop?.close(); _tbUpPop = null; };
-window.tbUploadOpen = () => {
+window.tbUploadOpen = async () => {
   _tbUpPop?.close();
   const {pop, close} = openPop('tb-upload-pop');
   _tbUpPop = {pop, close};
+  // 目标库选项（与追踪页「收进目标库」同源：默认 + 本人各库 + 共享库）
+  let collOpts = '<option value="">默认文献库</option>';
+  try {
+    const d = await api('/api/collections');
+    const opts = [...(d.collections || []), ...((d.shared_libs || []).map(x => ({...x, name: x.name + '（共享）'})))];
+    collOpts = `<option value="">默认文献库</option>` + opts.map(o =>
+      `<option value="${o.id}" ${o.id === (state._tbUpColl || '') ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+  } catch { /* 下拉退化默认 */ }
   pop.innerHTML = `
   <div class="ui-pop-title">${icon('upload')} 上传 PDF → 解析 → 自动收表
     <button class="btn small" style="margin-left:auto" onclick="_tbUpClose()">${icon('close')}</button></div>
   <div style="margin-top:10px" class="tb-up-body">
-    <label class="tk-fld">选择文件（可多选 PDF/图片/Office）
-      <input id="tb-up-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx"></label>
+    <div class="tk-grid2">
+      <label class="tk-fld">放入文献库
+        <select id="tb-up-coll" onchange="state._tbUpColl=this.value">${collOpts}</select></label>
+      <label class="tk-fld">选择文件（可多选 PDF/图片/Office）
+        <input id="tb-up-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx"></label>
+    </div>
     <label class="tk-inline" style="margin-top:8px">
       <input type="checkbox" id="tb-up-tidy" checked> 解析完成后自动收表并 AI 整理（走月预算闸）</label>
     <div id="tb-up-status" style="margin-top:10px;font-size:var(--fs-sm)"></div>
@@ -7710,7 +7722,9 @@ window.tbUploadGo = async btn => {
       try {
         const fd = new FormData();
         fd.append('files', f);
-        const r = await fetch('/api/papers/upload?visibility=shared', {method: 'POST', body: fd});
+        const cid = $('#tb-up-coll')?.value || '';
+        const r = await fetch(`/api/papers/upload?visibility=shared${cid ? `&collection_id=${cid}` : ''}`,
+                              {method: 'POST', body: fd});
         const d = await r.json();
         const res = (d.results || [])[0] || {};
         if (res.paper_id && res.status !== 'rejected') ids.push(res.paper_id);
@@ -7749,7 +7763,8 @@ async function tbTrackParse(ids, autoTidy) {
     const h = await api('/api/tables/harvest', {method: 'POST', body: JSON.stringify({paper_ids: okIds, auto_tidy: !!autoTidy})});
     st.insertAdjacentHTML('beforeend',
       `<div style="margin-top:6px;color:var(--primary)">收表完成：${h.found} 张（新收 ${h.inserted}）${h.job_id ? '，整理已排队' : ''}</div>`);
-    toast(`新一批就绪：收进 ${h.inserted} 张表${autoTidy ? '，AI 整理进行中' : ''}`, 5000);
+    const collName = $('#tb-up-coll')?.selectedOptions?.[0]?.text || '默认文献库';
+    toast(`新一批就绪：论文已入「${collName}」，收进 ${h.inserted} 张表${autoTidy ? '，AI 整理进行中' : ''}`, 5000);
     setTimeout(() => { window._tbUpClose?.(); loadTables(); }, 1200);
   } catch (e) {
     st.insertAdjacentHTML('beforeend', `<div style="color:var(--err)">收表失败：${esc(friendlyError(e))}——稍后用「收表」手动圈这批论文</div>`);

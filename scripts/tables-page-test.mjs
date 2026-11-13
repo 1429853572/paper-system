@@ -185,7 +185,9 @@ ok('9 收表调用（勾选篇 + auto_tidy）',
 // 6b. 上传链入口
 await window.tbUploadOpen();
 await sleep(200);
-ok('6b 上传弹层（文件+自动整理勾选）',
+ok('6b 上传弹层（目标库下拉+文件+自动整理勾选）',
+   !!window.document.querySelector('#tb-up-coll') &&
+   window.document.querySelector('#tb-up-coll').options.length >= 1 &&
    !!window.document.querySelector('#tb-up-files') &&
    window.document.querySelector('#tb-up-tidy')?.checked === true);
 window._tbUpClose();
