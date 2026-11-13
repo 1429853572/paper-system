@@ -594,15 +594,22 @@ async def set_parse_filter(request: Request):
 
 
 @app.post("/api/papers/{paper_id}/read")
-def mark_paper_read(paper_id: str, u: dict = Depends(require)):
+async def mark_paper_read(paper_id: str, request: Request, u: dict = Depends(require)):
     """阅读追踪：openPaper 时 fire-and-forget 调用（per-user per-paper）。"""
+    try:
+        body = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
+    except Exception:  # noqa: BLE001
+        body = {}
+    page = body.get("page") if isinstance(body, dict) else None
+    bid = body.get("bid") if isinstance(body, dict) else None
     with db.write() as c:
         c.execute(
-            "INSERT INTO paper_reads(user_id, paper_id, status, last_opened_at) "
-            "VALUES(?, ?, 'read', datetime('now')) "
+            "INSERT INTO paper_reads(user_id, paper_id, status, last_opened_at, last_page, last_bid) "
+            "VALUES(?, ?, 'read', datetime('now'), ?, ?) "
             "ON CONFLICT(user_id, paper_id) DO UPDATE SET "
-            "last_opened_at=datetime('now')",
-            (u["id"], paper_id),
+            "last_opened_at=datetime('now'), last_page=COALESCE(?, last_page), "
+            "last_bid=COALESCE(?, last_bid)",
+            (u["id"], paper_id, page, bid, page, bid),
         )
     return {"ok": True}
 
@@ -612,7 +619,7 @@ def get_discussion(paper_id: str, u: dict = Depends(require)):
     """论文讨论区消息（团队共享；_require_visible 控可见）。"""
     _require_visible(u, _get_paper_or_404(paper_id, u))
     rows = db.all(
-        "SELECT m.id, m.author_id, m.content, m.created_at, u.username "
+        "SELECT m.id, m.author_id, m.content, m.created_at, m.reply_to, u.username "
         "FROM paper_discussion_messages m "
         "LEFT JOIN users u ON u.id=m.author_id "
         "WHERE m.paper_id=? ORDER BY m.created_at", (paper_id,))
@@ -627,11 +634,12 @@ async def add_discussion_message(paper_id: str, request: Request):
     if not content:
         raise HTTPException(400, "内容为空")
     _require_visible(u, _get_paper_or_404(paper_id, u))
+    reply_to = body.get("reply_to") or None
     mid = "d" + secrets.token_hex(8)
     with db.write() as c:
         c.execute(
-            "INSERT INTO paper_discussion_messages(id, paper_id, author_id, content) "
-            "VALUES(?,?,?,?)", (mid, paper_id, u["id"], content[:5000]))
+            "INSERT INTO paper_discussion_messages(id, paper_id, author_id, content, reply_to) "
+            "VALUES(?,?,?,?,?)", (mid, paper_id, u["id"], content[:5000], reply_to))
     emit_data("discussion")
     return {"ok": True, "id": mid}
 

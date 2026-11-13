@@ -17,7 +17,7 @@ import re as _re
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 # 重建表时会连带删除其上的索引（DROP TABLE 会删索引）——这些表重建后需逐个恢复。
 # 索引定义与 _SCHEMA / _init_schema 中的保持一致。
@@ -414,8 +414,11 @@ class Database:
                 self._migrate(c, row["version"])
             self._ensure_columns(c)   # 幂等兜底：任何形态的库都补齐列（新装/老库/中途版本）
             # 依赖兜底列的索引放在列补齐之后建（任意形态旧库都不炸）
+            self._add_col(c, "paper_reads", "last_page", "INTEGER")
+            self._add_col(c, "paper_reads", "last_bid", "TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS idx_paper_reads_user "
                       "ON paper_reads(user_id)")
+            self._add_col(c, "paper_discussion_messages", "reply_to", "TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS idx_discussion_paper "
                       "ON paper_discussion_messages(paper_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_pc_coll "

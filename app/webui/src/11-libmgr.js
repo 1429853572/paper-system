@@ -153,7 +153,7 @@ async function renderCollectionsPage(preset = null) {
     return `<tr class="lib-paper-row" onclick="viewPaper('${p.id}')">
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${selBucket(scopeKey).has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
-          ${esc(p.title || p.id)}
+          ${p.read_status ? '' : '<span class="unread-dot" title="未读" style="margin-right:4px"></span>'}${esc(p.title || p.id)}
           ${ownerNames.length && scopeIds.length > 1 ? `<span class="muted" style="font-size: var(--fs-xs)"> · ${esc(ownerNames.join(' · '))}</span>` : ''}
           ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" style="font-size: var(--fs-xs)" title="上传者"> · ${esc(p.owner_name)}</span>` : ''}</td>
         <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>

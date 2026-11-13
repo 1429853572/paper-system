@@ -24,7 +24,11 @@ function dprFor(cssW, cssH, budget) {
 
 async function openPaper(id) {
     // 阅读追踪：fire-and-forget（不 await 不 toast——零打扰）
-    api(`/api/papers/${id}/read`, {method: 'POST'}).catch(() => {});
+    try {
+      const pos = JSON.parse(localStorage.getItem('ps-pos-' + id) || 'null');
+      api(`/api/papers/${id}/read`, {method: 'POST',
+        body: JSON.stringify({page: pos?.page || null, bid: pos?.bid || null})}).catch(() => {});
+    } catch { api(`/api/papers/${id}/read`, {method: 'POST'}).catch(() => {}); }
 
   const PAGE = 40;
   const dp = $('#discover-pop');

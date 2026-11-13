@@ -814,9 +814,11 @@ if (!new URLSearchParams(location.search).has('debug')) {
           <div style="display:flex;align-items:center;gap:6px">
             <b style="font-size: var(--fs-xs)">${esc(m.username || m.author_id)}</b>
             <span class="muted" style="font-size: var(--fs-xs)">${relTime(m.created_at)}</span>
+            <button class="btn small hover-only" style="padding:0 4px" title="回复"
+                    onclick="replyDiscuss('${m.id}','${esc((m.username || '').slice(0, 20))}')">${icon('chat', 12)}</button>
             ${m.author_id === state.me?.id ? `<button class="btn small hover-only" style="padding:0 4px" onclick="delDiscuss('${curPaper}','${m.id}')" title="删除">${icon('trash', 12)}</button>` : ''}
           </div>
-          <div style="font-size: var(--fs-sm);margin-top:2px;white-space:pre-wrap">${esc(m.content)}</div>
+          <div style="font-size: var(--fs-sm);margin-top:2px;white-space:pre-wrap">${m.reply_to ? `<span class="muted" style="font-size: var(--fs-xs)">↳ 回复 @${m.reply_author || '…'}：</span>` : ''}${esc(m.content)}</div>
         </div>`).join('') || '<p class="muted" style="padding:8px;font-size: var(--fs-sm)">还没有讨论——写第一条</p>';
       el.scrollTop = el.scrollHeight;
     } catch (e) { /* 静默 */ }
@@ -845,18 +847,35 @@ if (!new URLSearchParams(location.search).has('debug')) {
     if (!panel.hidden && !panel.contains(e.target) && e.target !== btn && !btn.contains(e.target)) panel.hidden = true;
   });
 
+  // 回复指示条
+  const repInd = document.createElement('div');
+  repInd.id = 'discuss-reply-indicator';
+  repInd.hidden = true;
+  repInd.style.cssText = 'padding:4px 12px;font-size:var(--fs-xs);color:var(--primary);display:flex;align-items:center;gap:6px';
+  panel.insertBefore(repInd, panel.querySelector('#discuss-msgs')?.nextSibling);
+
   $('#discuss-send')?.addEventListener('click', async () => {
     const inp = $('#discuss-input');
     const content = (inp?.value || '').trim();
     if (!content || !curPaper) return;
     inp.value = '';
+    const body = {content};
+    if (_replyTo) { body.reply_to = _replyTo; _replyTo = null; _replyAuthor = ''; repInd.hidden = true; }
     try {
-      await api(`/api/papers/${curPaper}/discuss`, {method: 'POST', body: JSON.stringify({content})});
+      await api(`/api/papers/${curPaper}/discuss`, {method: 'POST', body: JSON.stringify(body)});
       await load();
     } catch (e) { toast(friendlyError(e, '发送失败')); }
   });
 })();
 
+let _replyTo = null, _replyAuthor = '';
+window.replyDiscuss = (mid, author) => {
+  _replyTo = mid; _replyAuthor = author;
+  const inp = document.querySelector('#discuss-input');
+  if (inp) { inp.value = `@${author} `; inp.focus(); }
+  const rep = document.querySelector('#discuss-reply-indicator');
+  if (rep) { rep.textContent = `回复 @${author}`; rep.hidden = false; }
+};
 window.delDiscuss = async (pid, mid) => {
   await api(`/api/papers/${pid}/discuss/${mid}`, {method: 'DELETE'});
   toast('已删除');
