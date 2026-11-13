@@ -316,7 +316,7 @@ function openQuotaDialog(uid) {
       ${f('pp', 'max_pages', '单篇页数', '500', 1)}
       ${f('dk', 'max_disk_gb', '磁盘上限 GB', '20', 1)}
       ${f('bg', 'monthly_budget_cny', '月预算 ¥', '不限', 0)}
-      ${f('ts', 'tracker_subs', '订阅数上限', '10', 1)}
+      ${f('ts', 'tracker_subs', '订阅数上限', '5', 1)}
     </div>
     <div class="muted" style="font-size: var(--fs-xs);margin-top:6px">预算超限会在调用前拦截；解析篇数/页数/磁盘按上限校验。</div>
     <div class="ui-pop-foot">
