@@ -3410,21 +3410,26 @@ def tracker_items(request: Request, status: str = "new", tier: str = "", sub_id:
         tier = ""
     page = max(1, page)
     page_size = max(1, min(100, page_size))
-    where, args = ["user_id=?"], [u["id"]]
+    where, args = ["t.user_id=?"], [u["id"]]
     if status != "all":
-        where.append("status=?")
+        where.append("t.status=?")
         args.append(status)
     if tier:
-        where.append("tier=?")
+        where.append("t.tier=?")
         args.append(tier)
     if sub_id:
-        where.append("sub_id=?")
+        where.append("t.sub_id=?")
         args.append(sub_id)
     wsql = " AND ".join(where)
-    total = db.one(f"SELECT COUNT(*) n FROM tracker_items WHERE {wsql}", tuple(args))["n"]
-    rows = db.all(f"SELECT * FROM tracker_items WHERE {wsql} "
-                  "ORDER BY CASE tier WHEN 'core' THEN 0 WHEN 'proxy' THEN 1 ELSE 2 END, "
-                  "published DESC, created_at DESC LIMIT ? OFFSET ?",
+    total = db.one(f"SELECT COUNT(*) n FROM tracker_items t WHERE {wsql}", tuple(args))["n"]
+    rows = db.all(f"SELECT t.*, "
+                  "(SELECT p.parse_status FROM papers p WHERE p.id = t.paper_id) AS parse_status, "
+                  "(SELECT j.status || ':' || j.progress_done || '/' || j.progress_total FROM jobs j "
+                  " WHERE j.paper_id = t.paper_id AND j.job_type='parse' "
+                  " ORDER BY created_at DESC LIMIT 1) AS parse_job "
+                  f"FROM tracker_items t WHERE {wsql.replace('__T__', 't')} "
+                  "ORDER BY CASE t.tier WHEN 'core' THEN 0 WHEN 'proxy' THEN 1 ELSE 2 END, "
+                  "t.published DESC, t.created_at DESC LIMIT ? OFFSET ?",
                   (*args, page_size, (page - 1) * page_size))
     return {"items": [dict(r) for r in rows], "total": total, "page": page,
             "page_size": page_size, "counts": _sub_counts(u["id"])}
@@ -3455,15 +3460,18 @@ async def tracker_item_accept(iid: str, request: Request):
     except HTTPException as e:
         raise HTTPException(400, f"PDF 链接不可用：{e.detail}")
     from core.urlimport import import_paper_from_url
+    # 下载限时 30s：arXiv 慢时不再让前端「处理中」干等一分半；
+    # 超时退 MinerU 代抓路径，入库照样完成
     r = import_paper_from_url(
         u["id"], url, visibility="shared", collection_id=cid,
         title=it["title"],
         meta={"authors": it["authors"], "year": (it["published"] or "")[:4],
               "journal": it["venue"], "doi": it["doi"], "abstract": it["abstract"]},
-        is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"]))
+        is_admin=u["role"] == "admin", overrides=_quota_overrides(u["id"]),
+        download_timeout=30)
     with db.write() as c:
-        c.execute("UPDATE tracker_items SET status='accepted', paper_id=?, accepted_at=datetime('now') WHERE id=?",
-                  (r["paper_id"], iid))
+        c.execute("UPDATE tracker_items SET status='accepted', paper_id=?, accepted_to=?, accepted_at=datetime('now') WHERE id=?",
+                  (r["paper_id"], cid, iid))
     emit_data("tracker")
     return {"ok": True, "paper_id": r["paper_id"], "status": r["status"], "duplicate": r["status"] == "duplicate"}
 

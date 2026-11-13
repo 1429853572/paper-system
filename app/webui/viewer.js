@@ -2679,6 +2679,7 @@ const refreshOnData = throttle(entity => {
   }).catch(() => {});
 }, 3000);
 const refreshSidebarOnParse = throttle(() => loadCollections().catch(() => {}), 3000);
+const refreshTrackerOnParse = throttle(() => { window.renderTrackerPage?.(); }, 4000);   // 追踪页阶段条跟随解析进度
 
 /* ---------------- 找相关（Semantic Scholar 三模式排卡，llm-for-zotero /discover_related 式） ----
    推荐/参考文献/引证三页签；勾选一键导入（DOI/标题自动查重，无公开 PDF 不可导）。 */
@@ -2823,6 +2824,9 @@ async function watchJobs() {
       if (ev.status === 'running') state.parseProg[ev.paper_id] = {done: ev.done || 0, total: ev.total || 0};
       else if (['done', 'failed', 'canceled'].includes(ev.status)) delete state.parseProg[ev.paper_id];
       if (JSON.stringify(state.parseProg[ev.paper_id] || null) !== prev) renderPapers();
+      // 追踪页：收进条目的解析阶段条跟随进度（节流）
+      const tpg = $('#page-tracker');
+      if (tpg && tpg.style.display !== 'none' && typeof refreshTrackerOnParse === 'function') refreshTrackerOnParse();
     }
     // 导读任务完成 → 重拉并重绘气泡（此前只在生成页轮询，切走或超时就看不到结果）
     // 讨论区新消息 → 同论文讨论面板实时追加（refreshOnData 已在 else-if 处理全量刷新）
@@ -6617,6 +6621,32 @@ window.showOnboardingOnce = showOnboardingOnce;
 const ARXIV_CAT_PRESETS = ['cs.CV', 'eess.IV', 'cs.GR', 'cs.LG', 'cs.AI', 'cs.CL', 'physics.optics', 'math.AP'];
 const _TIER_LABEL = {core: '核心', proxy: '相关', eco: '生态'};
 
+/* 已收进条目的实时阶段条：收进 → 入库 → 解析 → 可阅读（SSE 推进自动更新） */
+function trackerStageStrip(it) {
+  const coll = collNameOf(it.accepted_to);
+  const ps = it.parse_status, pj = (it.parse_job || '').split(':')[0], prog = (it.parse_job || '').split(':')[1] || '';
+  const stages = `<span class="badge ok" title="收进：${esc(coll)}">已收进 · ${esc(coll)}</span>`;
+  const openBtn = `<button class="btn small" onclick="openPaper('${it.paper_id}')" title="打开这篇论文">打开</button>`;
+  const retryBtn = `<button class="btn small" onclick="trackerRetryParse('${it.paper_id}', this)">重试解析</button>`;
+  if (ps === 'parsed')
+    return `${stages}<span class="badge ok">已解析 ✓</span>${openBtn}`;
+  if (ps === 'failed')
+    return `${stages}<span class="badge err">解析失败</span>${retryBtn}`;
+  if (ps === 'parsing' || pj === 'running') {
+    const [done, total] = prog.split('/');
+    return `${stages}<span class="badge run">解析中 ${done && total ? `${done}/${total}` : ''}</span>${openBtn}`;
+  }
+  if (pj === 'queued' || ps === 'pending' || !pj)
+    return `${stages}<span class="badge run">解析排队中</span>`;
+  return `${stages}<span class="badge run">入库中…</span>`;
+}
+window.trackerRetryParse = async (pid, btn) => {
+  await withBusy(btn, async () => {
+    await api(`/api/papers/${pid}/parse`, {method: 'POST'});
+    toast('解析已重新排队');
+  }, '重试失败');
+};
+
 function trackerTierBadge(tier) {
   const [label, cls] = {core: ['核心', 'ok'], proxy: ['相关', 'run'], eco: ['生态', 'dim']}[tier] || [tier, 'dim'];
   return `<span class="badge ${cls}" title="${label}层">${label}</span>`;
@@ -6779,6 +6809,11 @@ async function loadTracker() {
       <button class="btn" onclick="trackerLoadMore()">加载更多（${inbox.total - (state._trackerPage || 1) * 30} 条未显示）</button></div>` : ''}`;
 }
 function selMapSize() { return (state._trackerSel || new Set()).size; }
+function collNameOf(cid) {
+  if (!cid) return '默认文献库';
+  const opt = [...document.querySelectorAll('#tk-target-coll option')].find(o => o.value === cid);
+  return opt?.text || '文献库';
+}
 window.trackerStatus = v => { state._trackerStatus = v; state._trackerSub = ''; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); loadTracker(); };
 window.trackerSubF = id => { state._trackerSub = id; state._trackerStatus = 'new'; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); loadTracker(); };
 window.trackerTierF = v => { state._trackerTier = v === state._trackerTier ? '' : v; state._trackerPage = 1; loadTracker(); };
@@ -6813,7 +6848,8 @@ function trackerItemHtml(it, selMap, st) {
     ? `<button class="btn small primary" onclick="trackerAccept('${it.id}', this)">收进文献库</button>
        ${!it.zh_summary ? `<button class="btn small" onclick="trackerEnrich('${it.id}', this)" title="LLM 生成中文总结与标题翻译">AI 摘要</button>` : ''}
        <button class="btn small danger hover-only" onclick="trackerDismiss('${it.id}', this)">忽略</button>`
-    : `<span class="badge dim">${it.status === 'accepted' ? '已收进' : '已忽略'}</span>`;
+    : it.status === 'accepted' ? trackerStageStrip(it)
+      : '<span class="badge dim">已忽略</span>';
   // 总结优先，无总结显示原摘要；超过 3 行折叠，点击展开/收起
   const bodyText = it.zh_summary || it.abstract || '';
   const isZh = !!it.zh_summary;
@@ -6861,11 +6897,20 @@ window.trackerCk = async (ck) => {
 };
 
 async function trackerAccept(id, btn) {
+  const cid = state._trackerCollId || '';
+  const opt = [...(document.querySelectorAll('#tk-target-coll option') || [])].find(o => o.value === cid);
+  const collName = opt?.text || '默认文献库';
+  let done = false;
+  const timer = setTimeout(() => {
+    if (!done) toast(`PDF 还在下载（慢源最多 30 秒）——完成后会出现在「${collName}」，解析自动排队`, 6000);
+  }, 8000);
   await withBusy(btn, async () => {
-    const cid = state._trackerCollId || '';
     const r = await api(`/api/tracker/items/${id}/accept`, {method: 'POST', body: JSON.stringify({collection_id: cid})});
-    toast(r.duplicate ? '已在文献库中（已自动挂库）' : '已收进文献库——解析已排队，进度见「任务」页', 4500);
+    done = true; clearTimeout(timer);
+    toast(r.duplicate ? `已在「${collName}」中（已自动挂库）` : `已收进「${collName}」——解析已排队，进度见「任务」页`, 5000);
+    loadTracker();
   }, '收进失败');
+  done = true; clearTimeout(timer);
 }
 window.trackerAccept = trackerAccept;
 

@@ -59,7 +59,8 @@ def fetch_remote(url: str, timeout: int = 90) -> tuple[bytes | None, str]:
 def import_paper_from_url(user_id: int, url: str, *, visibility: str = "shared",
                           collection_id: str | None = None, priority: str = "interactive",
                           title: str = "", meta: dict | None = None,
-                          is_admin: bool = True, overrides: dict | None = None) -> dict:
+                          is_admin: bool = True, overrides: dict | None = None,
+                          download_timeout: int = 90) -> dict:
     """URL → 建论文 → （能落盘则落盘）→ 解析入队。返回 {paper_id, status, stored, pages}。
 
     meta 非空时把已知元数据一并写入（S2/CrossRef 已给全，MinerU 标题提取会再校准）。
@@ -70,7 +71,7 @@ def import_paper_from_url(user_id: int, url: str, *, visibility: str = "shared",
     if exist:
         return {"paper_id": exist["id"], "status": "duplicate", "stored": False, "pages": 0}
 
-    data, _ct = fetch_remote(url)
+    data, _ct = fetch_remote(url, timeout=download_timeout)
     stored = False
     pages, size = 0, 0
     fname = url.split("?")[0].rsplit("/", 1)[-1] or "document.pdf"
