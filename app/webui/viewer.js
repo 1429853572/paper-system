@@ -1034,8 +1034,11 @@ async function openPaper(id) {
   // 懒加载双语：不再 openPaper 预拉全文对照（en+zh 300-500KB/次切论文，90% 场景只看 PDF/原文）。
   // translated 标志由 refreshJobState（jobstate 接口）带回；真正切到双语/中文视图时才拉（见 switchView 钩子）。
   state.pairs = [];           // 清上一篇残留，防串台
+  state._biLoadedFor = null; state._biLoading = null;   // 懒拉哨兵同篇解绑（renderContentView 的自愈按当前篇重新拉）
   refreshJobState().then(() => {
-    if (state.translatedComplete && state.view === 'orig'
+    // state.view 可能残留上一篇的子视图（bilingual/zh/meta…），不能用它判断「无偏好」——
+    // 用持久化的 rpane.readingView；残留视图的渲染由 renderContentView 的自愈兜底
+    if (state.translatedComplete && (state.view ?? 'orig') === 'orig'
         && (state.rpane.readingView || 'orig') === 'orig') {
       // 有完整译文且用户无特定子视图偏好 → 默认进双语（懒拉在 switchView 内触发）
       switchView('read', 'bilingual');
@@ -1324,9 +1327,11 @@ $$('.view-tabs [data-v]').forEach(b => b.onclick = () => switchView(b.dataset.v)
 async function loadBilingual(id, render = true) {
   try {
     const d = await api(`/api/papers/${id}/bilingual`);
+    if (state.current?.id !== id) return;   // 已切到别的论文：丢弃迟到响应（防串页，同 assets 拉取守卫）
     state.pairs = d.pairs; state.versions = d.versions;
+    state._biLoadedFor = id;
     if (render) renderContentView();
-  } catch { state.pairs = []; }
+  } catch { if (state.current?.id === id) state.pairs = []; }
 }
 /* 译文版本切换控件已移除（历史版本保留在库，如需回溯可导出对照 MD） */
 /* 解析/翻译控制按钮：按论文实时 jobstate 切换 */
@@ -1559,6 +1564,19 @@ function bindBlkClicks(el) {
   });
 }
 
+/* 双语/中文视图的数据自愈：懒拉数据未就绪（openPaper 恢复子视图等路径不经过 switchView 的
+   懒拉钩子）时不再渲染空壳白屏——显示加载态并触发拉取，拉完自动重渲。 */
+function ensurePairsOrLoading(el) {
+  if ((state.pairs || []).length || state._biLoadedFor === state.current?.id) return true;   // 就绪（或确认拉过且为空）
+  el.innerHTML = `<p class="muted" style="text-align:center;padding:40px">${icon('clock', 12)} 加载对照内容…</p>`;
+  if (state._biLoading !== state.current.id) {
+    state._biLoading = state.current.id;
+    loadBilingual(state.current.id, true)
+      .finally(() => { if (state._biLoading === state.current.id) state._biLoading = null; });
+  }
+  return false;
+}
+
 function renderContentView() {
   const el = $('#content-view');
   if (!state.current) { el.innerHTML = '<div class="empty-state"><p class="t">选择左侧论文开始阅读</p><p>打开一篇后，这里显示正文、图表与引用</p></div>'; return; }
@@ -1585,6 +1603,7 @@ function renderContentView() {
       </div>`;
       return;
     }
+    if (!ensurePairsOrLoading(el)) return;
     const rows = state.pairs.flatMap(pairRowsHtml);
     el.innerHTML = '<div class="pairs">' + rows.join('') + '</div>' +
       (state._biOffset < (state._biTotal || 0) ? loadHintHtml(`${state._biOffset}/${state._biTotal}`) : '');
@@ -1597,6 +1616,7 @@ function renderContentView() {
       </div>`;
       return;
     }
+    if (!ensurePairsOrLoading(el)) return;
     const zh = state.pairs.filter(p => p.zh);
     el.innerHTML = zh.length ? zh.map(p =>
       `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${esc(p.zh)}</div>`).join('')

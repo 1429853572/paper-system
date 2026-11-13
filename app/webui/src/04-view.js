@@ -117,6 +117,19 @@ function bindBlkClicks(el) {
   });
 }
 
+/* 双语/中文视图的数据自愈：懒拉数据未就绪（openPaper 恢复子视图等路径不经过 switchView 的
+   懒拉钩子）时不再渲染空壳白屏——显示加载态并触发拉取，拉完自动重渲。 */
+function ensurePairsOrLoading(el) {
+  if ((state.pairs || []).length || state._biLoadedFor === state.current?.id) return true;   // 就绪（或确认拉过且为空）
+  el.innerHTML = `<p class="muted" style="text-align:center;padding:40px">${icon('clock', 12)} 加载对照内容…</p>`;
+  if (state._biLoading !== state.current.id) {
+    state._biLoading = state.current.id;
+    loadBilingual(state.current.id, true)
+      .finally(() => { if (state._biLoading === state.current.id) state._biLoading = null; });
+  }
+  return false;
+}
+
 function renderContentView() {
   const el = $('#content-view');
   if (!state.current) { el.innerHTML = '<div class="empty-state"><p class="t">选择左侧论文开始阅读</p><p>打开一篇后，这里显示正文、图表与引用</p></div>'; return; }
@@ -143,6 +156,7 @@ function renderContentView() {
       </div>`;
       return;
     }
+    if (!ensurePairsOrLoading(el)) return;
     const rows = state.pairs.flatMap(pairRowsHtml);
     el.innerHTML = '<div class="pairs">' + rows.join('') + '</div>' +
       (state._biOffset < (state._biTotal || 0) ? loadHintHtml(`${state._biOffset}/${state._biTotal}`) : '');
@@ -155,6 +169,7 @@ function renderContentView() {
       </div>`;
       return;
     }
+    if (!ensurePairsOrLoading(el)) return;
     const zh = state.pairs.filter(p => p.zh);
     el.innerHTML = zh.length ? zh.map(p =>
       `<div class="blk zh ${p.type === 'title' ? 'blk-title-zh' : ''}" data-bid="${p.block_id}" data-page="${p.page_index}" data-bbox='${esc(p.bbox ?? '')}' data-bbox-pages='${esc(p.bbox_pages ?? '')}'>${esc(p.zh)}</div>`).join('')
