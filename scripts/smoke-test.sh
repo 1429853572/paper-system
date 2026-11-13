@@ -118,6 +118,15 @@ if [[ -n "${PID1:-}" ]]; then
         CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/papers/$PID1$ep")
         [[ "$CODE" == 200 ]] && ok "GET /api/papers/{id}$ep" || bad "GET /api/papers/{id}$ep HTTP $CODE"
     done
+    # 阅读追踪：伪 id 必须 404（曾因直接 upsert 撞 FK → 500 噪音）
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" -X POST \
+        -H 'Content-Type: application/json' -d '{"page":1}' "$BASE/api/papers/pnonexistent000/read")
+    [[ "$CODE" == 404 ]] && ok "POST /read 伪 id → 404" || bad "POST /read 伪 id HTTP $CODE（应为 404）"
+    # 问答流式端点活着即可（500=线程池改造残留如 functools 漏 import；400=无 key/配额，属正常）
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" -X POST \
+        -H 'Content-Type: application/json' -d '{"question":"测试","paper_ids":["'"$PID1"'"]}' \
+        --max-time 20 "$BASE/api/chat/stream")
+    [[ "$CODE" != 500 ]] && ok "POST /api/chat/stream 非 500" || bad "POST /api/chat/stream HTTP 500（服务端崩溃）"
 fi
 FIRST_SYN=$(curl -s -b "$CJ2" "$BASE/api/syntheses" | python3 -c 'import json,sys
 try: d=json.load(sys.stdin)

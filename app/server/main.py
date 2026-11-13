@@ -603,6 +603,9 @@ async def mark_paper_read(paper_id: str, request: Request, u: dict = Depends(req
     page = body.get("page") if isinstance(body, dict) else None
     bid = body.get("bid") if isinstance(body, dict) else None
     with db.write() as c:
+        # 过期 id（另一标签页已删/列表未刷新）→ 干净 404，而非 FK 500 噪音
+        if not c.execute("SELECT 1 FROM papers WHERE id=?", (paper_id,)).fetchone():
+            raise HTTPException(404, "论文不存在")
         c.execute(
             "INSERT INTO paper_reads(user_id, paper_id, status, last_opened_at, last_page, last_bid) "
             "VALUES(?, ?, 'read', datetime('now'), ?, ?) "
@@ -3285,6 +3288,7 @@ async def chat_stream(request: Request):
         raise HTTPException(400, "question/paper_ids 必填")
 
     try:
+        import functools
         import anyio
         prepared = await anyio.to_thread.run_sync(
             functools.partial(qa.answer, u, question, paper_ids, mode))
