@@ -107,7 +107,7 @@ services:
     logging: *default-logging
     depends_on:
       - app
-    ports: ["7861:7861"]
+    ports: ["7861:7861", "80:80"]   # 80 = http://papers.local 局域网免端口访问
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

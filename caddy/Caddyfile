@@ -3,7 +3,8 @@
 	admin off   # 全局选项：不暴露 Caddy 管理端点（:2019）
 }
 
-:7861 {
+# 局域网名字访问 http://papers.local（80 口，免端口号）+ IP:7861 直连，同一后端
+http://papers.local, :7861 {
 	encode gzip
 	reverse_proxy app:8001 {
 		# SSE 流式进度/问答必需：禁用缓冲
