@@ -177,7 +177,12 @@ input:focus { outline: 2px solid var(--tint-primary-2); border-color: var(--prim
 .reader.rpane-collapsed .pane-right { display: none; }
 /* 内联 width 由 JS 设置（applyVsplit），这里必须用 !important 才能覆盖 */
 .reader.rpane-collapsed .pane-left { width: 100% !important; }
-.reader.rpane-collapsed .v-handle { display: none; }
+.reader.rpane-collapsed .v-handle { width: 10px; cursor: col-resize; position: relative; z-index: 5;
+            display: flex; align-items: center; justify-content: center; flex: none;
+            user-select: none; touch-action: none; }
+/* 特异性须高于下方基础 .v-handle::after（2px 竖线），否则 ⋯ 不显示 */
+.reader.rpane-collapsed .v-handle::after { content: '⋯'; font-size: 10px; color: var(--muted); letter-spacing: 1px;
+                   writing-mode: vertical-rl; pointer-events: none; }
 .rpane-restore { position: absolute; right: 0; top: 50%; transform: translateY(-50%); z-index: 30;
                  writing-mode: vertical-lr; background: var(--panel); border: 1px solid var(--border);
                  border-right: none; border-radius: var(--r-md) 0 0 var(--r-md); padding: 14px 5px;
