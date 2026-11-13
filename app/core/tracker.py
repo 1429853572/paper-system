@@ -361,6 +361,17 @@ def llm_enrich(user_id: int, item: dict) -> dict | None:
 def patrol(sub: dict, is_admin: bool = True, email_fn=None) -> dict:
     """跑一轮订阅。返回 {new, total, skipped_dup}。email_fn(sub, new_items) 由调用方注入。"""
     user_id = sub["user_id"]
+    # 运行互斥（CAS）：巡逻可长达分钟级，last_run_at 结束才写——手动+自动并发会双跑双插；
+    # 先占位（running 标记进 last_error 前缀会被覆盖，故用独立信号：占位时间戳）
+    with db.write() as c:
+        row = c.execute("SELECT last_run_at FROM tracker_subs WHERE id=?", (sub["id"],)).fetchone()
+        if row and row["last_run_at"] and row["last_run_at"].startswith("RUNNING:"):
+            started = row["last_run_at"][8:]
+            if (datetime.now(timezone.utc) - datetime.fromisoformat(started)).total_seconds() < 900:
+                return {"new": 0, "fetched": 0, "dup_library": 0, "dup_round": 0,
+                        "error": "该订阅正在巡逻中（另一轮未结束）"}
+        c.execute("UPDATE tracker_subs SET last_run_at=? WHERE id=?",
+                  ("RUNNING:" + _now(), sub["id"]))
     lookback = max(int(sub["frequency_hours"] or 24), 24) + 24   # 频率 + 24h 缓冲
     fresh: list[dict] = []
     error = ""
@@ -376,17 +387,26 @@ def patrol(sub: dict, is_admin: bool = True, email_fn=None) -> dict:
     fresh = merge_round(fresh)
 
     with db.read() as c:
-        known_arxiv = {r["arxiv_id"] for r in c.execute(
-            "SELECT arxiv_id FROM tracker_items WHERE sub_id=? AND arxiv_id IS NOT NULL",
-            (sub["id"],)).fetchall()}
+        known_arxiv, known_doi, known_title = set(), set(), set()
+        for r in c.execute(
+                "SELECT arxiv_id, doi, title FROM tracker_items WHERE sub_id=?",
+                (sub["id"],)).fetchall():
+            if r["arxiv_id"]:
+                known_arxiv.add(r["arxiv_id"])
+            if r["doi"]:
+                known_doi.add(r["doi"].lower())
+            if r["title"]:
+                known_title.add(re.sub(r"\s+", " ", r["title"].lower()))
         for it in fresh:
             it["tier"] = classify(it, sub)
         fill_fallback(fresh)
 
         new_rows, dup_lib, dup_round = [], 0, 0
         for it in fresh:
-            if it.get("arxiv_id") and it["arxiv_id"] in known_arxiv:
-                dup_round += 1
+            if ((it.get("arxiv_id") and it["arxiv_id"] in known_arxiv)
+                    or (it.get("doi") and it["doi"].lower() in known_doi)
+                    or re.sub(r"\s+", " ", (it.get("title") or "").lower()) in known_title):
+                dup_round += 1          # arXiv id / DOI / 标题三路任一命中即历史条目（期刊文无 arxiv id）
                 continue
             hit = library_hit(c, user_id, it)
             if hit:

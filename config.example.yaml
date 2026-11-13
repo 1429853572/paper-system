@@ -2,6 +2,7 @@
 # 复制为 config.yaml 使用；缺省时程序内建默认值与下面一致
 
 limits:
+  tracker_subs: 5        # 每成员文献追踪订阅数上限
   # ---- member 默认限额（admin 全豁免；管理页可按用户微调） ----
   max_file_mb: 100          # 单文件大小上限
   max_pages: 500            # PDF 页数上限

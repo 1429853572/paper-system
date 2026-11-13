@@ -565,6 +565,9 @@ table.list th { color: var(--muted); font-weight: 500; }
 @media (max-width: 900px) { .tk-wrap { flex-direction: column; } .tk-rail { width: 100%; max-height: none; }
   .tk-grid2 { grid-template-columns: 1fr; } .tk-kpis { grid-template-columns: repeat(2, 1fr); } }
 
+.tk-sug-item { padding: 7px 10px; border-radius: var(--r-sm); cursor: pointer; display: flex; gap: 8px; align-items: center; }
+.tk-sug-item:hover { background: var(--tint-primary); }
+
 /* ---- 表格工作台 ---- */
 .tb-wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-bottom: 12px; }
 .tb-card { display: flex; gap: 10px; padding: 10px; }

@@ -513,9 +513,22 @@ r1 = tb.harvest(9101, ["ptb1"])
 ok("收割：好表入、烂表跳", r1["inserted"] == 1 and r1["skipped"] == 1, str(r1))
 r2 = tb.harvest(9101, ["ptb1"])
 ok("收割幂等（二次 0 新增）", r2["inserted"] == 0, str(r2))
+# 越权回归：他人 private 论文（9102 名下 private）成员 9101 收不到；admin 全收
+with db.write() as c:
+    c.execute("INSERT INTO users(id, username, password_hash, role) VALUES(9102, 'tbtest2', 'x', 'member')")
+    c.execute("INSERT INTO papers(id, owner_id, visibility, file_hash, title, parse_status) "
+              "VALUES('ptb2', 9102, 'private', 'htb2', '他人私有论文', 'parsed')")
+    c.execute("INSERT INTO parse_runs(id, paper_id, tier, status) VALUES('runtb2', 'ptb2', 'standard', 'done')")
+    c.execute("INSERT INTO blocks(paper_id, parse_run_id, block_id, type, page_index, block_index, text) "
+              "VALUES('ptb2', 'runtb2', 'ptb2-b1', 'table', 0, 1, "
+              "'<table><tr><td>a</td><td>b</td></tr><tr><td>1</td><td>2</td></tr></table>')")
+rv = tb.harvest(9101, ["ptb1", "ptb2"], is_admin=False)
+ok("越权收割拦截（他人 private 收不到）", rv["inserted"] == 0, str(rv))
+rva = tb.harvest(9101, ["ptb1", "ptb2"], is_admin=True)
+ok("admin 可收（口径与列表一致）", rva["inserted"] >= 1, str(rva))
 st = tb.stats(9101)
-ok("stats 聚合（总量/按论文）", st["counts"]["total"] == 1 and len(st["by_paper"]) == 1
-   and st["by_paper"][0]["title"] == "表格测试论文", str(st))
+ok("stats 聚合（总量/按论文）", st["counts"]["total"] == 2 and len(st["by_paper"]) == 2
+   and st["by_paper"][0]["n"] == 1, str(st))
 
 # worker 批量：3 表 1 失败不拖垮 + 预算中断可续跑
 with db.write() as c:
@@ -558,11 +571,11 @@ ok("数值单元格 + 表头冻结", ws.cell(row=2, column=2).value == 25.1 and 
 
 with db.write() as c:
     c.execute("DELETE FROM table_extracts WHERE user_id=9101")
-    c.execute("DELETE FROM blocks WHERE paper_id='ptb1'")
-    c.execute("DELETE FROM parse_runs WHERE id='runtb'")
-    c.execute("DELETE FROM papers WHERE id='ptb1'")
+    c.execute("DELETE FROM blocks WHERE paper_id IN ('ptb1','ptb2')")
+    c.execute("DELETE FROM parse_runs WHERE id IN ('runtb','runtb2')")
+    c.execute("DELETE FROM papers WHERE id IN ('ptb1','ptb2')")
     c.execute("DELETE FROM jobs WHERE id=990001")
-    c.execute("DELETE FROM users WHERE id=9101")
+    c.execute("DELETE FROM users WHERE id IN (9101, 9102)")
 
 print(f"\n结果: {PASS} 通过, {FAIL} 失败")
 # 导入 server.main 会启动调度器线程（非 daemon）——进程退出被吊住，用 os._exit 硬退

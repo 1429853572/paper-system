@@ -300,7 +300,7 @@ async function renderAdminZone() {
   if (more) more.onclick = () => renderAdminZone();
 }
 
-/* 限额编辑弹窗：5 个数字字段（留空=默认），保存复用 saveQuota */
+/* 限额编辑弹窗：6 个数字字段（留空=默认），保存复用 saveQuota */
 function openQuotaDialog(uid) {
   const ov = (state._quotaRaw || {})[uid] || {};
   // suf = DOM 后缀（saveQuota 按后缀取值），key = 后端语义键（ov 里存的是语义键）
@@ -368,6 +368,7 @@ window.saveQuota = async uid => {
   num('pp', 'max_pages');
   num('dk', 'max_disk_gb');
   num('bg', 'monthly_budget_cny');
+  num('ts', 'tracker_subs');          // 订阅数上限（弹窗有字段、保存曾漏传——断链修复）
   try {
     await api(`/api/admin/users/${uid}/quota`, {method: 'PUT', body: JSON.stringify(ov)});
     toast('已保存限额'); renderAdminZone();

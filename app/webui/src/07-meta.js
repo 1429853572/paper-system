@@ -67,13 +67,13 @@ async function renderMeta() {
       <textarea id="m-notes" placeholder="记录阅读笔记…（自动保存）" style="min-height:70px">${esc(notes.notes || '')}</textarea></div>
     <div class="card"><h3>References (${refs.references.length}) <input id="ref-search" placeholder="搜索…" style="width:140px; font-size: var(--fs-sm); margin-left:8px; display:inline-block"></h3>
       <div class="ref-list" id="ref-list"></div></div>
-    <div class="card"><h3>${icon('folder')} 分库</h3>
+    <div class="card"><h3>${icon('folder')} 文献库</h3>
       <div id="m-collection-chips" class="chip-row"></div>
       <select id="m-collection-add" style="max-width:200px;font-size: var(--fs-sm)"></select></div>`;
 
   renderCiteCard();
 
-  // 分库多选 chips（多对多：一篇可挂 N 库；×移出，下拉加入）
+  // 文献库多选 chips（多对多：一篇可挂 N 库；×移出，下拉加入）
   const linked = paper.collection_ids || [];
   const chipRow = $('#m-collection-chips');
   chipRow.innerHTML = linked.length
@@ -82,7 +82,7 @@ async function renderMeta() {
         return `<span class="chip">${icon('folder', 12)} ${esc(c2?.name || cid)}
           <button class="hover-only" title="从此库移出" onclick="unlinkPaper('${pid}','${cid}')">${icon('close', 12)}</button></span>`;
       }).join('')
-    : '<span class="muted" style="font-size: var(--fs-sm)">未分库</span>';
+    : '<span class="muted" style="font-size: var(--fs-sm)">未归类</span>';
   const addSel = $('#m-collection-add');
   addSel.innerHTML = '<option value="">+ 加入库…</option>' + state.collections
     .filter(c2 => !linked.includes(c2.id))
@@ -127,8 +127,8 @@ async function renderMeta() {
 /* 元数据编辑：内联输入框，不弹 prompt 链（原来一次要弹 6 个框）。
    卷/期/页是引用格式需要的字段，一并在这里补。 */
 window.unlinkPaper = async (pid, cid) => {
-  if (!(await uiConfirm('从此库移出？（论文本体与译文不受影响；全部库移出后落「未分库」）',
-                        {title: '移出分库', danger: true}))) return;
+  if (!(await uiConfirm('从此库移出？（论文本体与译文不受影响；全部库移出后落「未归类」）',
+                        {title: '移出文献库', danger: true}))) return;
   await api(`/api/papers/${pid}/collections/${cid}`, {method: 'DELETE'});
   toast('已移出'); await refreshLib(); renderMeta();
 };

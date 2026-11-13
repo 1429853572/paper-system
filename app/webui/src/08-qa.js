@@ -529,7 +529,7 @@ function renderPickList(filter) {
     });
   }
   const orphan = papers.filter(p => !(p.collection_ids || []).length && match(p));
-  if (orphan.length) groups.push({id: '__orphan', name: '未分库', papers: orphan});
+  if (orphan.length) groups.push({id: '__orphan', name: '未文献库', papers: orphan});
   groups.forEach(g => g.papers.sort(sortFn));
   const visible = groups.filter(g => g.papers.length);
   const matched = visible.reduce((s, g) => s + g.papers.length, 0);

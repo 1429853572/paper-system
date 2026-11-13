@@ -111,6 +111,8 @@ bash scripts/setup-xinference.sh # 重载 embedding/rerank 模型
 | database is locked | 确认数据目录在本机文件系统（非 NFS）；busy_timeout 已内置 5s |
 | embedding 报错 | `curl localhost:9997/v1/models` 应列出 bge-m3 / bge-reranker-v2-m3；没有就跑 `bash scripts/setup-xinference.sh` |
 | 导出 PDF 失败 | `systemctl status papersystem-render`；存活 `curl localhost:8801/health`；鉴权 `curl -H "X-Render-Token: $(grep ^PAPERSYS_RENDER_TOKEN .env | cut -d= -f2)" -X POST localhost:8801/render -d '{\"html\":\"<p>t</p>\"}'` |
+| 追踪邮件未发 | 管理后台 →「邮件发送」配置全局 SMTP（QQ 邮箱需授权码非密码）；测试发送按钮验证；tracker_loop 每 30 分钟巡逻到期订阅 |
+| 表格批量整理卡住 | 任务中心看 table_tidy 批次；应用重启会自动把批内表回「待整理」重新入队 |
 | 翻译/问答 401 | 各用户设置页测试连接；公共池需 admin 开启 |
 | 阅读器 PDF 图表空白（图注在、图本体白/噪声条） | 原文内嵌 JPXDecode(JPEG2000) 图，pdf.js 解码器不完整 → 宿主 `python3 scripts/fix-jpx-images.py`（需 `pip install pymupdf`；先 `--dry-run` 看 scope）。脚本重编码为 JPEG 并做结构验证；已入库的 91 篇中 4 篇 206 张已修复（2026-11-13） |
 

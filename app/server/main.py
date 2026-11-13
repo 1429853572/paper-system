@@ -1640,6 +1640,7 @@ async def create_collection(request: Request):
     with db.write() as c:
         c.execute("INSERT INTO collections(id,name,owner_id,parent_id) VALUES(?,?,?,?)",
                   (cid, name, u["id"], parent))
+    emit_data("collections")
     return {"id": cid, "name": name, "parent_id": parent}
 
 
@@ -1655,6 +1656,7 @@ async def rename_collection(cid: str, request: Request):
         raise HTTPException(404, "文献库不存在")
     with db.write() as c:
         c.execute("UPDATE collections SET name=? WHERE id=?", (name, cid))
+    emit_data("collections")
     return {"ok": True}
 
 
@@ -1708,6 +1710,7 @@ async def patch_paper(paper_id: str, request: Request):
     if "visibility" in body:
         from core.retrieval import invalidate_vec_cache
         invalidate_vec_cache()
+    emit_data("papers")
     return {"ok": True}
 
 
@@ -1736,6 +1739,7 @@ def _link_change(u: dict, paper_ids: list[str], cid: str, link: bool) -> dict:
     if changed:
         from core.retrieval import invalidate_vec_cache
         invalidate_vec_cache()
+    emit_data("papers")
     return {"ok": True, "changed": changed}
 
 
@@ -2001,6 +2005,7 @@ async def set_paper_notes(paper_id: str, request: Request):
              body.get("tags", "")[:300], body.get("notes", "")[:5000],
              int(body.get("importance", 0)), body.get("tags", "")[:300], body.get("notes", "")[:5000]),
         )
+    emit_data("papers")
     return {"ok": True}
 
 
@@ -3265,6 +3270,7 @@ async def set_glossary(request: Request):
             (term, body.get("target", "keep_en"), body.get("value", ""), u["id"],
              body.get("target", "keep_en"), body.get("value", "")),
         )
+    emit_data("papers")
     return {"ok": True}
 
 
@@ -3273,6 +3279,7 @@ def del_glossary(term: str, request: Request):
     require(request)
     with db.write() as c:
         c.execute("DELETE FROM glossary WHERE term=?", (term,))
+    emit_data("papers")   # 术语表影响翻译——跨标签同步
     return {"ok": True}
 
 
@@ -3367,6 +3374,7 @@ async def tracker_sub_create(request: Request):
                   "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)",
                   (sid, u["id"], name or "未命名订阅", keywords, categories, exclude, journals,
                    freq, run_at or None, llm_auto, 1 if b.get("email_enabled") else 0, email_to))
+    emit_data("tracker")
     return {"id": sid}
 
 @app.put("/api/tracker/subs/{sid}")
@@ -3398,6 +3406,7 @@ async def tracker_sub_update(sid: str, request: Request):
                   (name, keywords, categories, exclude, journals, freq, run_at or None, llm_auto,
                    1 if b.get("email_enabled") else 0, email_to,
                    1 if b.get("enabled") else 0, sid))
+    emit_data("tracker")
     return {"ok": True}
 
 @app.delete("/api/tracker/subs/{sid}")
@@ -3559,6 +3568,7 @@ def tracker_item_enrich(iid: str, request: Request):
     with db.write() as c:
         c.execute("UPDATE tracker_items SET zh_summary=?, zh_title=? WHERE id=?",
                   (r["zh_summary"], r["zh_title"], iid))
+    emit_data("tracker")
     return {"ok": True, "zh_summary": r["zh_summary"], "zh_title": r["zh_title"]}
 
 @app.get("/api/tracker/smtp")
@@ -3677,7 +3687,7 @@ async def tables_harvest(request: Request):
     u = require(request)
     b = await request.json()
     ids = b.get("paper_ids") or []
-    r = tables_mod.harvest(u["id"], ids or None)
+    r = tables_mod.harvest(u["id"], ids or None, is_admin=u["role"] == "admin")
     job_id = None
     if b.get("auto_tidy") and r["inserted_ids"]:
         job_id = scheduler.enqueue(u["id"], "table_tidy", None,
@@ -3715,14 +3725,18 @@ async def tables_tidy_batch(request: Request):
         raise HTTPException(400, "没有可整理的表格（先收表或调整筛选）")
     force = bool(b.get("force"))
     if ids:
-        marks = ",".join("?" * len(ids[:1000]))
-        rows = db.all(f"SELECT id FROM table_extracts WHERE user_id=? AND id IN ({marks}) "
-                      "AND review != 'deleted' AND (ai_status NOT IN ('done','queued','running') OR ?)",
-                      (u["id"], *ids[:1000], force))
-        ids = [r["id"] for r in rows]
+        picked: list[str] = []
+        for chunk in [ids[i:i + 500] for i in range(0, len(ids), 500)]:
+            marks = ",".join("?" * len(chunk))
+            picked += [r["id"] for r in db.all(
+                f"SELECT id FROM table_extracts WHERE user_id=? AND id IN ({marks}) "
+                "AND review != 'deleted' AND (ai_status NOT IN ('done','queued','running') OR ?)",
+                (u["id"], *chunk, force))]
+        ids = picked
     if not ids:
         raise HTTPException(400, "所选表格都已完成整理（勾选「重新整理」可强制重跑）")
     job_id = scheduler.enqueue(u["id"], "table_tidy", None, {"ids": ids}, progress_total=len(ids))
+    emit_data("tables")
     return {"ok": True, "job_id": job_id, "count": len(ids)}
 
 @app.patch("/api/tables/{tid}")
@@ -3734,10 +3748,13 @@ async def tables_edit(tid: str, request: Request):
     b = await request.json()
     cells = b.get("cells")
     if (not isinstance(cells, list) or len(cells) < 1 or len(cells) > 500
+            or len({len(r) for r in cells if isinstance(r, list)}) > 1      # 锯齿网格（导出会越界）
             or any(not isinstance(r, list) or len(r) < 1 or len(r) > 100
                    or any(v is not None and not isinstance(v, (str, int, float)) for v in r)
                    for r in cells)):
-        raise HTTPException(400, "网格数据不合法（≤500 行 × 100 列，单元格为文本或 null）")
+        raise HTTPException(400, "网格数据不合法（矩形 ≤500 行 × 100 列，单元格为文本或 null）")
+    if te["ai_status"] in ("queued", "running"):
+        raise HTTPException(409, "此表正在批量整理——稍等完成后再编辑（防止你的修改被整理结果覆盖）")
     norm = [[None if v is None else str(v) for v in r] for r in cells]
     new_status = "done" if te["ai_status"] in ("mismatch", "failed") else te["ai_status"]
     with db.write() as c:
@@ -3790,11 +3807,13 @@ async def tables_export(request: Request):
     b = await request.json()
     ids = b.get("ids")
     if ids:
-        marks = ",".join("?" * len(ids[:1000]))
-        rows = db.all(f"SELECT t.*, p.title paper_title FROM table_extracts t "
-                      f"JOIN papers p ON p.id=t.paper_id "
-                      f"WHERE t.user_id=? AND t.id IN ({marks}) AND t.review != 'deleted'",
-                      (u["id"], *ids[:1000]))
+        rows = []
+        for chunk in [ids[i:i + 500] for i in range(0, len(ids), 500)]:
+            marks = ",".join("?" * len(chunk))
+            rows += db.all(f"SELECT t.*, p.title paper_title FROM table_extracts t "
+                           f"JOIN papers p ON p.id=t.paper_id "
+                           f"WHERE t.user_id=? AND t.id IN ({marks}) AND t.review != 'deleted'",
+                           (u["id"], *chunk))
     elif b.get("kept_only"):
         rows = db.all("SELECT t.*, p.title paper_title FROM table_extracts t "
                       "JOIN papers p ON p.id=t.paper_id "

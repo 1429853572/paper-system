@@ -127,7 +127,11 @@ class Scheduler:
                                 (r["id"],),
                             )
                         log.info("job %s 远程任务失效，已重排队", r["id"])
-            elif r["job_type"] in ("embed_backfill", "translate", "synthesis", "acquire"):
+            elif r["job_type"] in ("embed_backfill", "translate", "synthesis", "acquire", "table_tidy"):
+                if r["job_type"] == "table_tidy":
+                    # 批内表状态一并回「待整理」（重启丢进度——续跑按钮可重来）
+                    ids = (json.loads(r["payload"] or "{}").get("ids") or [])
+                    self._revert_tidy_state(r["user_id"], ids)
                 with db.write() as c:
                     c.execute("UPDATE jobs SET status='queued' WHERE id=?", (r["id"],))
 
@@ -747,7 +751,13 @@ class Scheduler:
                     continue
                 if not self._claim(job["id"]):
                     continue
-                self._run_table_tidy(job)
+                try:
+                    self._run_table_tidy(job)
+                except Exception as e:  # noqa: BLE001 —— 批处理中途炸（写库/磁盘）：
+                    log.exception("table_tidy job %s 异常", job["id"])   # job 置 failed +
+                    ids = (json.loads(job["payload"] or "{}").get("ids") or [])  # 批内表回待整理，
+                    self._revert_tidy_state(job["user_id"], ids)         # 不能永久卡 running
+                    self._update(job["id"], status="failed", error=str(e)[:400])
             except Exception:  # noqa: BLE001
                 log.exception("table_tidy worker 异常")
                 time.sleep(3)

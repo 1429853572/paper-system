@@ -136,6 +136,22 @@ if [[ -n "${FIRST_SYN:-}" ]]; then
     CODE=$(curl -sf -b "$CJ2" -o /dev/null -w '%{http_code}' "$BASE/api/syntheses/$FIRST_SYN/progress")
     [[ "$CODE" == 200 ]] && ok "GET /api/syntheses/{id}/progress" || bad "progress HTTP $CODE"
 fi
+# 讨论区（读端点——写路径由权限测试覆盖）
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/papers/$PID1/discuss")
+[[ "$CODE" == 200 ]] && ok "GET /api/papers/{id}/discuss" || bad "GET discuss HTTP $CODE"
+# 表格工作台（列表 + 单表详情 + 期刊建议）
+TBID=$(curl -s -b "$CJ2" "$BASE/api/tables/list" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["items"][0]["id"])
+except Exception: print("")' 2>/dev/null)
+if [[ -n "${TBID:-}" ]]; then
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/tables/$TBID")
+    [[ "$CODE" == 200 ]] && ok "GET /api/tables/{id}" || bad "GET /api/tables/{id} HTTP $CODE"
+else
+    bad "tables list 无条目（先收表）"
+fi
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/tracker/journal-suggest?q=nature")
+[[ "$CODE" == 200 ]] && ok "GET /api/tracker/journal-suggest" || bad "journal-suggest HTTP $CODE"
+
 # 表格工作台（列表 200 即可——收割/整理为写操作由专项测试覆盖）
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -b "$CJ2" "$BASE/api/tables/list")
 [[ "$CODE" == 200 ]] && ok "GET /api/tables/list" || bad "GET /api/tables/list HTTP $CODE"

@@ -37,6 +37,19 @@ function trackerTierBadge(tier) {
   return `<span class="badge ${cls}" title="${label}层">${label}</span>`;
 }
 
+function trackerCondText(s) {
+  const kw = (s.keywords || '').split(',').map(x => x.trim()).filter(Boolean);
+  const cats = (s.categories || '').split(/\s+/).filter(Boolean);
+  const jns = (s.journals || '').split(',').map(x => x.trim()).filter(Boolean);
+  const exc = (s.exclude || '').split(',').map(x => x.trim()).filter(Boolean);
+  const parts = [];
+  if (kw.length) parts.push('关键词: ' + kw.join('、'));
+  if (cats.length) parts.push('分类: ' + cats.join(' '));
+  if (jns.length) parts.push('期刊: ' + jns.join('、'));
+  if (exc.length) parts.push('排除: ' + exc.join('、'));
+  return parts.join(' · ') || '未配置条件';
+}
+
 function trackerCondChips(s) {
   const kw = (s.keywords || '').split(',').map(x => x.trim()).filter(Boolean);
   const cats = (s.categories || '').split(/\s+/).filter(Boolean);
@@ -138,7 +151,7 @@ async function loadTracker() {
     subs.subs.map(s => {
       const on = st === 'new' && subF === s.id;
       return `<div class="tk-rail-item ${on ? 'on' : ''}" onclick="trackerSubF('${s.id}')">
-        <span class="tk-rail-name" title="${esc(trackerCondChips(s))}">${esc(s.name)}</span>
+        <span class="tk-rail-name" title="${esc(trackerCondText(s))}">${esc(s.name)}</span>
         ${s.new_count ? `<span class="tk-rail-badge">${s.new_count > 99 ? '99+' : s.new_count}</span>` : ''}
         <span class="tk-rail-edit" title="编辑订阅" onclick="event.stopPropagation(); trackerEdit('${s.id}')">${icon('edit', 12)}</span></div>`;
     }).join('') +
@@ -180,6 +193,13 @@ async function loadTracker() {
 
   /* ---- 右栏：按天分组的条目流 ---- */
   const selMap = state._trackerSel || new Set();
+  if (state._trackerAppend) {
+    const prev = state._trackerShownItems || [];
+    const seen = new Set(prev.map(x => x.id));
+    inbox.items = [...prev, ...inbox.items.filter(x => !seen.has(x.id))];   // 追加而非替换
+  }
+  state._trackerShownItems = inbox.items;
+  state._trackerAppend = false;
   const groups = [];
   {
     let last = null, bucket = null;
@@ -196,7 +216,7 @@ async function loadTracker() {
     ${groupHtml || `<div class="empty-state"><p class="t">${st === 'new' ? (subF ? '该订阅还没有新条目' : '收件箱是空的') : '没有条目'}</p>
        <p>${st === 'new' ? (subs.subs.length ? '点左栏订阅卡上的「巡逻」马上拉一轮' : '点左上「＋」新建订阅，系统按频率自动巡逻') : '换个筛选条件看看'}</p></div>`}
     ${inbox.total > (state._trackerPage || 1) * 30 ? `<div style="text-align:center;padding:10px">
-      <button class="btn" onclick="trackerLoadMore()">加载更多（${inbox.total - (state._trackerPage || 1) * 30} 条未显示）</button></div>` : ''}`;
+      <button class="btn small" onclick="trackerLoadMore()">加载更多（${inbox.total - (state._trackerPage || 1) * 30} 条未显示）</button></div>` : ''}`;
 }
 function selMapSize() { return (state._trackerSel || new Set()).size; }
 function collNameOf(cid) {
@@ -204,10 +224,10 @@ function collNameOf(cid) {
   const opt = [...document.querySelectorAll('#tk-target-coll option')].find(o => o.value === cid);
   return opt?.text || '文献库';
 }
-window.trackerStatus = v => { state._trackerStatus = v; state._trackerSub = ''; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); loadTracker(); };
-window.trackerSubF = id => { state._trackerSub = id; state._trackerStatus = 'new'; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); loadTracker(); };
-window.trackerTierF = v => { state._trackerTier = v === state._trackerTier ? '' : v; state._trackerPage = 1; loadTracker(); };
-window.trackerLoadMore = () => { state._trackerPage = (state._trackerPage || 1) + 1; loadTracker(); };
+window.trackerStatus = v => { state._trackerStatus = v; state._trackerSub = ''; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); state._trackerShownItems = null; loadTracker(); };
+window.trackerSubF = id => { state._trackerSub = id; state._trackerStatus = 'new'; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); state._trackerShownItems = null; loadTracker(); };
+window.trackerTierF = v => { state._trackerTier = v === state._trackerTier ? '' : v; state._trackerPage = 1; state._trackerSel = new Set(); loadTracker(); };
+window.trackerLoadMore = () => { state._trackerPage = (state._trackerPage || 1) + 1; state._trackerAppend = true; loadTracker(); };
 window.trackerCkClear = () => { state._trackerSel = new Set(); loadTracker(); };
 window.trackerCollChange = el => { state._trackerCollId = el.value; };
 
@@ -486,7 +506,7 @@ window.trackerJrSuggest = q => {
       const d = await api(`/api/tracker/journal-suggest?q=${encodeURIComponent(q.trim())}`);
       const have = new Set([...document.querySelectorAll('#tk-jr-chips .tk-chip.jr')].map(x => x.dataset.j.toLowerCase()));
       box.innerHTML = (d.items || []).filter(x => !have.has(x.name.toLowerCase())).map(x => `
-        <div class="tk-sug-item" onclick="trackerJrPick('${esc(x.name).replace(/'/g, '')}')">
+        <div class="tk-sug-item" onclick="trackerJrPick('${jsArg(x.name)}')">
           <b>${esc(x.name)}</b> ${x.hint ? `<span class="muted" style="font-size:var(--fs-xs)">${esc(x.hint)}</span>` : ''}
         </div>`).join('') || '<div class="muted" style="padding:6px 10px">无匹配期刊</div>';
       box.hidden = false;

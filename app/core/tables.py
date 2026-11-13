@@ -29,11 +29,17 @@ class _TableParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.rows: list[list[tuple[str, int, int]]] = []
+        self._depth = 0
         self._row: list[tuple[str, int, int]] | None = None
         self._cell: list[str] | None = None
         self._cs = self._rs = 1
 
     def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._depth += 1
+            return
+        if self._depth > 1:
+            return                            # 嵌套表：内层 tr/td 忽略（保外层行完整）
         if tag == "tr":
             self._flush_row()
             self._row = []
@@ -63,14 +69,25 @@ class _TableParser(HTMLParser):
         self._flush_row()                          # 整体结束仍悬着的行/格补闭合
 
     def handle_endtag(self, tag):
+        if tag == "table":
+            self._depth = max(0, self._depth - 1)
+            return
+        if self._depth > 1:
+            return
         if tag in ("td", "th"):
             self._flush_cell()
         elif tag == "tr":
             self._flush_row()
+        elif tag == "br":
+            self._cell_append(" ") if self._cell is not None else None
 
     def handle_data(self, data):
         if self._cell is not None:
             self._cell.append(data)
+
+    def _cell_append(self, text):
+        if self._cell is not None:
+            self._cell.append(text)
 
 
 def html_to_grid(html: str) -> list[list[str]]:
@@ -116,21 +133,31 @@ def split_caption(block_text: str) -> tuple[str, str]:
 
 
 # ---------------- 收割（幂等） ----------------
-def harvest(user_id: int, paper_ids: list[str] | None = None) -> dict:
+def harvest(user_id: int, paper_ids: list[str] | None = None, is_admin: bool = False) -> dict:
     """扫描 table 块入工作台。先查 UNIQUE 键再插入（幂等）；
     paper_ids=None → 全部已解析论文。返回 {papers, found, inserted, skipped}。"""
+    # 可见性口径与 /api/tables/sources 一致：admin 全见，成员=shared+本人；
+    # parse_status='parsed' 防收割解析中的半成品；只取最新 done run 的块
+    # （旧 run 的 blocks 不删——不过滤会把同一物理表收成新旧两份）
+    vis = "" if is_admin else " AND (p.visibility='shared' OR p.owner_id=?)"
+    vargs: tuple = () if is_admin else (user_id,)
     if paper_ids:
         marks = ",".join("?" * len(paper_ids))
         rows = db.all(
             f"SELECT b.paper_id, b.page_index, b.text, b.asset_path FROM blocks b "
             f"JOIN papers p ON p.id = b.paper_id "
-            f"WHERE b.type='table' AND b.paper_id IN ({marks}) AND p.deleted_at IS NULL",
-            tuple(paper_ids))
+            f"WHERE b.type='table' AND b.paper_id IN ({marks}) AND p.deleted_at IS NULL "
+            f"AND p.parse_status='parsed' AND b.parse_run_id = "
+            f"(SELECT r.id FROM parse_runs r WHERE r.paper_id = b.paper_id AND r.status='done' "
+            f"ORDER BY r.created_at DESC LIMIT 1){vis}",
+            (*paper_ids, *vargs))
     else:
         rows = db.all(
             "SELECT b.paper_id, b.page_index, b.text, b.asset_path FROM blocks b "
             "JOIN papers p ON p.id = b.paper_id "
-            "WHERE b.type='table' AND p.deleted_at IS NULL")
+            "WHERE b.type='table' AND p.deleted_at IS NULL AND p.parse_status='parsed' "
+            "AND b.parse_run_id = (SELECT r.id FROM parse_runs r WHERE r.paper_id = b.paper_id "
+            "AND r.status='done' ORDER BY r.created_at DESC LIMIT 1)" + vis, vargs)
     inserted = skipped = 0
     inserted_ids: list[str] = []
     papers_seen: set[str] = set()
@@ -149,13 +176,17 @@ def harvest(user_id: int, paper_ids: list[str] | None = None) -> dict:
             skipped += 1
             continue
         tid = "tb" + secrets.token_hex(8)
-        with db.write() as c:
-            c.execute(
-                "INSERT INTO table_extracts(id, user_id, paper_id, page_index, "
-                "caption, html, cells, src_hash, asset_name) VALUES(?,?,?,?,?,?,?,?,?)",
-                (tid, user_id, b["paper_id"], b["page_index"],
-                 caption[:300], html, json.dumps(grid, ensure_ascii=False), src,
-                 (b["asset_path"] or "").rsplit("/", 1)[-1] or None))
+        try:
+            with db.write() as c:
+                c.execute(
+                    "INSERT INTO table_extracts(id, user_id, paper_id, page_index, "
+                    "caption, html, cells, src_hash, asset_name) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (tid, user_id, b["paper_id"], b["page_index"],
+                     caption[:300], html, json.dumps(grid, ensure_ascii=False), src,
+                     (b["asset_path"] or "").rsplit("/", 1)[-1] or None))
+        except Exception:  # noqa: BLE001 —— 并发收割撞 UNIQUE：计跳过不 500
+            skipped += 1
+            continue
         inserted_ids.append(tid)
         inserted += 1
     return {"papers": len(papers_seen), "found": len(rows), "inserted": inserted,
@@ -300,8 +331,10 @@ def build_xlsx(items: list[dict]) -> bytes:
                     cell.fill = header_fill
         ws.freeze_panes = "A2"
         if grid:
-            for c in range(1, len(grid[0]) + 1):
-                w = max(len(str(grid[r][c - 1] or "")) for r in range(min(3, len(grid)))) + 4
+            width = max(len(r) for r in grid)
+            for c in range(1, width + 1):
+                w = max(len(str(grid[r][c - 1] if c - 1 < len(grid[r]) else "")) or ""
+                        for r in range(min(3, len(grid)))) + 4
                 ws.column_dimensions[get_column_letter(c)].width = min(40, max(8, w))
     import io
     buf = io.BytesIO()

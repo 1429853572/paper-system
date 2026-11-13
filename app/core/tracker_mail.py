@@ -3,6 +3,7 @@
 发件 SMTP 是管理员在管理后台配置一次的全局账号（settings 表 `smtp_global`，
 授权码 Fernet 加密）；普通用户只在订阅里填收件邮箱。
 """
+import html
 import json
 import smtplib
 import ssl
@@ -70,11 +71,9 @@ def _send_html(to: str, subject: str, html: str) -> None:
         smtp = smtplib.SMTP_SSL(cfg["host"], port, timeout=25)
     else:
         smtp = smtplib.SMTP(cfg["host"], port, timeout=25)
-        try:
-            smtp.starttls(context=ssl.create_default_context())
-        except ssl.SSLError:
-            pass
     try:
+        if port != 465:
+            smtp.starttls(context=ssl.create_default_context())   # 失败即报错——不降级明文续传
         smtp.login(cfg["sender"], cfg.get("password") or "")
         smtp.sendmail(cfg["sender"], [to], msg.as_string())
     finally:
@@ -100,19 +99,20 @@ def _digest_html(sub: dict, items: list[dict]) -> str:
         code = (f" · <a href='{it['code_url']}' style='color:#4a6cf7'>代码</a>" if it.get("code_url") else "")
         pdf = f"<a href='{it['pdf_url']}' style='color:#4a6cf7'>PDF</a>" if it.get("pdf_url") else ""
         fb = "<span style='color:#9aa3b0'>（补足）</span> " if it.get("is_fallback") else ""
+        e = html.escape
         blocks.append(f"""
         <div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin:10px 0">
           <div><span style="background:{color.get(it.get('tier'), '#6b7280')};color:#fff;border-radius:6px;
                padding:1px 8px;font-size:12px">{t}</span> {fb}
-            <b style="font-size:15px">{it.get('title', '')}</b></div>
-          {f"<div style='color:#6b7280;font-size:13px;margin-top:2px'>{it['zh_title']}</div>" if it.get('zh_title') else ""}
-          <div style="color:#6b7280;font-size:13px;margin-top:4px">{it.get('authors', '')[:120]}
-            · {it.get('published', '')} · {it.get('venue', '')}</div>
+            <b style="font-size:15px">{e(it.get('title', ''))}</b></div>
+          {f"<div style='color:#6b7280;font-size:13px;margin-top:2px'>{e(it['zh_title'])}</div>" if it.get('zh_title') else ""}
+          <div style="color:#6b7280;font-size:13px;margin-top:4px">{e(it.get('authors', '')[:120])}
+            · {e(it.get('published', ''))} · {e(it.get('venue', ''))}</div>
           {zh}
           <div style="margin-top:6px;font-size:13px">{pdf}{code}
             {" · " if pdf or code else ""}<span style="color:#9aa3b0">登录 paper-system → 追踪 → 收进文献库</span></div>
         </div>""")
-    head = (f"<h2 style='margin:0 0 4px'>文献追踪日报 · {sub.get('name', '')}</h2>"
+    head = (f"<h2 style='margin:0 0 4px'>文献追踪日报 · {html.escape(sub.get('name', ''))}</h2>"
             f"<p style='color:#6b7280;margin:0 0 14px'>本轮新增 {len(items)} 篇</p>")
     return (f"<div style='font-family:-apple-system,Segoe UI,sans-serif;max-width:720px'>"
             f"{head}{''.join(blocks)}</div>")

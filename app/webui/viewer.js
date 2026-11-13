@@ -403,7 +403,7 @@ async function loadCollections(preset = null) {
   const d = preset || await api('/api/collections');
   state.collections = d.collections;
   state.totalPapers = d.total;
-  state.unassignedCount = d.unassigned || 0;   // 未分库（含失效引用）——侧栏数字自洽
+  state.unassignedCount = d.unassigned || 0;   // 未归类（含失效引用）——侧栏数字自洽
   state.sharedLibs = d.shared_libs || [];     // 他人库中的共享论文
   renderCollections();
 }
@@ -441,9 +441,9 @@ function renderCollections() {
       <span class="col-count">${state.totalPapers ?? 0}</span>
     </div>` +
     roots.map(r => row(r, 0)).join('') +
-    // 未分库 / 他人共享库：让「总数 = 各行相加」自洽（否则读者以为论文丢了）
+    // 未归类 / 他人共享库：让「总数 = 各行相加」自洽（否则读者以为论文丢了）
     (unassigned ? `<div class="col-item ${state.currentCollection === 'none' ? 'on' : ''}" data-id="none">
-      <span class="col-arrow-none"></span><span class="col-name">${icon('inbox')} 未分库</span>
+      <span class="col-arrow-none"></span><span class="col-name">${icon('inbox')} 未归类</span>
       <span class="col-count">${unassigned}</span></div>` : '') +
     sharedLibs.map(l => `<div class="col-item ${state.currentCollection === l.id ? 'on' : ''}" data-id="${l.id}">
       <span class="col-arrow-none"></span><span class="col-name">${icon('folder')} ${esc(l.name)} <span class="muted" style="font-size: var(--fs-xs)">共享</span></span>
@@ -2817,6 +2817,14 @@ async function watchJobs() {
     const ev = JSON.parse(e.data);
     // 数据变更广播（双标签一致性）：另一标签页删/挂链/恢复/清空回收站/改库
     // → 通知本页失效缓存 + 节流刷新（事件不含内容，拉取走可见性过滤）
+    if (ev.type === 'data' && ev.entity === 'discussion') {
+      // 讨论面板实时追加：须在通用 data return 之前处理（refreshOnData 不触碰讨论面板）
+      const dp = document.querySelector('#discuss-msgs');
+      if (dp && !document.querySelector('#discuss-panel')?.hidden) {
+        document.querySelector('#discuss-open')?.click();
+        document.querySelector('#discuss-open')?.click();   // toggle × 2 = 重载
+      }
+    }
     if (ev.type === 'data') {
       refreshOnData(ev.entity);
       return;
@@ -2837,15 +2845,6 @@ async function watchJobs() {
       }
     }
     // 导读任务完成 → 重拉并重绘气泡（此前只在生成页轮询，切走或超时就看不到结果）
-    // 讨论区新消息 → 同论文讨论面板实时追加（refreshOnData 已在 else-if 处理全量刷新）
-    if (ev.type === 'data' && ev.entity === 'discussion') {
-      const dp = document.querySelector('#discuss-msgs');
-      if (dp && !document.querySelector('#discuss-panel').hidden) {
-        // 面板开着 → 直接重拉（load 在 12-reader-ui 闭包内——用 fetch 简化：重触发点击）
-        document.querySelector('#discuss-open')?.click();
-        document.querySelector('#discuss-open')?.click();   // toggle × 2 = 重载
-      }
-    }
     if (ev.job_type === 'summary' && ['done', 'failed', 'canceled'].includes(ev.status)) {
       refreshSummaryFor(ev.paper_id, ev.status);
     }
@@ -2937,13 +2936,13 @@ async function renderMeta() {
       <textarea id="m-notes" placeholder="记录阅读笔记…（自动保存）" style="min-height:70px">${esc(notes.notes || '')}</textarea></div>
     <div class="card"><h3>References (${refs.references.length}) <input id="ref-search" placeholder="搜索…" style="width:140px; font-size: var(--fs-sm); margin-left:8px; display:inline-block"></h3>
       <div class="ref-list" id="ref-list"></div></div>
-    <div class="card"><h3>${icon('folder')} 分库</h3>
+    <div class="card"><h3>${icon('folder')} 文献库</h3>
       <div id="m-collection-chips" class="chip-row"></div>
       <select id="m-collection-add" style="max-width:200px;font-size: var(--fs-sm)"></select></div>`;
 
   renderCiteCard();
 
-  // 分库多选 chips（多对多：一篇可挂 N 库；×移出，下拉加入）
+  // 文献库多选 chips（多对多：一篇可挂 N 库；×移出，下拉加入）
   const linked = paper.collection_ids || [];
   const chipRow = $('#m-collection-chips');
   chipRow.innerHTML = linked.length
@@ -2952,7 +2951,7 @@ async function renderMeta() {
         return `<span class="chip">${icon('folder', 12)} ${esc(c2?.name || cid)}
           <button class="hover-only" title="从此库移出" onclick="unlinkPaper('${pid}','${cid}')">${icon('close', 12)}</button></span>`;
       }).join('')
-    : '<span class="muted" style="font-size: var(--fs-sm)">未分库</span>';
+    : '<span class="muted" style="font-size: var(--fs-sm)">未归类</span>';
   const addSel = $('#m-collection-add');
   addSel.innerHTML = '<option value="">+ 加入库…</option>' + state.collections
     .filter(c2 => !linked.includes(c2.id))
@@ -2997,8 +2996,8 @@ async function renderMeta() {
 /* 元数据编辑：内联输入框，不弹 prompt 链（原来一次要弹 6 个框）。
    卷/期/页是引用格式需要的字段，一并在这里补。 */
 window.unlinkPaper = async (pid, cid) => {
-  if (!(await uiConfirm('从此库移出？（论文本体与译文不受影响；全部库移出后落「未分库」）',
-                        {title: '移出分库', danger: true}))) return;
+  if (!(await uiConfirm('从此库移出？（论文本体与译文不受影响；全部库移出后落「未归类」）',
+                        {title: '移出文献库', danger: true}))) return;
   await api(`/api/papers/${pid}/collections/${cid}`, {method: 'DELETE'});
   toast('已移出'); await refreshLib(); renderMeta();
 };
@@ -3721,7 +3720,7 @@ function renderPickList(filter) {
     });
   }
   const orphan = papers.filter(p => !(p.collection_ids || []).length && match(p));
-  if (orphan.length) groups.push({id: '__orphan', name: '未分库', papers: orphan});
+  if (orphan.length) groups.push({id: '__orphan', name: '未文献库', papers: orphan});
   groups.forEach(g => g.papers.sort(sortFn));
   const visible = groups.filter(g => g.papers.length);
   const matched = visible.reduce((s, g) => s + g.papers.length, 0);
@@ -4645,7 +4644,7 @@ async function renderAdminZone() {
   if (more) more.onclick = () => renderAdminZone();
 }
 
-/* 限额编辑弹窗：5 个数字字段（留空=默认），保存复用 saveQuota */
+/* 限额编辑弹窗：6 个数字字段（留空=默认），保存复用 saveQuota */
 function openQuotaDialog(uid) {
   const ov = (state._quotaRaw || {})[uid] || {};
   // suf = DOM 后缀（saveQuota 按后缀取值），key = 后端语义键（ov 里存的是语义键）
@@ -4713,6 +4712,7 @@ window.saveQuota = async uid => {
   num('pp', 'max_pages');
   num('dk', 'max_disk_gb');
   num('bg', 'monthly_budget_cny');
+  num('ts', 'tracker_subs');          // 订阅数上限（弹窗有字段、保存曾漏传——断链修复）
   try {
     await api(`/api/admin/users/${uid}/quota`, {method: 'PUT', body: JSON.stringify(ov)});
     toast('已保存限额'); renderAdminZone();
@@ -6436,6 +6436,9 @@ const CMD_PAGES = [
   {label: '文库管理', hint: '页面', kw: 'collections 文库 库', run: () => switchPage('collections')},
   {label: '采集文献 / 专题跟踪', hint: '动作', kw: 'collect 采集 专题 知网 chinaxiv', run: () => { switchPage('collections'); setTimeout(() => openCollectPanel(), 200); }},
   {label: '任务中心', hint: '页面', kw: 'tasks 任务 队列 进度', run: () => switchPage('tasks')},
+  {label: '文献追踪', hint: '页面', kw: 'tracker 追踪 订阅 巡逻 收件箱', run: () => switchPage('tracker')},
+  {label: '表格工作台', hint: '页面', kw: 'tables 表格 收割 整理 导出 xlsx', run: () => switchPage('tables')},
+  {label: '管理后台', hint: '页面 · admin', kw: 'admin 管理 成员 限额 邮件', run: () => switchPage('admin')},
   {label: '回收站', hint: '页面', kw: 'trash 回收 删除', run: () => switchPage('trash')},
   {label: '设置', hint: '页面', kw: 'settings 设置 key 密钥', run: () => switchPage('settings')},
   {label: '我的用量', hint: '页面', kw: 'usage 用量 配额 磁盘 token', run: () => { switchPage('settings'); setTimeout(() => renderSettings('usage'), 120); }},
@@ -6661,6 +6664,19 @@ function trackerTierBadge(tier) {
   return `<span class="badge ${cls}" title="${label}层">${label}</span>`;
 }
 
+function trackerCondText(s) {
+  const kw = (s.keywords || '').split(',').map(x => x.trim()).filter(Boolean);
+  const cats = (s.categories || '').split(/\s+/).filter(Boolean);
+  const jns = (s.journals || '').split(',').map(x => x.trim()).filter(Boolean);
+  const exc = (s.exclude || '').split(',').map(x => x.trim()).filter(Boolean);
+  const parts = [];
+  if (kw.length) parts.push('关键词: ' + kw.join('、'));
+  if (cats.length) parts.push('分类: ' + cats.join(' '));
+  if (jns.length) parts.push('期刊: ' + jns.join('、'));
+  if (exc.length) parts.push('排除: ' + exc.join('、'));
+  return parts.join(' · ') || '未配置条件';
+}
+
 function trackerCondChips(s) {
   const kw = (s.keywords || '').split(',').map(x => x.trim()).filter(Boolean);
   const cats = (s.categories || '').split(/\s+/).filter(Boolean);
@@ -6762,7 +6778,7 @@ async function loadTracker() {
     subs.subs.map(s => {
       const on = st === 'new' && subF === s.id;
       return `<div class="tk-rail-item ${on ? 'on' : ''}" onclick="trackerSubF('${s.id}')">
-        <span class="tk-rail-name" title="${esc(trackerCondChips(s))}">${esc(s.name)}</span>
+        <span class="tk-rail-name" title="${esc(trackerCondText(s))}">${esc(s.name)}</span>
         ${s.new_count ? `<span class="tk-rail-badge">${s.new_count > 99 ? '99+' : s.new_count}</span>` : ''}
         <span class="tk-rail-edit" title="编辑订阅" onclick="event.stopPropagation(); trackerEdit('${s.id}')">${icon('edit', 12)}</span></div>`;
     }).join('') +
@@ -6804,6 +6820,13 @@ async function loadTracker() {
 
   /* ---- 右栏：按天分组的条目流 ---- */
   const selMap = state._trackerSel || new Set();
+  if (state._trackerAppend) {
+    const prev = state._trackerShownItems || [];
+    const seen = new Set(prev.map(x => x.id));
+    inbox.items = [...prev, ...inbox.items.filter(x => !seen.has(x.id))];   // 追加而非替换
+  }
+  state._trackerShownItems = inbox.items;
+  state._trackerAppend = false;
   const groups = [];
   {
     let last = null, bucket = null;
@@ -6820,7 +6843,7 @@ async function loadTracker() {
     ${groupHtml || `<div class="empty-state"><p class="t">${st === 'new' ? (subF ? '该订阅还没有新条目' : '收件箱是空的') : '没有条目'}</p>
        <p>${st === 'new' ? (subs.subs.length ? '点左栏订阅卡上的「巡逻」马上拉一轮' : '点左上「＋」新建订阅，系统按频率自动巡逻') : '换个筛选条件看看'}</p></div>`}
     ${inbox.total > (state._trackerPage || 1) * 30 ? `<div style="text-align:center;padding:10px">
-      <button class="btn" onclick="trackerLoadMore()">加载更多（${inbox.total - (state._trackerPage || 1) * 30} 条未显示）</button></div>` : ''}`;
+      <button class="btn small" onclick="trackerLoadMore()">加载更多（${inbox.total - (state._trackerPage || 1) * 30} 条未显示）</button></div>` : ''}`;
 }
 function selMapSize() { return (state._trackerSel || new Set()).size; }
 function collNameOf(cid) {
@@ -6828,10 +6851,10 @@ function collNameOf(cid) {
   const opt = [...document.querySelectorAll('#tk-target-coll option')].find(o => o.value === cid);
   return opt?.text || '文献库';
 }
-window.trackerStatus = v => { state._trackerStatus = v; state._trackerSub = ''; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); loadTracker(); };
-window.trackerSubF = id => { state._trackerSub = id; state._trackerStatus = 'new'; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); loadTracker(); };
-window.trackerTierF = v => { state._trackerTier = v === state._trackerTier ? '' : v; state._trackerPage = 1; loadTracker(); };
-window.trackerLoadMore = () => { state._trackerPage = (state._trackerPage || 1) + 1; loadTracker(); };
+window.trackerStatus = v => { state._trackerStatus = v; state._trackerSub = ''; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); state._trackerShownItems = null; loadTracker(); };
+window.trackerSubF = id => { state._trackerSub = id; state._trackerStatus = 'new'; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); state._trackerShownItems = null; loadTracker(); };
+window.trackerTierF = v => { state._trackerTier = v === state._trackerTier ? '' : v; state._trackerPage = 1; state._trackerSel = new Set(); loadTracker(); };
+window.trackerLoadMore = () => { state._trackerPage = (state._trackerPage || 1) + 1; state._trackerAppend = true; loadTracker(); };
 window.trackerCkClear = () => { state._trackerSel = new Set(); loadTracker(); };
 window.trackerCollChange = el => { state._trackerCollId = el.value; };
 
@@ -7110,7 +7133,7 @@ window.trackerJrSuggest = q => {
       const d = await api(`/api/tracker/journal-suggest?q=${encodeURIComponent(q.trim())}`);
       const have = new Set([...document.querySelectorAll('#tk-jr-chips .tk-chip.jr')].map(x => x.dataset.j.toLowerCase()));
       box.innerHTML = (d.items || []).filter(x => !have.has(x.name.toLowerCase())).map(x => `
-        <div class="tk-sug-item" onclick="trackerJrPick('${esc(x.name).replace(/'/g, '')}')">
+        <div class="tk-sug-item" onclick="trackerJrPick('${jsArg(x.name)}')">
           <b>${esc(x.name)}</b> ${x.hint ? `<span class="muted" style="font-size:var(--fs-xs)">${esc(x.hint)}</span>` : ''}
         </div>`).join('') || '<div class="muted" style="padding:6px 10px">无匹配期刊</div>';
       box.hidden = false;
@@ -7168,7 +7191,7 @@ function renderTablesPage() {
     <div class="tk-rail">
       <div class="tk-rail-head"><b>论文</b>
         <button class="btn small primary" onclick="tbHarvestOpen()" title="从已解析论文收割表格">${icon('plus')}</button></div>
-      <input id="tb-rail-q" placeholder="搜索论文…" style="margin:0 8px 6px" oninput="tbRailFilter(this.value)">
+      <input id="tb-rail-q" placeholder="搜索论文…" value="${esc(state._tbRailQ || '')}" style="margin:0 8px 6px" oninput="tbRailFilter(this.value)">
       <div id="tb-rail-list"></div>
       <div class="tk-rail-flex"></div>
       <div class="tk-rail-foot" id="tb-rail-foot"></div>
@@ -7236,7 +7259,7 @@ async function loadTables() {
         <b class="muted" style="font-weight:400;cursor:pointer" onclick="tbPaperF('')" title="查看全部">✕</b></span>` : ''}
       ${chips}
       <input id="tb-q" placeholder="搜表题/论文…" value="${esc(q)}" style="width:180px"
-             onkeydown="if(event.key==='Enter'){state._tbQ=this.value;state._tbPage=1;loadTables()}">
+             onkeydown="if(event.key==='Enter'){state._tbQ=this.value;state._tbPage=1;state._tbSel=new Set();loadTables()}">
       <span style="margin-left:auto"></span>
       <button class="btn small" onclick="tbHarvestOpen()">${icon('plus')} 收表</button>
       <button class="btn small primary" onclick="tbTidyBatch(this, false)" title="把当前筛选里的待整理表批量入队（LLM 整理）">${icon('bolt')} 整理待办${working ? '（进行中…）' : ''}</button>
@@ -7246,7 +7269,7 @@ async function loadTables() {
       <button class="btn small primary" onclick="tbTidySel(this)">整理选中</button>
       <button class="btn small" onclick="tbBatchReview(this,'kept')">标记保留</button>
       <button class="btn small danger" onclick="tbBatchReview(this,'deleted')">剔除</button>
-      <button class="btn small" onclick="tbExport(false, this)">导出选中</button>
+      <button class="btn small" onclick="tbExport([...(state._tbSel||new Set())], this)">导出选中</button>
       <button class="btn small" onclick="tbCkClear()">取消选择</button></div>` : ''}
     ${working ? `<div class="empty-note" style="margin-bottom:8px">${icon('clock')} 批量整理进行中（${working} 张在队列/处理）——完成会自动刷新；预算用尽时剩余保持待整理，可再点「整理待办」续跑</div>` : ''}
     ${c.mismatch ? `<div class="empty-note" style="margin-bottom:8px;color:var(--err)">${c.mismatch} 张需人工复核（模型输出与原表不一致）——点卡片「对照」人工修整后保存即转为已整理</div>` : ''}`;
@@ -7265,14 +7288,14 @@ async function loadTables() {
   stream.innerHTML = groups.map(g => `
     <div class="tk-day"><span>${esc(g.title || '(无标题)')}</span><span class="tk-day-n">${g.items.length} 张</span><i></i></div>
     <div class="tb-wall">${g.items.map(it => tbCardHtml(it, sel, review)).join('')}</div>`).join('')
-    || `<div class="empty-state"><p class="t">还没有表格</p>
-       <p>点「收表」从已解析论文批量收割表格（一键全部已解析论文）；或先在文库上传并解析 PDF</p></div>`
     + (d.total > page * 60 ? `<div style="text-align:center;padding:10px">
-      <button class="btn" onclick="state._tbPage=(state._tbPage||1)+1;loadTables()">加载更多（${d.total - page * 60} 张未显示）</button></div>` : '');
+      <button class="btn small" onclick="state._tbPage=(state._tbPage||1)+1;loadTables()">加载更多（${d.total - page * 60} 张未显示）</button></div>` : '')
+    || `<div class="empty-state"><p class="t">还没有表格</p>
+       <p>点「收表」从已解析论文批量收割表格（一键全部已解析论文）；或先在文库上传并解析 PDF</p></div>`;
 }
 window.tbReviewF = v => { state._tbReview = v; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
 window.tbPaperF = id => { state._tbPaper = id; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
-window.tbRailFilter = v => { state._tbRailQ = v; loadTables(); };
+window.tbRailFilter = debounce(v => { state._tbRailQ = v; loadTables(); }, 250);
 window.tbCkClear = () => { state._tbSel = new Set(); loadTables(); };
 
 /* ---------- 卡片 ---------- */
@@ -7313,13 +7336,16 @@ function tbCardHtml(it, sel, review) {
 }
 
 /* ---------- 事件 ---------- */
-window.tbCk = ck => {
+window.tbCk = async ck => {
   const s = state._tbSel || (state._tbSel = new Set());
   ck.checked ? s.add(ck.dataset.tid) : s.delete(ck.dataset.tid);
-  const bar = document.querySelector('.lib-batch');
-  if (bar) loadTables();
+  const pg = $('#page-tables');
+  const st = pg.scrollTop;            // 首次勾选也渲染批量条；整页重渲保持滚动（与追踪页一致）
+  await loadTables();
+  pg.scrollTop = st;
 };
 window.tbLocate = async (pid, page) => {
+  switchPage('reader');               // openPaper 不切页——不切回阅读页等于没跳
   await openPaper(pid);
   state.pageNum = page + 1;
   renderPage({noFollow: true});
@@ -7327,10 +7353,14 @@ window.tbLocate = async (pid, page) => {
 };
 
 /* ---------- 收表弹层 ---------- */
+let _tbHarvPop = null;
+window._tbHarvestClose = () => { _tbHarvPop?.close(); _tbHarvPop = null; };
 window.tbHarvestOpen = async () => {
+  _tbHarvPop?.close();
   const {pop, close} = openPop('tb-harvest-pop');
+  _tbHarvPop = {pop, close};
   pop.innerHTML = `<div class="ui-pop-title">${icon('plus')} 从文库收表
-    <button class="btn small" style="margin-left:auto" onclick="this.closest('.ui-backdrop').remove()">${icon('close')}</button></div>
+    <button class="btn small" style="margin-left:auto" onclick="_tbHarvestClose()">${icon('close')}</button></div>
     <div style="margin-top:10px"><span class="spin"></span> 加载可收割论文…</div>`;
   let d;
   try { d = await api('/api/tables/sources'); }
@@ -7338,7 +7368,7 @@ window.tbHarvestOpen = async () => {
   const srcs = d.sources || [];
   pop.innerHTML = `
   <div class="ui-pop-title">${icon('plus')} 从文库收表
-    <button class="btn small" style="margin-left:auto" onclick="this.closest('.ui-backdrop').remove()">${icon('close')}</button></div>
+    <button class="btn small" style="margin-left:auto" onclick="_tbHarvestClose()">${icon('close')}</button></div>
   <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <span class="muted">共 ${srcs.length} 篇已解析论文 · ${srcs.reduce((n, s) => n + s.n_tables, 0)} 张表</span>
     <span style="margin-left:auto"></span>
@@ -7369,7 +7399,7 @@ window.tbHarvestGo = async (btn, all) => {
     const r = await api('/api/tables/harvest', {method: 'POST',
       body: JSON.stringify(all ? {all: true, auto_tidy: $('#tb-auto')?.checked} : {paper_ids: ids, auto_tidy: $('#tb-auto')?.checked})});
     toast(`收表完成：${r.papers} 篇 ${r.found} 张，新入库 ${r.inserted} 张（跳过 ${r.skipped}）${r.job_id ? '，整理已排队' : ''}`, 6000);
-    btn.closest('.ui-backdrop').remove();
+    window._tbHarvestClose?.();
     state._tbReview = 'active';
     loadTables();
   }, '收表失败');
@@ -7433,15 +7463,21 @@ async function tbExport(ids, btn) {
   else {
     const d = state._tbData;
     if (!(await uiConfirm(`导出全部未剔除表格（约 ${d.counts.total - d.counts.deleted} 张，每表一个 sheet）？`, {title: '导出 xlsx'}))) return;
-    await downloadBlob('/api/tables/export', payload, 'tables.xlsx', '已导出——可直接用 Excel/WPS 打开');
+    try {
+      await downloadBlob('/api/tables/export', payload, 'tables.xlsx', '已导出——可直接用 Excel/WPS 打开');
+    } catch (e) { toast(friendlyError(e, '导出失败')); }
   }
 }
 window.tbExport = tbExport;
 
 /* ---------- 对照编辑弹层（左原图 · 右可编辑网格） ---------- */
 let _tbCompareTab = 'ai';
+let _tbCmpPop = null;                       // 当前对照弹层实例（防叠层 + grid 随实例）
+window.tbCompareClose = () => { _tbCmpPop?.close(); _tbCmpPop = null; };
 window.tbCompare = async tid => {
+  _tbCmpPop?.close();                       // 切页签/换表先关旧层
   const {pop, close} = openPop('tb-compare-pop');
+  _tbCmpPop = {pop, close};
   pop.innerHTML = `<div class="ui-pop-title">${icon('stack')} 表格对照
     <button class="btn small" style="margin-left:auto" onclick="this.closest('.ui-backdrop').remove()">${icon('close')}</button></div>
     <div style="margin:10px 0"><span class="spin"></span> 加载…</div>`;
@@ -7455,8 +7491,8 @@ window.tbCompare = async tid => {
   };
   pop.innerHTML = `
   <div class="ui-pop-title">${icon('stack')} ${esc((d.caption || '表格对照').slice(0, 60))}
-    <button class="btn small" style="margin-left:auto" onclick="this.closest('.ui-backdrop').remove()">${icon('close')}</button></div>
-  <div class="muted" style="font-size:var(--fs-xs);padding:0 4px">${esc(d.paper_title)} · 第 ${d.page_index + 1} 页 · ${d.id}</div>
+    <button class="btn small" style="margin-left:auto" onclick="tbCompareClose()">${icon('close')}</button></div>
+  <div class="muted" style="font-size:var(--fs-xs);padding:0 4px">${esc(d.paper_title)} · 第 ${d.page_index + 1} 页</div>
   ${d.ai_status === 'mismatch' ? `<div class="tb-mis-bar">${icon('warn')} ${esc(d.ai_note || '模型输出与原表不一致')}——请人工修整右侧数据后保存</div>` : ''}
   <div class="tb-cmp">
     <div class="tb-cmp-left">
@@ -7485,9 +7521,9 @@ function tbRenderGrid(grid) {
   const t = $('#tb-edit-grid');
   if (!t) return;
   t.innerHTML = grid.map((row, r) => `
-    <tr>${r === 0 ? `<th class="tb-rowop" title="删除此行" onclick="tbGridDelRow(${r})">✕</th>` : `<td class="tb-rowop" title="删除此行" onclick="tbGridDelRow(${r})">✕</td>`}
+    <tr>${r === 0 ? `<th class="tb-rowop" contenteditable="false" title="删除此行" onclick="tbGridDelRow(${r})">✕</th>` : `<td class="tb-rowop" contenteditable="false" title="删除此行" onclick="tbGridDelRow(${r})">✕</td>`}
     ${row.map((v, c) => r === 0
-      ? `<th class="tb-cel" contenteditable="true" data-r="${r}" data-c="${c}" title="删除此列" ondblclick="tbGridDelCol(${c})">${esc(v ?? '')}<b class="tb-col-x" onclick="event.stopPropagation();tbGridDelCol(${c})">✕</b></th>`
+      ? `<th class="tb-cel"><span contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</span><b class="tb-col-x" title="删除此列" onclick="event.stopPropagation();tbGridDelCol(${c})">✕</b></th>`
       : `<td contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</td>`).join('')}</tr>`).join('');
 }
 window.tbCmpTab = (tab, tid) => {
@@ -7530,7 +7566,7 @@ window.tbGridSave = async (tid, btn) => {
   await withBusy(btn, async () => {
     const r = await api(`/api/tables/${tid}`, {method: 'PATCH', body: JSON.stringify({cells: grid})});
     toast(`已保存（${r.rows} 行 × ${r.cols} 列）——导出 xlsx 用这份整理版`);
-    btn.closest('.ui-backdrop')?.remove();
+    window.tbCompareClose?.();
     loadTables();
   }, '保存失败');
 };

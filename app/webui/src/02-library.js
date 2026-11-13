@@ -5,7 +5,7 @@ async function loadCollections(preset = null) {
   const d = preset || await api('/api/collections');
   state.collections = d.collections;
   state.totalPapers = d.total;
-  state.unassignedCount = d.unassigned || 0;   // 未分库（含失效引用）——侧栏数字自洽
+  state.unassignedCount = d.unassigned || 0;   // 未归类（含失效引用）——侧栏数字自洽
   state.sharedLibs = d.shared_libs || [];     // 他人库中的共享论文
   renderCollections();
 }
@@ -43,9 +43,9 @@ function renderCollections() {
       <span class="col-count">${state.totalPapers ?? 0}</span>
     </div>` +
     roots.map(r => row(r, 0)).join('') +
-    // 未分库 / 他人共享库：让「总数 = 各行相加」自洽（否则读者以为论文丢了）
+    // 未归类 / 他人共享库：让「总数 = 各行相加」自洽（否则读者以为论文丢了）
     (unassigned ? `<div class="col-item ${state.currentCollection === 'none' ? 'on' : ''}" data-id="none">
-      <span class="col-arrow-none"></span><span class="col-name">${icon('inbox')} 未分库</span>
+      <span class="col-arrow-none"></span><span class="col-name">${icon('inbox')} 未归类</span>
       <span class="col-count">${unassigned}</span></div>` : '') +
     sharedLibs.map(l => `<div class="col-item ${state.currentCollection === l.id ? 'on' : ''}" data-id="${l.id}">
       <span class="col-arrow-none"></span><span class="col-name">${icon('folder')} ${esc(l.name)} <span class="muted" style="font-size: var(--fs-xs)">共享</span></span>
