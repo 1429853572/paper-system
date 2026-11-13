@@ -488,6 +488,19 @@ table.list th { color: var(--muted); font-weight: 500; }
 
 /* 跨文献讨论 */
 /* 表格排版：宽表横向滚动（不再挤压列宽）、数字列右对齐+等宽、表头固定、斑马纹 */
+/* 表格工具条：MD/Excel 复制 + 放大只看（悬浮显现；问答气泡/导读/综述/放大层通用） */
+.md-tbl-box { position: relative; }
+.md-tbl-box .tbl-wrap { margin: 0; }
+.md-tbl-bar { position: absolute; top: 6px; right: 6px; z-index: 6; display: flex; gap: 4px;
+              opacity: 0; transition: opacity .15s; }
+.md-tbl-box:hover .md-tbl-bar, .md-tbl-bar:focus-within { opacity: 1; }
+.md-tbl-btn { padding: 2px 8px; font-size: var(--fs-xs); border: 1px solid var(--border);
+              border-radius: var(--r-sm); background: var(--panel); color: var(--text-2);
+              cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.10); }
+.md-tbl-btn:hover { background: var(--tint-primary); color: var(--primary); border-color: var(--primary); }
+/* 放大只看表格：居中弹层，宽表横向滚动 + 表头吸附（覆盖 .ui-pop 基础 max-width:360px） */
+.ui-pop.md-tbl-pop { width: 1200px; max-width: 94vw; max-height: 82vh; overflow: auto; }
+.ui-pop.md-tbl-pop .md-tbl-box:hover .md-tbl-bar, .ui-pop.md-tbl-pop .md-tbl-bar { opacity: 1; }
 .tbl-wrap { overflow-x: auto; margin: 10px 0; border: 1px solid var(--border);
              border-radius: var(--r-md); background: var(--panel); max-width: 100%; }
 .tbl-md { border-collapse: collapse; font-size: var(--fs-sm); width: 100%; min-width: max-content; }

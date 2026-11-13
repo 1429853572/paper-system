@@ -4152,8 +4152,13 @@ function mdLite(text) {
     const th = cells[0].map((c, i) => `<th class="${numCols[i] ? 'num' : ''}">${c}</th>`).join('');
     const tb = cells.slice(1).map(r => '<tr>' + r.map((c, i) =>
       `<td class="${numCols[i] ? 'num' : ''}">${c}</td>`).join('') + '</tr>').join('');
-    const html = '<div class="tbl-wrap"><table class="tbl-md"><thead><tr>' + th + '</tr></thead>' +
-      '<tbody>' + tb + '</tbody></table></div>';
+    const html = '<div class="md-tbl-box">' +
+      '<div class="md-tbl-bar">' +
+      '<button class="md-tbl-btn" data-act="copy-md" title="复制为 Markdown">MD</button>' +
+      '<button class="md-tbl-btn" data-act="copy-tsv" title="复制为表格文本（可直接粘贴进 Excel/Word）">Excel</button>' +
+      '<button class="md-tbl-btn" data-act="expand" title="放大只看此表格">放大</button>' +
+      '</div><div class="tbl-wrap"><table class="tbl-md"><thead><tr>' + th + '</tr></thead>' +
+      '<tbody>' + tb + '</tbody></table></div></div>';
     tables.push(html);
     return pre + `\u0000TBL${tables.length - 1}\u0000`;
   });
@@ -4201,6 +4206,38 @@ function mdLite(text) {
   tables.forEach((t, i) => { res = res.replace(`\u0000TBL${i}\u0000`, t); });
   return linkifyRefs(katexify(res));
 }
+/* ---- 表格工具条：复制（MD / Excel 可粘贴格式）+ 放大只看（居中弹层） ----
+   委托监听：问答气泡/导读/综述/放大层里的表格统一生效 */
+function _tblToMarkdown(tbl) {
+  const rows = [...tbl.querySelectorAll('tr')];
+  const n = rows[0]?.children.length || 0;
+  const lines = rows.map(tr =>
+    '| ' + [...tr.children].map(c => (c.textContent || '').trim().replace(/\|/g, '\\|')).join(' | ') + ' |');
+  if (rows.length > 1) lines.splice(1, 0, '|' + ' --- |'.repeat(n));
+  return lines.join('\n');
+}
+function _tblToTSV(tbl) {
+  return [...tbl.querySelectorAll('tr')]
+    .map(tr => [...tr.children].map(c => (c.textContent || '').trim()).join('\t')).join('\n');
+}
+document.addEventListener('click', async e => {
+  const btn = e.target.closest?.('.md-tbl-btn');
+  if (!btn) return;
+  const box = btn.closest('.md-tbl-box');
+  const tbl = box?.querySelector('table.tbl-md');
+  if (!tbl) return;
+  const act = btn.dataset.act;
+  if (act === 'copy-md') {
+    toast(await copyText(_tblToMarkdown(tbl)) ? '表格已复制为 Markdown' : '复制失败');
+  } else if (act === 'copy-tsv') {
+    toast(await copyText(_tblToTSV(tbl)) ? '表格已复制——可直接粘贴进 Excel/Word' : '复制失败');
+  } else if (act === 'expand') {
+    const {pop, close} = openPop('md-tbl-pop');
+    pop.innerHTML = `<div class="ui-pop-title">${icon('stack')} 表格<button class="btn small" data-x style="margin-left:auto">${icon('close')} 关闭</button></div>`;
+    pop.appendChild(box.cloneNode(true));
+    pop.querySelector('[data-x]').onclick = close;
+  }
+});
 function renderCites(text, evidence) {
   return mdLite(text).replace(/\[(\d{1,3})\]/g, (m, n) => {
     // 按 evidence_id 匹配（校验后的 evidence 数组只剩被引用项，下标 ≠ 编号）
