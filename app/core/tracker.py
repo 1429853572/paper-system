@@ -184,16 +184,46 @@ def fetch_journal_articles(sub: dict, lookback_hours: int) -> list[dict]:
 
 
 def fetch_cited_by(item: dict) -> int | None:
-    """缺被引数时按 DOI 查 S2（顺带拿摘要）；无 DOI 返回 None。"""
+    """缺被引数时：OpenAlex 主源（cited_by_count）→ S2 备源 → None。
+    429/5xx/超时各给一次补试（2s 间隔）；确定性 404 不重试。"""
     if not item.get("doi"):
         return None
-    try:
-        r = _HTTP.get("https://api.semanticscholar.org/graph/v1/paper/DOI:" + item["doi"],
-                      params={"fields": "citationCount"})
-        if r.status_code == 200:
-            return (r.json() or {}).get("citationCount")
-    except httpx.HTTPError:
-        pass
+    doi = item["doi"]
+    for attempt in (1, 2):
+        try:
+            r = _HTTP.get("https://api.openalex.org/works/doi:" + doi)
+            if r.status_code == 200:
+                w = r.json() or {}
+                if w.get("cited_by_count") is not None:
+                    return int(w["cited_by_count"])
+                break                          # OpenAlex 收录但无被引字段 → 不再查 S2
+            if r.status_code == 404:
+                break                          # OpenAlex 未收录 → 试 S2
+            if r.status_code in (429, 500, 502, 503, 504) and attempt == 1:
+                time.sleep(2)
+                continue
+            break
+        except httpx.HTTPError:
+            if attempt == 1:
+                time.sleep(2)
+                continue
+            break
+    for attempt in (1, 2):
+        try:
+            r = _HTTP.get("https://api.semanticscholar.org/graph/v1/paper/DOI:" + doi,
+                          params={"fields": "citationCount"})
+            if r.status_code == 200:
+                c = (r.json() or {}).get("citationCount")
+                return int(c) if c is not None else None
+            if r.status_code in (429, 500, 502, 503, 504) and attempt == 1:
+                time.sleep(2)
+                continue
+            return None
+        except httpx.HTTPError:
+            if attempt == 1:
+                time.sleep(2)
+                continue
+            return None
     return None
 
 

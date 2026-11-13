@@ -165,21 +165,101 @@ def _search_chinaxiv(ctx, query: str, page: int, limit: int) -> list[dict]:
     return items
 
 
+_cnki_slider_streak = 0          # 连续被滑块拦截次数（≥2 视为 cookie 失效）
+
+
+def _drag_slider(pg) -> bool:
+    """检测并拟人化拖动知网滑块（尽力而为）：先快后慢 + 微抖 + 轻微过冲。
+    成功返回 True（页面已过验证）；检测不到滑块或拖动失败返回 False。"""
+    import random
+    handle = pg.query_selector("#nc_1_n1z, .nc_iconfont.btn_slide, span.btn_slide, [id*='nc_1'][style*='block'] .btn")
+    if not handle:
+        # 兜底：页面上任何可见的滑块状小按钮
+        for cand in pg.query_selector_all("span[class*='slide'], div[class*='slide']"):
+            bb = cand.bounding_box()
+            if bb and 30 <= bb["width"] <= 80 and 10 <= bb["height"] <= 60:
+                handle = cand
+                break
+    if not handle:
+        return False
+    hb = handle.bounding_box()
+    if not hb:
+        return False
+    # 滑轨宽度：取父容器，无则按窗口宽估算
+    track_w = 300
+    pel = handle.evaluate_handle("el => el.parentElement").as_element()
+    try:
+        pb = pel.bounding_box() if pel else None
+        if pb and pb["width"] > hb["width"] * 1.5:
+            track_w = pb["width"]
+    except Exception:
+        pass
+    x = hb["x"] + hb["width"] / 2
+    y = hb["y"] + hb["height"] / 2
+    total = track_w - hb["width"] * 0.4 + random.uniform(15, 30)   # 轻微过冲
+    pg.mouse.move(x, y)
+    pg.wait_for_timeout(random.randint(180, 420))                   # 按下前的“犹豫”
+    pg.mouse.down()
+    moved = 0.0
+    while moved < total:
+        remain = total - moved
+        step = min(remain, random.uniform(4, 16) * (0.55 if moved > total * 0.75 else 1.0))
+        moved += step
+        pg.mouse.move(x + moved, y + random.uniform(-1.5, 1.5), steps=1)
+        pg.wait_for_timeout(random.randint(6, 22))
+    pg.wait_for_timeout(random.randint(80, 220))                    # 过冲后的停顿
+    pg.mouse.move(x + total - random.uniform(8, 18), y, steps=4)    # 回落到轨内
+    pg.wait_for_timeout(300)
+    pg.mouse.up()
+    pg.wait_for_timeout(1800)
+    return True
+
+
 def _search_cnki(ctx, query: str, page: int, limit: int) -> list[dict]:
-    """知网 kns8s 检索（浏览器会话，人工过一次滑块后 Cookie 复用）。
+    """知网 kns8s 检索（浏览器会话，Cookie 复用；滑块出现时先尝试拟人化拖动，
+    两次未过则抛错交人工——有头模式人工过一次后 Cookie 继续复用）。
 
     仅做「列表页解析」；下载走 dbname+filename 直链模式（与 jasminum 同思路）。
     """
+    global _cnki_slider_streak
     url = "https://kns.cnki.net/kns8s/defaultresult/index?" + urllib.parse.urlencode(
         {"kw": query, "korder": "TI", "page": page})
-    pg = ctx.new_page()
-    pg.goto(url, wait_until="domcontentloaded", timeout=60000)
-    pg.wait_for_timeout(2500)
-    html = pg.content()
-    if "验证码" in html or "滑块" in html:
-        save_state(ctx)
-        pg.close()
-        raise RuntimeError("知网要求滑块验证码——请在有头模式下人工完成一次后再试")
+    for attempt in (1, 2):
+        pg = ctx.new_page()
+        try:
+            pg.goto(url, wait_until="domcontentloaded", timeout=60000)
+            pg.wait_for_timeout(2500)
+            html = pg.content()
+            if "验证码" not in html and "滑块" not in html:
+                _cnki_slider_streak = 0
+                break
+            # 滑块挑战：先尝试拟人化拖动（尽力而为——知网升级验证则必失效）
+            try:
+                dragged = _drag_slider(pg)
+            except Exception:
+                dragged = False
+            if dragged:
+                pg.wait_for_timeout(1800)
+                html = pg.content()
+                if "验证码" not in html and "滑块" not in html:
+                    _cnki_slider_streak = 0
+                    save_state(ctx)
+                    break
+            if attempt == 1:
+                time.sleep(2)                  # 换页重试一次
+                continue
+            _cnki_slider_streak += 1
+            save_state(ctx)
+            if _cnki_slider_streak >= 2:
+                _cnki_slider_streak = 0
+                try:
+                    os.remove(STATE_FILE)      # 连续两次被拦：cookie 大概率已失效
+                except OSError:
+                    pass
+            raise RuntimeError("知网滑块验证未通过（自动拖动失败）——请在有头模式人工完成一次验证，"
+                               "完成后 Cookie 会自动复用；稍后再试")
+        finally:
+            pg.close()                         # 所有路径都关页（break/continue/raise）
     out = []
     for m in re.finditer(
             r'<a class="fz14" href="[^"]*?dbcode=([A-Z]+)&filename=([0-9A-Za-z_\-]+)"[^>]*>(.*?)</a>',
@@ -309,6 +389,7 @@ class Handler(BaseHTTPRequestHandler):
             out = json.dumps({"browser": os.path.exists(CHROME),
                               "playwright": _playwright_ok(),
                               "cookie_state": has_cookie,
+                              "cnki_slider_streak": _cnki_slider_streak,
                               "sites": list(SEARCHERS)}).encode()
             self._send(200, out, "application/json; charset=utf-8")
             return

@@ -243,8 +243,31 @@ def _title_ratio(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
+def _get_retry(url: str, *, params: dict | None = None, headers: dict | None = None,
+               timeout: int = 15, tries: int = 2) -> httpx.Response:
+    """GET + 瞬态重试：超时/连接错误/429/5xx 各给一次补试（间隔 1.5s×序号）。
+    4xx（404/400 等确定性失败）不重试——校准五源级联本身就是冗余。"""
+    import time as _time
+    last_err: Exception | None = None
+    last_resp: httpx.Response | None = None
+    for i in range(tries):
+        try:
+            r = httpx.get(url, params=params, headers=headers or {}, timeout=timeout)
+            if r.status_code in (429, 500, 502, 503, 504) and i < tries - 1:
+                _time.sleep(1.5 * (i + 1))
+                continue
+            return r
+        except httpx.HTTPError as e:            # 超时/连接重置等瞬态错误
+            last_err = e
+            if i < tries - 1:
+                _time.sleep(1.5 * (i + 1))
+    if last_err:
+        raise last_err
+    return last_resp
+
+
 def _verify_arxiv(arxiv_id: str, title: str) -> dict | None:
-    r = httpx.get(f"https://export.arxiv.org/api/query?id_list={arxiv_id}", timeout=15)
+    r = _get_retry(f"https://export.arxiv.org/api/query?id_list={arxiv_id}")
     if r.status_code != 200:
         return None
     ns = {"a": "http://www.w3.org/2005/Atom"}
@@ -266,10 +289,10 @@ def _verify_arxiv(arxiv_id: str, title: str) -> dict | None:
 def _verify_s2(title: str) -> dict | None:
     """Semantic Scholar 标题精确匹配（带 key）。"""
     from .config import S2_API_KEY
-    r = httpx.get(
+    r = _get_retry(
         "https://api.semanticscholar.org/graph/v1/paper/search/match",
         params={"query": title, "fields": "title,year,venue,authors,externalIds,journal"},
-        headers={"x-api-key": S2_API_KEY} if S2_API_KEY else {}, timeout=15)
+        headers={"x-api-key": S2_API_KEY} if S2_API_KEY else {})
     if r.status_code == 404:
         return None
     if r.status_code != 200:
@@ -290,9 +313,9 @@ def _verify_s2(title: str) -> dict | None:
 
 
 def _verify_crossref(title: str) -> dict | None:
-    r = httpx.get("https://api.crossref.org/works",
-                  params={"query.bibliographic": title, "rows": 1},
-                  headers={"User-Agent": "paper-system/1.0 (mailto:admin@local)"} , timeout=15)
+    r = _get_retry("https://api.crossref.org/works",
+                   params={"query.bibliographic": title, "rows": 1},
+                   headers={"User-Agent": "paper-system/1.0 (mailto:admin@local)"})
     if r.status_code != 200:
         return None
     items = r.json().get("message", {}).get("items", [])
@@ -320,11 +343,11 @@ def _verify_crossref(title: str) -> dict | None:
 
 def _verify_openalex(title: str) -> dict | None:
     """OpenAlex 标题检索（免费无 key；覆盖面大，含 CrossRef 缺收的会议/预印本）。"""
-    r = httpx.get("https://api.openalex.org/works",
-                  params={"search": title, "per-page": 1,
-                          "select": "title,publication_year,authorships,primary_location,"
-                                    "doi,biblio"},
-                  headers={"User-Agent": "paper-system/1.0 (mailto:admin@local)"}, timeout=15)
+    r = _get_retry("https://api.openalex.org/works",
+                   params={"search": title, "per-page": 1,
+                           "select": "title,publication_year,authorships,primary_location,"
+                                     "doi,biblio"},
+                   headers={"User-Agent": "paper-system/1.0 (mailto:admin@local)"})
     if r.status_code != 200:
         return None
     results = r.json().get("results") or []
@@ -351,8 +374,8 @@ def _verify_openalex(title: str) -> dict | None:
 
 def _verify_dblp(title: str) -> dict | None:
     """DBLP 标题检索（计算机科学会议/期刊元数据最权威，CVPR/ICCV 等年份与 venue 可靠）。"""
-    r = httpx.get("https://dblp.org/search/publ/api",
-                  params={"q": title, "h": 1, "format": "json"}, timeout=15)
+    r = _get_retry("https://dblp.org/search/publ/api",
+                   params={"q": title, "h": 1, "format": "json"})
     if r.status_code != 200:
         return None
     hits = ((r.json().get("result") or {}).get("hits") or {}).get("hit") or []
