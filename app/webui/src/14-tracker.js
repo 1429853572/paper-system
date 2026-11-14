@@ -7,11 +7,15 @@ const ARXIV_CAT_PRESETS = ['cs.CV', 'eess.IV', 'cs.GR', 'cs.LG', 'cs.AI', 'cs.CL
 const _TIER_LABEL = {core: '核心', proxy: '相关', eco: '生态'};
 
 /* 已收进条目的实时阶段条：收进 → 入库 → 解析 → 可阅读（SSE 推进自动更新） */
+window.trackerOpenPaper = async pid => {   // openPaper 不切页——同表格页 tbLocate 的已知坑
+  switchPage('reader');
+  await openPaper(pid);
+};
 function trackerStageStrip(it) {
   const coll = collNameOf(it.accepted_to);
   const ps = it.parse_status, pj = (it.parse_job || '').split(':')[0], prog = (it.parse_job || '').split(':')[1] || '';
   const stages = `<span class="badge ok" title="收进：${esc(coll)}">已收进 · ${esc(coll)}</span>`;
-  const openBtn = `<button class="btn small" onclick="openPaper('${it.paper_id}')" title="打开这篇论文">打开</button>`;
+  const openBtn = `<button class="btn small" onclick="trackerOpenPaper('${it.paper_id}')" title="打开这篇论文">打开</button>`;
   const retryBtn = `<button class="btn small" onclick="trackerRetryParse('${it.paper_id}', this)">重试解析</button>`;
   if (ps === 'parsed')
     return `${stages}<span class="badge ok">已解析 ✓</span>${openBtn}`;
@@ -33,8 +37,10 @@ window.trackerRetryParse = async (pid, btn) => {
 };
 
 function trackerTierBadge(tier) {
-  const [label, cls] = {core: ['核心', 'ok'], proxy: ['相关', 'run'], eco: ['生态', 'dim']}[tier] || [tier, 'dim'];
-  return `<span class="badge ${cls}" title="${label}层">${label}</span>`;
+  // 分类用中性 cat 色——此前借 run 进度色，与"进行中"语义冲突
+  const [label, cls] = {core: ['核心', 'cat hi'], proxy: ['相关', 'cat'], eco: ['dim']}[tier] || [tier, 'dim'];
+  const label2 = {core: '核心', proxy: '相关', eco: '生态'}[tier] || tier;
+  return `<span class="badge ${cls}" title="${label2}层">${label2}</span>`;
 }
 
 function trackerCondText(s) {
@@ -81,6 +87,7 @@ function trackerDayLabel(dateStr) {
 function renderTrackerPage() {
   const el = $('#page-tracker');
   el.innerHTML = `
+  <h2 class="page-h" style="margin:0 0 12px">${icon('bolt')} 文献追踪</h2>
   <div class="tk-wrap">
     <div class="tk-rail">
       <div class="tk-rail-head"><b>订阅</b>
@@ -174,7 +181,7 @@ async function loadTracker() {
 
   /* ---- 右栏：工具行 ---- */
   const tierChips = [['', '全部层级'], ...Object.entries(_TIER_LABEL)]
-    .map(([v, label]) => `<span class="chip-btn ${tier === v ? 'on' : ''}" onclick="trackerTierF('${v}')">${label}</span>`).join(' ');
+    .map(([v, label]) => `<button type="button" class="chip-btn ${tier === v ? 'on' : ''}" onclick="trackerTierF('${v}')">${label}</button>`).join(' ');
   toolbar.innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       ${curSub ? `<span class="tk-subtag">${icon('bulb')} ${esc(curSub.name)}
@@ -272,8 +279,9 @@ function trackerItemHtml(it, selMap, st) {
       ${bodyText.length > 110 ? '<b class="tk-abs-toggle" onclick="trackerToggleAbs(this)">展开</b>' : ''}
     </div>`;
   }
+  const fresh = it.status === 'new' && st === 'new';
   return `
-  <div class="card tracker-item" data-iid="${it.id}" style="padding:12px 14px;margin:0 0 10px">
+  <div class="card tracker-item ${fresh ? 'tk-fresh' : ''}" data-iid="${it.id}" style="padding:12px 14px;margin:0 0 10px">
     <div style="display:flex;gap:10px;align-items:flex-start">
       ${ck}
       <div style="flex:1;min-width:0">
@@ -283,7 +291,7 @@ function trackerItemHtml(it, selMap, st) {
           <span class="muted" style="font-size:var(--fs-xs)">${esc(it.published || '')} · ${esc(it.venue || '')}
             · ${esc((it.authors || '').slice(0, 110))}${code}${pdf}</span>
         </div>
-        <div style="font-weight:600;margin-top:4px">${esc(it.title)}</div>
+        <div class="tk-title ${fresh ? '' : 'tk-read'}" style="margin-top:4px">${esc(it.title)}</div>
         ${zh}${body}
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;flex:none">${actions}</div>
@@ -368,7 +376,7 @@ window.trackerEnrich = trackerEnrich;
 function trackerFormHtml(s = null) {
   const cats = s ? (s.categories || '').split(/\s+/).filter(Boolean) : [];
   const chips = ARXIV_CAT_PRESETS.map(c =>
-    `<span class="chip-btn ${cats.includes(c) ? 'on' : ''}" data-cat="${c}"
+    `<button type="button" class="chip-btn ${cats.includes(c) ? 'on' : ''}" data-cat="${c}"
            onclick="trackerToggleCat(this, '${c}')">${c}</span>`).join(' ');
   const freq = s?.frequency_hours || 24;
   const auto = s?.llm_auto || 'core';

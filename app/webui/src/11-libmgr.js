@@ -139,10 +139,10 @@ async function renderCollectionsPage(preset = null) {
   const paperRows = shown.map(p => {
     const s = st[p.id] || {};
     const tj = s.translate_job;
-    const parseBadge = s.parsing ? "<span class=\"badge run\">" + icon('clock', 12) + "解析</span>"
-      : p.parse_status === 'parsed' ? "<span class=\"badge ok\">" + icon('check') + "</span>"
-      : p.parse_status === 'skipped' ? '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">已跳过</span>'
-      : "<span class=\"badge err\">" + icon('close') + "</span>";
+    // 状态统一走全局 parseBadge（此前 else 分支把 pending/排队误显成红色 ✗ 失败）
+    const parseBadge = s.parsing ? '<span class="badge run">' + icon('clock', 12) + '解析</span>'
+      : p.parse_status === 'skipped' ? '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">跳过</span>'
+      : window.parseBadge(p, {short: p.parse_status === 'parsed'});
     const trBadge = s.translating ? `<span class="badge run">${icon('globe')}${tj ? tj.done + '/' + tj.total : ''}</span>`
       : tj?.status === 'done' ? "<span class=\"badge ok\">译" + icon('check') + "</span>"
       : tj?.status === 'failed' ? "<span class=\"badge err\">译" + icon('close') + "</span>" : '<span class="muted">—</span>';

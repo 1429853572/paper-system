@@ -493,8 +493,7 @@ function renderPickList(filter) {
   const el = $('#qa-pick-list');
   if (!el) return;
   const item = p => {
-    const st = p.parse_status !== 'parsed'
-      ? `<span class="badge run">${p.parse_status === 'failed' ? '解析失败' : icon('clock', 12) + "解析中"}</span>` : '';
+    const st = p.parse_status !== 'parsed' ? parseBadge(p) : '';   // 统一出口（failed 红/pending 排队中）
     return `<label class="qa-pick-item ${state.qaPapers.has(p.id) ? 'on' : ''}">
       <input type="checkbox" ${state.qaPapers.has(p.id) ? 'checked' : ''} data-id="${p.id}">
       <span class="qp-title">${esc(p.title || p.id)}</span>

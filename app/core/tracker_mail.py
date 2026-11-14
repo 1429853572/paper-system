@@ -91,7 +91,13 @@ def _digest_html(sub: dict, items: list[dict]) -> str:
     """巡逻日报 HTML：tier 分组 + 中文摘要 + 链接。"""
     order = {"core": 0, "proxy": 1, "eco": 2}
     color = {"core": "#1a7f4b", "proxy": "#8a6d1f", "eco": "#6b7280"}
-    rows = sorted(items, key=lambda x: order.get(x.get("tier"), 3))
+    def _if(x):
+        try:
+            return float((json.loads(x.get("rank") or "{}")).get("impact_factor") or 0)
+        except Exception:  # noqa: BLE001
+            return 0.0
+    # 分层内按影响因子降序（Stork 惯例：好期刊的排前面）
+    rows = sorted(items, key=lambda x: (order.get(x.get("tier"), 3), -_if(x)))
     blocks = []
     for it in rows:
         t = _TIER_LABEL.get(it.get("tier"), it.get("tier"))

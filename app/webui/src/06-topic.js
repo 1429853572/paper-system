@@ -295,9 +295,9 @@ async function runSynthesis(anchor, ids = null) {
   // 费用预估：按历史均摊单价 × 调用数（priced=false 表示没有历史样本，不编造数字）
   const cost = est.cost || {};
   // 金额显示：<1 元保留 3 位（0.08 元不该显示成 0.08 元以外的四位小数），≥1 元两位
-  const yuan = n => (n >= 1 ? n.toFixed(2) : String(Number(n.toFixed(3)))) + ' 元';
+  const yuan = fmtCNY;   // 金额统一出口（修 ¥0.08 元/次 双标记）
   const costLine = (calls) => cost.priced
-    ? `预计费用 <b id="syn-cost">${yuan(cost.per_call * calls)}</b>（按你的历史单价 ¥${yuan(cost.per_call)}/次 × ${calls} 次调用）`
+    ? `预计费用 <b id="syn-cost">${yuan(cost.per_call * calls)}</b>（按你的历史单价 ${yuan(cost.per_call)}/次 × ${calls} 次调用）`
     : '预计调用次数如下；费用按你的历史用量估算（暂无可用样本）';
   const updCalls = () => {
     const tier = pop.querySelector('input[name=syn-tier]:checked')?.value || 'quick';
@@ -677,7 +677,8 @@ function renderDiscover() {
     if (!sel.length) { toast('先勾选要导入的论文'); return; }
     try {
       const d = await api('/api/papers/discover-import', {method: 'POST',
-        body: JSON.stringify({items: sel, collection_id: state.currentCollection || null})});
+        body: JSON.stringify({items: sel, visibility: state.uploadPrivate ? 'private' : 'shared',
+                           collection_id: state.currentCollection || null})});
       const q = d.results.filter(x => x.status === 'queued').length;
       const dup = d.results.filter(x => x.status === 'duplicate').length;
       const nopdf = d.results.filter(x => x.status === 'no_pdf').length;
@@ -733,11 +734,11 @@ async function watchJobs() {
       // 追踪页：收进条目的解析阶段条跟随进度（节流）
       const tpg = $('#page-tracker');
       if (tpg && tpg.style.display !== 'none' && typeof refreshTrackerOnParse === 'function') refreshTrackerOnParse();
-      // 表格工作台：批量整理进度翻牌
-      if (ev.job_type === 'table_tidy') {
-        const tbp = $('#page-tables');
-        if (tbp && tbp.style.display !== 'none') refreshTablesOnTidy();
-      }
+    }
+    // 表格工作台：批量整理进度翻牌（与 parse 平级——嵌在 parse 块内恒假，v1.10.1 曾修后回归，此处为根治位）
+    if (ev.job_type === 'table_tidy') {
+      const tbp = $('#page-tables');
+      if (tbp && tbp.style.display !== 'none') refreshTablesOnTidy();
     }
     // 导读任务完成 → 重拉并重绘气泡（此前只在生成页轮询，切走或超时就看不到结果）
     if (ev.job_type === 'summary' && ['done', 'failed', 'canceled'].includes(ev.status)) {

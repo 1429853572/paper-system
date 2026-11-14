@@ -299,8 +299,6 @@ table.list th { color: var(--muted); font-weight: 500; }
 /* 中屏：收窄侧栏 */
 /* 右栏工具行/子页签：窄视口防文字折行（找相/关、提/问、双语/对照） */
 @media (max-width: 1280px) {
-}
-@media (max-width: 1280px) {
   .r-subtabs button { white-space: nowrap; padding-inline: 8px; }
   :root { --sidebar-w: 240px; }
   .pane-left { width: 44%; }
@@ -308,7 +306,7 @@ table.list th { color: var(--muted); font-weight: 500; }
   .content-view { padding: 12px 14px; }}
 
 /* 小屏：侧栏变抽屉，阅读双栏上下堆叠 */
-@media (max-width: 880px) {
+@media (max-width: 900px) {
   #menu-toggle { display: inline-block; }
   .app { position: relative; }
   .sidebar { position: fixed; z-index: 60; left: 0; top: 0; bottom: 0;
@@ -526,8 +524,9 @@ table.list th { color: var(--muted); font-weight: 500; }
                 font-size: var(--fs-xs); color: var(--text-2); }
 .tk-main { flex: 1; min-width: 0; }
 /* KPI 统计带 */
-.tk-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
-.tk-kpi { border-radius: var(--r-lg); padding: 12px 18px; background: var(--panel); border: 1px solid var(--border); }
+.tk-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.box-card, .tk-kpi { border-radius: var(--r-lg); padding: 12px 18px; background: var(--panel);
+                    border: 1px solid var(--border); }   /* 盒装卡统一基类（KPI/统计/rail 同源） */
 .tk-kpi .n { font-size: 26px; font-weight: 700; line-height: 1.2; }
 .tk-kpi .t { font-size: var(--fs-xs); color: var(--text-2); }
 .tk-kpi.hot { background: var(--tint-primary); border-color: transparent; }
@@ -540,7 +539,7 @@ table.list th { color: var(--muted); font-weight: 500; }
 .tk-chip { padding: 1px 9px; border-radius: var(--r-pill); font-size: var(--fs-xs); border: 1px solid transparent; }
 .tk-chip.kw { background: var(--tint-primary); color: var(--primary); }
 .tk-chip.cat { background: var(--hover); color: var(--text-2); }
-.tk-chip.jr { background: #eef3f8; color: #2b5a8c; }
+.tk-chip.jr { background: var(--tint-info, #eef3f8); color: var(--info-ink, #2b5a8c); }
 .tk-chip.ex { background: transparent; color: var(--muted); border-color: var(--border); text-decoration: line-through; }
 /* 摘要/AI 总结展示：3 行截断可展开 */
 .tk-abs { margin-top: 6px; font-size: var(--fs-sm); line-height: 1.6; color: var(--text-2); }
@@ -562,7 +561,7 @@ table.list th { color: var(--muted); font-weight: 500; }
 .tk-fld input, .tk-fld select { width: 100%; }
 .tk-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
 .tk-inline { display: flex; gap: 6px; align-items: center; white-space: nowrap; font-size: var(--fs-sm); color: var(--text-2); }
-@media (max-width: 900px) { .tk-wrap { flex-direction: column; } .tk-rail { width: 100%; max-height: none; }
+@media (max-width: 900px) { .tk-wrap { flex-direction: column; } .tk-rail { width: 100%; max-height: none; position: static; }   /* 窄屏解除 sticky——钉顶会遮内容流 */
   .tk-grid2 { grid-template-columns: 1fr; } .tk-kpis { grid-template-columns: repeat(2, 1fr); } }
 
 .tk-sug-item { padding: 7px 10px; border-radius: var(--r-sm); cursor: pointer; display: flex; gap: 8px; align-items: center; }
@@ -576,6 +575,7 @@ table.list th { color: var(--muted); font-weight: 500; }
 /* ---- 表格工作台 ---- */
 .tb-wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-bottom: 12px; }
 .tb-card { display: flex; gap: 10px; padding: 10px; }
+.tb-wall .tb-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); }   /* 卡片墙真成卡——摆脱 .card 平面残影 */
 .tb-card.tb-del { opacity: .55; }
 .tb-thumb { width: 150px; height: 100px; flex: none; border: 1px solid var(--border); border-radius: var(--r-sm);
             overflow: hidden; cursor: zoom-in; background: var(--bg-soft); display: flex; align-items: center; justify-content: center; }
@@ -621,7 +621,7 @@ table.list th { color: var(--muted); font-weight: 500; }
 .tb-edit-grid .tb-rowop:hover { color: var(--err); }
 .tb-col-x { position: absolute; top: 0; right: 2px; font-size: 10px; color: var(--muted); cursor: pointer; font-weight: 400; }
 .tb-col-x:hover { color: var(--err); }
-.tb-mis-bar { background: rgba(220, 60, 60, .08); border: 1px solid var(--err); color: var(--err);
+.tb-mis-bar { background: color-mix(in srgb, var(--err) 8%, transparent); border: 1px solid var(--err); color: var(--err);
               border-radius: var(--r-sm); padding: 6px 10px; margin-top: 8px; font-size: var(--fs-sm); }
 @media (max-width: 900px) { .tb-cmp { grid-template-columns: 1fr; } }
 

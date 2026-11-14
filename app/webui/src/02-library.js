@@ -176,15 +176,14 @@ async function loadPapers(append = false) {
   renderPapers();
 }
 function statusBadge(p) {  if (p.deleted_at) return '<span class="badge err">回收站</span>';
-  if (p.parse_status === 'skipped') return '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">已跳过</span>';
-  if (p.parse_status === 'pending') return '<span class="badge run">排队中</span>';
+  // 解析中带 SSE 水合进度（比 parse_status 细）；其余状态统一走 parseBadge（全站唯一出口）
   if (p.parse_status === 'parsing') {
     const pr = (state.parseProg || {})[p.id];
-    return `<span class="badge run">${pr && pr.total ? `提取中 ${pr.done}/${pr.total}` : '解析中'}</span>`;
+    return `<span class="badge run">${pr && pr.total ? `解析中 ${pr.done}/${pr.total}` : '解析中'}</span>`;
   }
-  const m = {parsed: '<span class="badge ok">已解析</span>',
-             failed: '<span class="badge err">失败</span>'};
-  return m[p.parse_status] || '';
+  if (p.parse_status === 'skipped')
+    return '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">跳过</span>';
+  return parseBadge(p);
 }
 function renderPapers() {
   const el = $('#paper-list');
@@ -281,7 +280,7 @@ async function refreshQuotaHint() {
   if (!el) return;
   const q = await api('/api/me/quota').catch(() => null);
   if (!q) { el.textContent = ''; return; }
-  el.textContent = `今日解析 ${q.parse_used}/${q.parse_limit} 篇 · 磁盘 ${fmtGB(q.disk_used_bytes).toFixed(1)}/${q.disk_limit_gb}G`;
+  el.textContent = `今日解析 ${q.parse_used}/${q.parse_limit} 篇 · 磁盘 ${fmtGBs(q.disk_used_bytes)}/${q.disk_limit_gb} GB`;
 }
 $('#upload-arrow')?.addEventListener('click', e => {
   e.stopPropagation();
@@ -299,8 +298,9 @@ $('#url-import-btn').onclick = async () => {
   if (!url) { toast('请输入 URL'); return; }
   try {
     const r = await api('/api/papers/import-url', {method: 'POST', body: JSON.stringify({
-      url, collection_id: state.currentCollection || undefined})});
-    toast(r.status === 'duplicate' ? '该 URL 已在库中' : '已加入解析队列');
+      url, visibility: state.uploadPrivate ? 'private' : 'shared',
+      collection_id: state.currentCollection || undefined})});
+    toast(r.status === 'duplicate' ? (r.linked ? '该 URL 已在库中——已挂进当前文献库' : '该 URL 已在库中') : '已加入解析队列');
     $('#url-import-input').value = '';
     upPop.hidden = true;
     await refreshLib();

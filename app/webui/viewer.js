@@ -39,6 +39,19 @@ async function api(path, opts = {}) {
   }
   return r.json();
 }
+/* 解析状态徽章（全站唯一出口——此前六处各写各的，文库页 pending 还误显 ✗ 失败） */
+window.parseBadge = function (p, opts = {}) {
+  const short = opts.short;   // short=图标为主（窄列）
+  const m = {
+    pending:   ['排队中', 'dim', 'clock'],
+    parsing:   ['解析中', 'run', 'clock'],
+    parsed:    ['已解析', 'ok', 'check'],
+    failed:    ['失败',   'err', 'warn'],
+    skipped:   ['跳过',   'dim', 'clock'],
+  }[p?.parse_status || p] || ['待解析', 'dim', 'clock'];
+  return `<span class="badge ${m[1]}" title="${m[0]}">${short ? '' : m[0] + ' '}${icon(m[2], 12)}</span>`;
+};
+
 /* 相对时间（任务中心用）：刚刚 / N 分钟前 / N 小时前 / N 天前 / 绝对日期 */
 function relTime(s) {
   if (!s) return '';
@@ -295,7 +308,12 @@ function esc(s) {
 /* 内联 onclick 的 JS 字符串参数转义（先 JS 层再属性层；esc() 的 &#39; 会被
    HTML 解码回 ' 再进 JS 解析，两者叠加=互相抵消——含引号文本会让按钮语法错误）。
    顺序：反斜杠→单引号（JS 层）→ & → "（属性层，解码后还原为字面量）。 */
-const fmtGB = b => (b || 0) / 1073741824;   // 字节 → GB（用量展示共用）
+const fmtGB = b => (b || 0) / 1073741824;   // 字节 → GB 数值（配额比较用）
+/* 格式公约（全站唯一出口——此前 GB/G/M 混用、金额 ¥x 元 双标记、无千分位） */
+window.fmtGBs = b => fmtGB(b).toFixed(1) + ' GB';            // 容量展示：统一 1 位小数 + GB
+window.fmtNum = n => Number(n || 0).toLocaleString('zh-CN'); // 计数千分位
+window.fmtCNY = n => '¥' + (n >= 1 ? Number(n).toFixed(2)
+                              : Number(n).toFixed(3).replace(/0+$/, '').replace(/\.$/, ''));  // 金额：≥1 两位、<1 三位去尾零（如 ¥0.08）
 const jsArg = s => String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")
   .replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 
@@ -574,15 +592,14 @@ async function loadPapers(append = false) {
   renderPapers();
 }
 function statusBadge(p) {  if (p.deleted_at) return '<span class="badge err">回收站</span>';
-  if (p.parse_status === 'skipped') return '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">已跳过</span>';
-  if (p.parse_status === 'pending') return '<span class="badge run">排队中</span>';
+  // 解析中带 SSE 水合进度（比 parse_status 细）；其余状态统一走 parseBadge（全站唯一出口）
   if (p.parse_status === 'parsing') {
     const pr = (state.parseProg || {})[p.id];
-    return `<span class="badge run">${pr && pr.total ? `提取中 ${pr.done}/${pr.total}` : '解析中'}</span>`;
+    return `<span class="badge run">${pr && pr.total ? `解析中 ${pr.done}/${pr.total}` : '解析中'}</span>`;
   }
-  const m = {parsed: '<span class="badge ok">已解析</span>',
-             failed: '<span class="badge err">失败</span>'};
-  return m[p.parse_status] || '';
+  if (p.parse_status === 'skipped')
+    return '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">跳过</span>';
+  return parseBadge(p);
 }
 function renderPapers() {
   const el = $('#paper-list');
@@ -679,7 +696,7 @@ async function refreshQuotaHint() {
   if (!el) return;
   const q = await api('/api/me/quota').catch(() => null);
   if (!q) { el.textContent = ''; return; }
-  el.textContent = `今日解析 ${q.parse_used}/${q.parse_limit} 篇 · 磁盘 ${fmtGB(q.disk_used_bytes).toFixed(1)}/${q.disk_limit_gb}G`;
+  el.textContent = `今日解析 ${q.parse_used}/${q.parse_limit} 篇 · 磁盘 ${fmtGBs(q.disk_used_bytes)}/${q.disk_limit_gb} GB`;
 }
 $('#upload-arrow')?.addEventListener('click', e => {
   e.stopPropagation();
@@ -697,8 +714,9 @@ $('#url-import-btn').onclick = async () => {
   if (!url) { toast('请输入 URL'); return; }
   try {
     const r = await api('/api/papers/import-url', {method: 'POST', body: JSON.stringify({
-      url, collection_id: state.currentCollection || undefined})});
-    toast(r.status === 'duplicate' ? '该 URL 已在库中' : '已加入解析队列');
+      url, visibility: state.uploadPrivate ? 'private' : 'shared',
+      collection_id: state.currentCollection || undefined})});
+    toast(r.status === 'duplicate' ? (r.linked ? '该 URL 已在库中——已挂进当前文献库' : '该 URL 已在库中') : '已加入解析队列');
     $('#url-import-input').value = '';
     upPop.hidden = true;
     await refreshLib();
@@ -1820,6 +1838,7 @@ async function renderSynList(all) {
    请勿直接改 app/webui/viewer.js（构建产物）。 */
 const TASK_TYPES = {
   parse:          {label: '解析',    icon: 'search', cls: 'tt-parse'},
+  table_tidy:     {label: '表格整理', icon: 'stack', cls: 'tt-summary'},
   translate:      {label: '翻译',    icon: 'globe2', cls: 'tt-translate'},
   summary:        {label: '导读',    icon: 'brain', cls: 'tt-summary'},
   meta:           {label: '元数据',  icon: 'tag2', cls: 'tt-meta'},
@@ -1901,6 +1920,8 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
   const f = state._taskFilter;
   const stMap = {queued: '排队', pending_gate: '排队等资源', running: '进行中', done: '完成',
                  failed: '失败', canceled: '已取消'};
+  const stBadge = {queued: 'dim', pending_gate: 'dim', running: 'run', done: 'ok',
+                   failed: 'err', canceled: 'dim'};
   /* 单篇任务按论文聚合：同一篇的 解析/导读/元数据/索引回填 合并成一行
      （原先每任务一行 → 同一标题刷屏 N 次，看不出是同一篇） */
   const groupByPaper = jobs => {
@@ -1923,7 +1944,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         ${bar}
         ${j.error ? `<span class="bpanel-err" style="padding:0">${esc(taskErr(j.error))}</span>` : ''}
       </span>
-      <span class="muted" style="font-size: var(--fs-xs);white-space:nowrap">${stMap[j.status] || esc(j.status)}${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
+      <span class="muted" style="font-size: var(--fs-xs);white-space:nowrap"><span class="badge ${stBadge[j.status] || 'dim'}">${stMap[j.status] || esc(j.status)}</span>${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
       ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
       ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
     </div>`;
@@ -1965,6 +1986,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
         <span class="muted">${b.done}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}${b.canceled ? ` · ${b.canceled} 取消` : ''}</span>
         <span class="spacer"></span>
+        ${b.job_type === 'table_tidy' ? '<button class="btn small" data-goto-tables title="去表格工作台查看这批表">去工作台</button>' : ''}
         <span class="muted" style="font-size: var(--fs-xs)">${esc(relTime(b.updated_at))}</span>
         <span class="ic">${icon('chevD')}</span>
       </div>
@@ -2082,6 +2104,8 @@ $('#page-tasks').addEventListener('click', async e => {
     }
     return;
   }
+  const gt = e.target.closest('[data-goto-tables]');
+  if (gt) { e.stopPropagation(); switchPage('tables'); return; }
   const head = e.target.closest('.bpanel-row.head[data-tb]');
   if (head) {
     const bid = head.dataset.tb;
@@ -2400,9 +2424,9 @@ async function runSynthesis(anchor, ids = null) {
   // 费用预估：按历史均摊单价 × 调用数（priced=false 表示没有历史样本，不编造数字）
   const cost = est.cost || {};
   // 金额显示：<1 元保留 3 位（0.08 元不该显示成 0.08 元以外的四位小数），≥1 元两位
-  const yuan = n => (n >= 1 ? n.toFixed(2) : String(Number(n.toFixed(3)))) + ' 元';
+  const yuan = fmtCNY;   // 金额统一出口（修 ¥0.08 元/次 双标记）
   const costLine = (calls) => cost.priced
-    ? `预计费用 <b id="syn-cost">${yuan(cost.per_call * calls)}</b>（按你的历史单价 ¥${yuan(cost.per_call)}/次 × ${calls} 次调用）`
+    ? `预计费用 <b id="syn-cost">${yuan(cost.per_call * calls)}</b>（按你的历史单价 ${yuan(cost.per_call)}/次 × ${calls} 次调用）`
     : '预计调用次数如下；费用按你的历史用量估算（暂无可用样本）';
   const updCalls = () => {
     const tier = pop.querySelector('input[name=syn-tier]:checked')?.value || 'quick';
@@ -2782,7 +2806,8 @@ function renderDiscover() {
     if (!sel.length) { toast('先勾选要导入的论文'); return; }
     try {
       const d = await api('/api/papers/discover-import', {method: 'POST',
-        body: JSON.stringify({items: sel, collection_id: state.currentCollection || null})});
+        body: JSON.stringify({items: sel, visibility: state.uploadPrivate ? 'private' : 'shared',
+                           collection_id: state.currentCollection || null})});
       const q = d.results.filter(x => x.status === 'queued').length;
       const dup = d.results.filter(x => x.status === 'duplicate').length;
       const nopdf = d.results.filter(x => x.status === 'no_pdf').length;
@@ -2838,11 +2863,11 @@ async function watchJobs() {
       // 追踪页：收进条目的解析阶段条跟随进度（节流）
       const tpg = $('#page-tracker');
       if (tpg && tpg.style.display !== 'none' && typeof refreshTrackerOnParse === 'function') refreshTrackerOnParse();
-      // 表格工作台：批量整理进度翻牌
-      if (ev.job_type === 'table_tidy') {
-        const tbp = $('#page-tables');
-        if (tbp && tbp.style.display !== 'none') refreshTablesOnTidy();
-      }
+    }
+    // 表格工作台：批量整理进度翻牌（与 parse 平级——嵌在 parse 块内恒假，v1.10.1 曾修后回归，此处为根治位）
+    if (ev.job_type === 'table_tidy') {
+      const tbp = $('#page-tables');
+      if (tbp && tbp.style.display !== 'none') refreshTablesOnTidy();
     }
     // 导读任务完成 → 重拉并重绘气泡（此前只在生成页轮询，切走或超时就看不到结果）
     if (ev.job_type === 'summary' && ['done', 'failed', 'canceled'].includes(ev.status)) {
@@ -3684,8 +3709,7 @@ function renderPickList(filter) {
   const el = $('#qa-pick-list');
   if (!el) return;
   const item = p => {
-    const st = p.parse_status !== 'parsed'
-      ? `<span class="badge run">${p.parse_status === 'failed' ? '解析失败' : icon('clock', 12) + "解析中"}</span>` : '';
+    const st = p.parse_status !== 'parsed' ? parseBadge(p) : '';   // 统一出口（failed 红/pending 排队中）
     return `<label class="qa-pick-item ${state.qaPapers.has(p.id) ? 'on' : ''}">
       <input type="checkbox" ${state.qaPapers.has(p.id) ? 'checked' : ''} data-id="${p.id}">
       <span class="qp-title">${esc(p.title || p.id)}</span>
@@ -4481,9 +4505,9 @@ async function renderMeQuota() {
     </div>
     <div class="set-card">
       <div class="set-head">额度上限</div>
-      <div style="font-size: var(--fs-sm)">今日解析 <b>${q.parse_used}</b> / ${q.parse_limit} 篇${pPct >= 80 ? ' <span class="badge err">接近上限</span>' : ''}</div>
+      <div style="font-size: var(--fs-sm)">今日解析 <b>${q.parse_used}</b> / ${q.parse_limit} 篇${pPct >= 80 ? ' <span class="badge run">接近上限</span>' : ''}</div>
       ${bar(pPct, 80)}
-      <div style="font-size: var(--fs-sm);margin-top:12px">磁盘已用 <b>${usedGb.toFixed(2)}</b> / ${q.disk_limit_gb} GB${dPct >= 90 ? ' <span class="badge err">空间紧张</span>' : ''}</div>
+      <div style="font-size: var(--fs-sm);margin-top:12px">磁盘已用 <b>${fmtGBs(q.disk_used_bytes)}</b> / ${q.disk_limit_gb} GB${dPct >= 90 ? ' <span class="badge err">空间紧张</span>' : ''}</div>
       ${bar(dPct, 90)}
       <div class="muted" style="font-size: var(--fs-xs);margin-top:10px">${q.month_calls || 0} 次调用（本月）</div>
     </div>`;
@@ -4585,7 +4609,7 @@ async function renderAdminZone() {
             <td><b>${esc(u.username)}</b>${u.role === 'admin' ? ' <span class="muted" style="font-size: var(--fs-xs)">admin</span>' : ''}</td>
             <td>${stateBadge(u)}</td>
             <td class="num">${u.papers || 0}</td>
-            <td class="num">${fmtGB(u.disk_used).toFixed(2)}G</td>
+            <td class="num">${fmtGBs(u.disk_used)}</td>
             <td class="num">¥${Number(u.month_cost || 0).toFixed(2)}</td>
             <td>${quotaSummary(ov)}</td>
             <td class="row-actions">
@@ -5120,10 +5144,10 @@ async function renderCollectionsPage(preset = null) {
   const paperRows = shown.map(p => {
     const s = st[p.id] || {};
     const tj = s.translate_job;
-    const parseBadge = s.parsing ? "<span class=\"badge run\">" + icon('clock', 12) + "解析</span>"
-      : p.parse_status === 'parsed' ? "<span class=\"badge ok\">" + icon('check') + "</span>"
-      : p.parse_status === 'skipped' ? '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">已跳过</span>'
-      : "<span class=\"badge err\">" + icon('close') + "</span>";
+    // 状态统一走全局 parseBadge（此前 else 分支把 pending/排队误显成红色 ✗ 失败）
+    const parseBadge = s.parsing ? '<span class="badge run">' + icon('clock', 12) + '解析</span>'
+      : p.parse_status === 'skipped' ? '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">跳过</span>'
+      : window.parseBadge(p, {short: p.parse_status === 'parsed'});
     const trBadge = s.translating ? `<span class="badge run">${icon('globe')}${tj ? tj.done + '/' + tj.total : ''}</span>`
       : tj?.status === 'done' ? "<span class=\"badge ok\">译" + icon('check') + "</span>"
       : tj?.status === 'failed' ? "<span class=\"badge err\">译" + icon('close') + "</span>" : '<span class="muted">—</span>';
@@ -6439,6 +6463,10 @@ const CMD_PAGES = [
   {label: '文献追踪', hint: '页面', kw: 'tracker 追踪 订阅 巡逻 收件箱', run: () => switchPage('tracker')},
   {label: '表格工作台', hint: '页面', kw: 'tables 表格 收割 整理 导出 xlsx', run: () => switchPage('tables')},
   {label: '管理后台', hint: '页面 · admin', kw: 'admin 管理 成员 限额 邮件', run: () => switchPage('admin')},
+  {label: '新建追踪订阅', hint: '动作', kw: 'tracker 订阅 subscribe 关键词 巡逻 新建', run: () => { switchPage('tracker'); setTimeout(() => window.trackerNew?.(), 200); }},
+  {label: '表格收表', hint: '动作', kw: 'tables 收表 harvest 收割', run: () => { switchPage('tables'); setTimeout(() => window.tbHarvestOpen?.(), 200); }},
+  {label: '上传 PDF（表格链）', hint: '动作', kw: 'tables upload 上传 解析 收表', run: () => { switchPage('tables'); setTimeout(() => window.tbUploadOpen?.(), 200); }},
+  {label: '打开论文讨论区', hint: '动作', kw: 'discuss 讨论 评论 留言', run: () => { switchPage('reader'); setTimeout(() => { if (window.__state?.current?.id) document.querySelector('#discuss-open')?.click(); else toast('先在左侧打开一篇论文'); }, 300); }},
   {label: '回收站', hint: '页面', kw: 'trash 回收 删除', run: () => switchPage('trash')},
   {label: '设置', hint: '页面', kw: 'settings 设置 key 密钥', run: () => switchPage('settings')},
   {label: '我的用量', hint: '页面', kw: 'usage 用量 配额 磁盘 token', run: () => { switchPage('settings'); setTimeout(() => renderSettings('usage'), 120); }},
@@ -6634,11 +6662,15 @@ const ARXIV_CAT_PRESETS = ['cs.CV', 'eess.IV', 'cs.GR', 'cs.LG', 'cs.AI', 'cs.CL
 const _TIER_LABEL = {core: '核心', proxy: '相关', eco: '生态'};
 
 /* 已收进条目的实时阶段条：收进 → 入库 → 解析 → 可阅读（SSE 推进自动更新） */
+window.trackerOpenPaper = async pid => {   // openPaper 不切页——同表格页 tbLocate 的已知坑
+  switchPage('reader');
+  await openPaper(pid);
+};
 function trackerStageStrip(it) {
   const coll = collNameOf(it.accepted_to);
   const ps = it.parse_status, pj = (it.parse_job || '').split(':')[0], prog = (it.parse_job || '').split(':')[1] || '';
   const stages = `<span class="badge ok" title="收进：${esc(coll)}">已收进 · ${esc(coll)}</span>`;
-  const openBtn = `<button class="btn small" onclick="openPaper('${it.paper_id}')" title="打开这篇论文">打开</button>`;
+  const openBtn = `<button class="btn small" onclick="trackerOpenPaper('${it.paper_id}')" title="打开这篇论文">打开</button>`;
   const retryBtn = `<button class="btn small" onclick="trackerRetryParse('${it.paper_id}', this)">重试解析</button>`;
   if (ps === 'parsed')
     return `${stages}<span class="badge ok">已解析 ✓</span>${openBtn}`;
@@ -6660,8 +6692,10 @@ window.trackerRetryParse = async (pid, btn) => {
 };
 
 function trackerTierBadge(tier) {
-  const [label, cls] = {core: ['核心', 'ok'], proxy: ['相关', 'run'], eco: ['生态', 'dim']}[tier] || [tier, 'dim'];
-  return `<span class="badge ${cls}" title="${label}层">${label}</span>`;
+  // 分类用中性 cat 色——此前借 run 进度色，与"进行中"语义冲突
+  const [label, cls] = {core: ['核心', 'cat hi'], proxy: ['相关', 'cat'], eco: ['dim']}[tier] || [tier, 'dim'];
+  const label2 = {core: '核心', proxy: '相关', eco: '生态'}[tier] || tier;
+  return `<span class="badge ${cls}" title="${label2}层">${label2}</span>`;
 }
 
 function trackerCondText(s) {
@@ -6708,6 +6742,7 @@ function trackerDayLabel(dateStr) {
 function renderTrackerPage() {
   const el = $('#page-tracker');
   el.innerHTML = `
+  <h2 class="page-h" style="margin:0 0 12px">${icon('bolt')} 文献追踪</h2>
   <div class="tk-wrap">
     <div class="tk-rail">
       <div class="tk-rail-head"><b>订阅</b>
@@ -6801,7 +6836,7 @@ async function loadTracker() {
 
   /* ---- 右栏：工具行 ---- */
   const tierChips = [['', '全部层级'], ...Object.entries(_TIER_LABEL)]
-    .map(([v, label]) => `<span class="chip-btn ${tier === v ? 'on' : ''}" onclick="trackerTierF('${v}')">${label}</span>`).join(' ');
+    .map(([v, label]) => `<button type="button" class="chip-btn ${tier === v ? 'on' : ''}" onclick="trackerTierF('${v}')">${label}</button>`).join(' ');
   toolbar.innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       ${curSub ? `<span class="tk-subtag">${icon('bulb')} ${esc(curSub.name)}
@@ -6899,8 +6934,9 @@ function trackerItemHtml(it, selMap, st) {
       ${bodyText.length > 110 ? '<b class="tk-abs-toggle" onclick="trackerToggleAbs(this)">展开</b>' : ''}
     </div>`;
   }
+  const fresh = it.status === 'new' && st === 'new';
   return `
-  <div class="card tracker-item" data-iid="${it.id}" style="padding:12px 14px;margin:0 0 10px">
+  <div class="card tracker-item ${fresh ? 'tk-fresh' : ''}" data-iid="${it.id}" style="padding:12px 14px;margin:0 0 10px">
     <div style="display:flex;gap:10px;align-items:flex-start">
       ${ck}
       <div style="flex:1;min-width:0">
@@ -6910,7 +6946,7 @@ function trackerItemHtml(it, selMap, st) {
           <span class="muted" style="font-size:var(--fs-xs)">${esc(it.published || '')} · ${esc(it.venue || '')}
             · ${esc((it.authors || '').slice(0, 110))}${code}${pdf}</span>
         </div>
-        <div style="font-weight:600;margin-top:4px">${esc(it.title)}</div>
+        <div class="tk-title ${fresh ? '' : 'tk-read'}" style="margin-top:4px">${esc(it.title)}</div>
         ${zh}${body}
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;flex:none">${actions}</div>
@@ -6995,7 +7031,7 @@ window.trackerEnrich = trackerEnrich;
 function trackerFormHtml(s = null) {
   const cats = s ? (s.categories || '').split(/\s+/).filter(Boolean) : [];
   const chips = ARXIV_CAT_PRESETS.map(c =>
-    `<span class="chip-btn ${cats.includes(c) ? 'on' : ''}" data-cat="${c}"
+    `<button type="button" class="chip-btn ${cats.includes(c) ? 'on' : ''}" data-cat="${c}"
            onclick="trackerToggleCat(this, '${c}')">${c}</span>`).join(' ');
   const freq = s?.frequency_hours || 24;
   const auto = s?.llm_auto || 'core';
@@ -7187,6 +7223,7 @@ function tbStatusBadge(st) {
 function renderTablesPage() {
   const el = $('#page-tables');
   el.innerHTML = `
+  <h2 class="page-h" style="margin:0 0 12px">${icon('stack')} 表格工作台</h2>
   <div class="tk-wrap">
     <div class="tk-rail">
       <div class="tk-rail-head"><b>论文</b>
@@ -7202,6 +7239,8 @@ function renderTablesPage() {
       <div id="tb-stream"></div>
     </div>
   </div>`;
+  $('#tb-rail-list') && ($('#tb-rail-list').innerHTML = '<div class="muted" style="padding:8px"><span class="spin"></span> 加载中…</div>');
+  $('#tb-stream') && ($('#tb-stream').innerHTML = '<div class="muted" style="padding:20px 0"><span class="spin"></span> 加载表格…</div>');
   loadTables();
 }
 window.renderTablesPage = renderTablesPage;
@@ -7266,7 +7305,7 @@ async function loadTables() {
 
   /* ---- 工具栏：筛选 + 批量 ---- */
   const chips = [['active', '未剔除'], ['pending', '待取舍'], ['kept', '已保留'], ['deleted', '已剔除'], ['all', '全部']]
-    .map(([v, l]) => `<span class="chip-btn ${review === v ? 'on' : ''}" onclick="tbReviewF('${v}')">${l}</span>`).join(' ');
+    .map(([v, l]) => `<button type="button" class="chip-btn ${review === v ? 'on' : ''}" onclick="tbReviewF('${v}')">${l}</button>`).join(' ');
   const selN = (state._tbSel || new Set()).size;
   toolbar.innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
@@ -7500,7 +7539,18 @@ window.tbBatchReview = async (btn, rv) => {
   await withBusy(btn, async () => {
     await api('/api/tables/batch-review', {method: 'POST', body: JSON.stringify({ids, review: rv})});
     state._tbSel = new Set();
-    toast(`已${verb} ${ids.length} 张`);
+    if (rv === 'deleted') {
+      // 破坏性批量操作给撤销路（Eleken/PatternFly 惯例：确认+已删 N 条—撤销）
+      toast(`已剔除 ${ids.length} 张`, 0, {label: '撤销', onClick: async () => {
+        try {
+          await api('/api/tables/batch-review', {method: 'POST', body: JSON.stringify({ids, review: 'pending'})});
+          toast('已恢复');
+        } catch (e) { toast(friendlyError(e, '恢复失败')); }
+        loadTables();
+      }});
+    } else {
+      toast(`已${verb} ${ids.length} 张`);
+    }
     loadTables();
   }, '操作失败');
 };
@@ -7597,9 +7647,9 @@ async function tbCmpRender() {
           ${tbStatusBadge(it.ai_status)}${it.review === 'kept' ? '<span class="badge ok">保留</span>' : ''}${it.review === 'deleted' ? '<span class="badge dim">已剔除</span>' : ''}</div>
       </div>
       <span class="tbws-count">${_tbCmp.idx + 1} / ${_tbCmp.items.length}</span>
-      <span class="chip-btn ${_tbCmp.layout === 'both' ? 'on' : ''}" onclick="tbCmpLayout('both')">并排</span>
-      <span class="chip-btn ${_tbCmp.layout === 'img' ? 'on' : ''}" onclick="tbCmpLayout('img')">仅截图</span>
-      <span class="chip-btn ${_tbCmp.layout === 'grid' ? 'on' : ''}" onclick="tbCmpLayout('grid')">仅表格</span>
+      <button type="button" class="chip-btn ${_tbCmp.layout === 'both' ? 'on' : ''}" onclick="tbCmpLayout('both')">并排</button>
+      <button type="button" class="chip-btn ${_tbCmp.layout === 'img' ? 'on' : ''}" onclick="tbCmpLayout('img')">仅截图</button>
+      <button type="button" class="chip-btn ${_tbCmp.layout === 'grid' ? 'on' : ''}" onclick="tbCmpLayout('grid')">仅表格</button>
       <button class="btn small" onclick="tbCompareClose()" title="关闭（Esc）">${icon('close')}</button>
     </div>
     ${d.ai_status === 'mismatch' ? `<div class="tb-mis-bar">${icon('warn')} ${esc(d.ai_note || '模型输出与原表不一致')}——人工修整后保存即转为已整理</div>` : ''}
@@ -7612,8 +7662,8 @@ async function tbCmpRender() {
       </div>
       <div class="tbws-grid">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-          <span class="chip-btn ${_tbCompareTab === 'ai' ? 'on' : ''}" onclick="tbCmpTab('ai')">AI 整理${d.ai_cells ? '' : '（未整理）'}</span>
-          <span class="chip-btn ${_tbCompareTab === 'orig' ? 'on' : ''}" onclick="tbCmpTab('orig')">原始提取</span>
+          <button type="button" class="chip-btn ${_tbCompareTab === 'ai' ? 'on' : ''}" onclick="tbCmpTab('ai')">AI 整理${d.ai_cells ? '' : '（未整理）'}</button>
+          <button type="button" class="chip-btn ${_tbCompareTab === 'orig' ? 'on' : ''}" onclick="tbCmpTab('orig')">原始提取</button>
           <span style="flex:1"></span>
           <button class="btn small" onclick="tbGridAddRow()">+行</button>
           <button class="btn small" onclick="tbGridAddCol()">+列</button>
@@ -7637,7 +7687,33 @@ async function tbCmpRender() {
   </div>`;
   tbRenderGrid(window._tbGrid);
   // 网格任何编辑 → dirty（翻页/关闭时自动保存）
-  $('#tb-edit-grid')?.addEventListener('input', () => { _tbCmp.dirty = true; });
+  const grid = $('#tb-edit-grid');
+  grid?.addEventListener('input', () => { _tbCmp.dirty = true; });
+  // 键盘惯例（Excel/Airtable）：Enter=提交并下移 / Shift+Enter=上移 / Esc=还原进入编辑前的值
+  grid?.addEventListener('keydown', e => {
+    const td = e.target.closest?.('[contenteditable="true"][data-r]');
+    if (!td) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      td.textContent = _tbCellBefore(td) ?? td.textContent;   // 还原进入编辑时快照
+      td.blur(); _tbCmp.dirty = true;
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      focusCell(+td.dataset.r + 1, +td.dataset.c);           // 提交（contenteditable 已实时）并下移
+    } else if (e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault();
+      focusCell(+td.dataset.r - 1, +td.dataset.c);
+    }
+  });
+  grid?.addEventListener('focusin', e => {                   // 进入编辑快照（Esc 还原用）
+    const td = e.target.closest?.('[contenteditable="true"][data-r]');
+    if (td) td._before = td.textContent;
+  });
+  function _tbCellBefore(td) { return td._before; }
+  function focusCell(r, c) {
+    const next = grid.querySelector(`[contenteditable="true"][data-r="${Math.max(0, r)}"][data-c="${Math.max(0, c)}"]`);
+    if (next) next.focus();
+  }
 }
 window.tbCmpLayout = mode => { _tbCmp.layout = mode; tbCmpRender(); };
 window.tbCmpTab = tab => { if (_tbCmp.dirty) tbCmpAutoSave(); _tbCompareTab = tab; tbCmpRender(); };

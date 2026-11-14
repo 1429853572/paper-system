@@ -3,6 +3,7 @@
    请勿直接改 app/webui/viewer.js（构建产物）。 */
 const TASK_TYPES = {
   parse:          {label: '解析',    icon: 'search', cls: 'tt-parse'},
+  table_tidy:     {label: '表格整理', icon: 'stack', cls: 'tt-summary'},
   translate:      {label: '翻译',    icon: 'globe2', cls: 'tt-translate'},
   summary:        {label: '导读',    icon: 'brain', cls: 'tt-summary'},
   meta:           {label: '元数据',  icon: 'tag2', cls: 'tt-meta'},
@@ -84,6 +85,8 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
   const f = state._taskFilter;
   const stMap = {queued: '排队', pending_gate: '排队等资源', running: '进行中', done: '完成',
                  failed: '失败', canceled: '已取消'};
+  const stBadge = {queued: 'dim', pending_gate: 'dim', running: 'run', done: 'ok',
+                   failed: 'err', canceled: 'dim'};
   /* 单篇任务按论文聚合：同一篇的 解析/导读/元数据/索引回填 合并成一行
      （原先每任务一行 → 同一标题刷屏 N 次，看不出是同一篇） */
   const groupByPaper = jobs => {
@@ -106,7 +109,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         ${bar}
         ${j.error ? `<span class="bpanel-err" style="padding:0">${esc(taskErr(j.error))}</span>` : ''}
       </span>
-      <span class="muted" style="font-size: var(--fs-xs);white-space:nowrap">${stMap[j.status] || esc(j.status)}${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
+      <span class="muted" style="font-size: var(--fs-xs);white-space:nowrap"><span class="badge ${stBadge[j.status] || 'dim'}">${stMap[j.status] || esc(j.status)}</span>${j.progress_total > 1 ? ` ${j.progress_done}/${j.progress_total}` : ''}</span>
       ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
       ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
     </div>`;
@@ -148,6 +151,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
         <span class="muted">${b.done}/${b.total}${b.failed ? ` · <span class="berr">${b.failed} 失败</span>` : ''}${b.canceled ? ` · ${b.canceled} 取消` : ''}</span>
         <span class="spacer"></span>
+        ${b.job_type === 'table_tidy' ? '<button class="btn small" data-goto-tables title="去表格工作台查看这批表">去工作台</button>' : ''}
         <span class="muted" style="font-size: var(--fs-xs)">${esc(relTime(b.updated_at))}</span>
         <span class="ic">${icon('chevD')}</span>
       </div>
@@ -265,6 +269,8 @@ $('#page-tasks').addEventListener('click', async e => {
     }
     return;
   }
+  const gt = e.target.closest('[data-goto-tables]');
+  if (gt) { e.stopPropagation(); switchPage('tables'); return; }
   const head = e.target.closest('.bpanel-row.head[data-tb]');
   if (head) {
     const bid = head.dataset.tb;

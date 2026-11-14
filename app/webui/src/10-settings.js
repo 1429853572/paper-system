@@ -137,9 +137,9 @@ async function renderMeQuota() {
     </div>
     <div class="set-card">
       <div class="set-head">额度上限</div>
-      <div style="font-size: var(--fs-sm)">今日解析 <b>${q.parse_used}</b> / ${q.parse_limit} 篇${pPct >= 80 ? ' <span class="badge err">接近上限</span>' : ''}</div>
+      <div style="font-size: var(--fs-sm)">今日解析 <b>${q.parse_used}</b> / ${q.parse_limit} 篇${pPct >= 80 ? ' <span class="badge run">接近上限</span>' : ''}</div>
       ${bar(pPct, 80)}
-      <div style="font-size: var(--fs-sm);margin-top:12px">磁盘已用 <b>${usedGb.toFixed(2)}</b> / ${q.disk_limit_gb} GB${dPct >= 90 ? ' <span class="badge err">空间紧张</span>' : ''}</div>
+      <div style="font-size: var(--fs-sm);margin-top:12px">磁盘已用 <b>${fmtGBs(q.disk_used_bytes)}</b> / ${q.disk_limit_gb} GB${dPct >= 90 ? ' <span class="badge err">空间紧张</span>' : ''}</div>
       ${bar(dPct, 90)}
       <div class="muted" style="font-size: var(--fs-xs);margin-top:10px">${q.month_calls || 0} 次调用（本月）</div>
     </div>`;
@@ -241,7 +241,7 @@ async function renderAdminZone() {
             <td><b>${esc(u.username)}</b>${u.role === 'admin' ? ' <span class="muted" style="font-size: var(--fs-xs)">admin</span>' : ''}</td>
             <td>${stateBadge(u)}</td>
             <td class="num">${u.papers || 0}</td>
-            <td class="num">${fmtGB(u.disk_used).toFixed(2)}G</td>
+            <td class="num">${fmtGBs(u.disk_used)}</td>
             <td class="num">¥${Number(u.month_cost || 0).toFixed(2)}</td>
             <td>${quotaSummary(ov)}</td>
             <td class="row-actions">

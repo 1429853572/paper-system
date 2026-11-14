@@ -188,7 +188,7 @@ ok('综述按钮存在（未解析完时禁用）',
   const callsTxt = (doc.querySelector('#syn-calls') || {}).textContent || '';
   ok('弹层显示预计调用数', callsTxt.trim() === '4', 'calls=' + callsTxt);
   const costTxt = (doc.querySelector('#syn-cost') || {}).textContent || '';
-  ok('弹层显示费用预估金额', /0\.08\s*元/.test(costTxt), 'cost=' + costTxt);
+  ok('弹层显示费用预估金额', /¥0\.08(?!\d)/.test(costTxt), 'cost=' + costTxt);
   // 切档位 → 调用数与费用同步更新
   const std = [...doc.querySelectorAll('input[name=syn-tier]')].find(x => x.value === 'standard');
   if (std) {
@@ -198,7 +198,7 @@ ok('综述按钮存在（未解析完时禁用）',
     const c2 = (doc.querySelector('#syn-calls') || {}).textContent || '';
     const m2 = (doc.querySelector('#syn-cost') || {}).textContent || '';
     ok('切篇幅档 → 调用数同步更新（4→12）', c2.trim() === '12', 'calls=' + c2);
-    ok('切篇幅档 → 费用同步更新', /0\.24\s*元/.test(m2), 'cost=' + m2);
+    ok('切篇幅档 → 费用同步更新', /¥0\.24(?!\d)/.test(m2), 'cost=' + m2);
   }
   doc.querySelector('.syn-launch [data-cancel]')?.click();
 }

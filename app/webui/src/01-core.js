@@ -34,6 +34,19 @@ async function api(path, opts = {}) {
   }
   return r.json();
 }
+/* 解析状态徽章（全站唯一出口——此前六处各写各的，文库页 pending 还误显 ✗ 失败） */
+window.parseBadge = function (p, opts = {}) {
+  const short = opts.short;   // short=图标为主（窄列）
+  const m = {
+    pending:   ['排队中', 'dim', 'clock'],
+    parsing:   ['解析中', 'run', 'clock'],
+    parsed:    ['已解析', 'ok', 'check'],
+    failed:    ['失败',   'err', 'warn'],
+    skipped:   ['跳过',   'dim', 'clock'],
+  }[p?.parse_status || p] || ['待解析', 'dim', 'clock'];
+  return `<span class="badge ${m[1]}" title="${m[0]}">${short ? '' : m[0] + ' '}${icon(m[2], 12)}</span>`;
+};
+
 /* 相对时间（任务中心用）：刚刚 / N 分钟前 / N 小时前 / N 天前 / 绝对日期 */
 function relTime(s) {
   if (!s) return '';
@@ -290,7 +303,12 @@ function esc(s) {
 /* 内联 onclick 的 JS 字符串参数转义（先 JS 层再属性层；esc() 的 &#39; 会被
    HTML 解码回 ' 再进 JS 解析，两者叠加=互相抵消——含引号文本会让按钮语法错误）。
    顺序：反斜杠→单引号（JS 层）→ & → "（属性层，解码后还原为字面量）。 */
-const fmtGB = b => (b || 0) / 1073741824;   // 字节 → GB（用量展示共用）
+const fmtGB = b => (b || 0) / 1073741824;   // 字节 → GB 数值（配额比较用）
+/* 格式公约（全站唯一出口——此前 GB/G/M 混用、金额 ¥x 元 双标记、无千分位） */
+window.fmtGBs = b => fmtGB(b).toFixed(1) + ' GB';            // 容量展示：统一 1 位小数 + GB
+window.fmtNum = n => Number(n || 0).toLocaleString('zh-CN'); // 计数千分位
+window.fmtCNY = n => '¥' + (n >= 1 ? Number(n).toFixed(2)
+                              : Number(n).toFixed(3).replace(/0+$/, '').replace(/\.$/, ''));  // 金额：≥1 两位、<1 三位去尾零（如 ¥0.08）
 const jsArg = s => String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")
   .replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 

@@ -69,7 +69,13 @@ def import_paper_from_url(user_id: int, url: str, *, visibility: str = "shared",
     file_hash = "url:" + ingest.sha256_bytes(url.encode())
     exist = db.one("SELECT id FROM papers WHERE file_hash=? AND deleted_at IS NULL", (file_hash,))
     if exist:
-        return {"paper_id": exist["id"], "status": "duplicate", "stored": False, "pages": 0}
+        # dup 也挂目标库（与上传/标识符口径一致——此前提前 return 导致"导了却不在库里"）
+        linked = False
+        if collection_id:
+            attach_to_collection(exist["id"], collection_id)
+            linked = True
+        return {"paper_id": exist["id"], "status": "duplicate", "stored": False, "pages": 0,
+                "linked": linked}
 
     data, _ct = fetch_remote(url, timeout=download_timeout)
     stored = False

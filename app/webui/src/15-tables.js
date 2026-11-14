@@ -17,6 +17,7 @@ function tbStatusBadge(st) {
 function renderTablesPage() {
   const el = $('#page-tables');
   el.innerHTML = `
+  <h2 class="page-h" style="margin:0 0 12px">${icon('stack')} 表格工作台</h2>
   <div class="tk-wrap">
     <div class="tk-rail">
       <div class="tk-rail-head"><b>论文</b>
@@ -32,6 +33,8 @@ function renderTablesPage() {
       <div id="tb-stream"></div>
     </div>
   </div>`;
+  $('#tb-rail-list') && ($('#tb-rail-list').innerHTML = '<div class="muted" style="padding:8px"><span class="spin"></span> 加载中…</div>');
+  $('#tb-stream') && ($('#tb-stream').innerHTML = '<div class="muted" style="padding:20px 0"><span class="spin"></span> 加载表格…</div>');
   loadTables();
 }
 window.renderTablesPage = renderTablesPage;
@@ -96,7 +99,7 @@ async function loadTables() {
 
   /* ---- 工具栏：筛选 + 批量 ---- */
   const chips = [['active', '未剔除'], ['pending', '待取舍'], ['kept', '已保留'], ['deleted', '已剔除'], ['all', '全部']]
-    .map(([v, l]) => `<span class="chip-btn ${review === v ? 'on' : ''}" onclick="tbReviewF('${v}')">${l}</span>`).join(' ');
+    .map(([v, l]) => `<button type="button" class="chip-btn ${review === v ? 'on' : ''}" onclick="tbReviewF('${v}')">${l}</button>`).join(' ');
   const selN = (state._tbSel || new Set()).size;
   toolbar.innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
@@ -330,7 +333,18 @@ window.tbBatchReview = async (btn, rv) => {
   await withBusy(btn, async () => {
     await api('/api/tables/batch-review', {method: 'POST', body: JSON.stringify({ids, review: rv})});
     state._tbSel = new Set();
-    toast(`已${verb} ${ids.length} 张`);
+    if (rv === 'deleted') {
+      // 破坏性批量操作给撤销路（Eleken/PatternFly 惯例：确认+已删 N 条—撤销）
+      toast(`已剔除 ${ids.length} 张`, 0, {label: '撤销', onClick: async () => {
+        try {
+          await api('/api/tables/batch-review', {method: 'POST', body: JSON.stringify({ids, review: 'pending'})});
+          toast('已恢复');
+        } catch (e) { toast(friendlyError(e, '恢复失败')); }
+        loadTables();
+      }});
+    } else {
+      toast(`已${verb} ${ids.length} 张`);
+    }
     loadTables();
   }, '操作失败');
 };
@@ -427,9 +441,9 @@ async function tbCmpRender() {
           ${tbStatusBadge(it.ai_status)}${it.review === 'kept' ? '<span class="badge ok">保留</span>' : ''}${it.review === 'deleted' ? '<span class="badge dim">已剔除</span>' : ''}</div>
       </div>
       <span class="tbws-count">${_tbCmp.idx + 1} / ${_tbCmp.items.length}</span>
-      <span class="chip-btn ${_tbCmp.layout === 'both' ? 'on' : ''}" onclick="tbCmpLayout('both')">并排</span>
-      <span class="chip-btn ${_tbCmp.layout === 'img' ? 'on' : ''}" onclick="tbCmpLayout('img')">仅截图</span>
-      <span class="chip-btn ${_tbCmp.layout === 'grid' ? 'on' : ''}" onclick="tbCmpLayout('grid')">仅表格</span>
+      <button type="button" class="chip-btn ${_tbCmp.layout === 'both' ? 'on' : ''}" onclick="tbCmpLayout('both')">并排</button>
+      <button type="button" class="chip-btn ${_tbCmp.layout === 'img' ? 'on' : ''}" onclick="tbCmpLayout('img')">仅截图</button>
+      <button type="button" class="chip-btn ${_tbCmp.layout === 'grid' ? 'on' : ''}" onclick="tbCmpLayout('grid')">仅表格</button>
       <button class="btn small" onclick="tbCompareClose()" title="关闭（Esc）">${icon('close')}</button>
     </div>
     ${d.ai_status === 'mismatch' ? `<div class="tb-mis-bar">${icon('warn')} ${esc(d.ai_note || '模型输出与原表不一致')}——人工修整后保存即转为已整理</div>` : ''}
@@ -442,8 +456,8 @@ async function tbCmpRender() {
       </div>
       <div class="tbws-grid">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-          <span class="chip-btn ${_tbCompareTab === 'ai' ? 'on' : ''}" onclick="tbCmpTab('ai')">AI 整理${d.ai_cells ? '' : '（未整理）'}</span>
-          <span class="chip-btn ${_tbCompareTab === 'orig' ? 'on' : ''}" onclick="tbCmpTab('orig')">原始提取</span>
+          <button type="button" class="chip-btn ${_tbCompareTab === 'ai' ? 'on' : ''}" onclick="tbCmpTab('ai')">AI 整理${d.ai_cells ? '' : '（未整理）'}</button>
+          <button type="button" class="chip-btn ${_tbCompareTab === 'orig' ? 'on' : ''}" onclick="tbCmpTab('orig')">原始提取</button>
           <span style="flex:1"></span>
           <button class="btn small" onclick="tbGridAddRow()">+行</button>
           <button class="btn small" onclick="tbGridAddCol()">+列</button>
@@ -467,7 +481,33 @@ async function tbCmpRender() {
   </div>`;
   tbRenderGrid(window._tbGrid);
   // 网格任何编辑 → dirty（翻页/关闭时自动保存）
-  $('#tb-edit-grid')?.addEventListener('input', () => { _tbCmp.dirty = true; });
+  const grid = $('#tb-edit-grid');
+  grid?.addEventListener('input', () => { _tbCmp.dirty = true; });
+  // 键盘惯例（Excel/Airtable）：Enter=提交并下移 / Shift+Enter=上移 / Esc=还原进入编辑前的值
+  grid?.addEventListener('keydown', e => {
+    const td = e.target.closest?.('[contenteditable="true"][data-r]');
+    if (!td) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      td.textContent = _tbCellBefore(td) ?? td.textContent;   // 还原进入编辑时快照
+      td.blur(); _tbCmp.dirty = true;
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      focusCell(+td.dataset.r + 1, +td.dataset.c);           // 提交（contenteditable 已实时）并下移
+    } else if (e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault();
+      focusCell(+td.dataset.r - 1, +td.dataset.c);
+    }
+  });
+  grid?.addEventListener('focusin', e => {                   // 进入编辑快照（Esc 还原用）
+    const td = e.target.closest?.('[contenteditable="true"][data-r]');
+    if (td) td._before = td.textContent;
+  });
+  function _tbCellBefore(td) { return td._before; }
+  function focusCell(r, c) {
+    const next = grid.querySelector(`[contenteditable="true"][data-r="${Math.max(0, r)}"][data-c="${Math.max(0, c)}"]`);
+    if (next) next.focus();
+  }
 }
 window.tbCmpLayout = mode => { _tbCmp.layout = mode; tbCmpRender(); };
 window.tbCmpTab = tab => { if (_tbCmp.dirty) tbCmpAutoSave(); _tbCompareTab = tab; tbCmpRender(); };
