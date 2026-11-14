@@ -141,7 +141,7 @@ resolve_llm(user, purpose)   # BYOK 优先 → 公共池（admin 开关）→ No
 
 ### 角落扫描（2026-11-14 第二轮全盘清点新增）
 12. **备份 tar 归档曾轮转失效**：papers tar 堆积 10 份（已修+回收 1.2G）；备份恢复演练**已补做**（DB integrity ok + 行数对账 + tar 解包抽查，均通过）
-13. **data/inbox 1.3G 源 PDF 残留**：专题采集的源文件导入后未清理（不占 papers 配额但占磁盘）——建议在 README 标注手动清理，或提供 inbox 清理入口
+13. **data/inbox 1.3G**：专题采集任务源 PDF（目录导入流程的输入），导入后保留——属工作文件非垃圾（可按需手动清理）
 14. **Docker build cache 1.85GB**（1.04GB 可回收）：定期 `docker builder prune` 即可
 15. **邀请码过期不清**：过期码永久留在表里（数据量极小，无害；可选清理）
 16. **登录失败记录含 IP**：audit_log 有 56 条 login-fail（含来源 IP）——审计需要但注意 IP 属个人信息，保留期建议明确
