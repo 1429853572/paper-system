@@ -139,6 +139,17 @@ resolve_llm(user, purpose)   # BYOK 优先 → 公共池（admin 开关）→ No
 10. **无指标导出**：健康数据只进管理后台卡 + 告警邮件，无 Prometheus/通用格式
 11. **SMTP 密码换机风险**：Fernet key 随宿主生成——换机部署后已存 SMTP 授权码/用户 key 需重录（文档已注明）
 
+### 角落扫描（2026-11-14 第二轮全盘清点新增）
+12. **备份 tar 归档曾轮转失效**：papers tar 堆积 10 份（已修+回收 1.2G）；备份恢复演练**已补做**（DB integrity ok + 行数对账 + tar 解包抽查，均通过）
+13. **data/inbox 1.3G 源 PDF 残留**：专题采集的源文件导入后未清理（不占 papers 配额但占磁盘）——建议在 README 标注手动清理，或提供 inbox 清理入口
+14. **Docker build cache 1.85GB**（1.04GB 可回收）：定期 `docker builder prune` 即可
+15. **邀请码过期不清**：过期码永久留在表里（数据量极小，无害；可选清理）
+16. **登录失败记录含 IP**：audit_log 有 56 条 login-fail（含来源 IP）——审计需要但注意 IP 属个人信息，保留期建议明确
+17. **access log 26MB 且有轮转**：json-file 50M×3 已配置 ✓ 无风险
+18. **依赖版本**：fastapi 0.121 / httpx 0.28 / cryptography 46.0 全部较新，无已知 CVE 版本（建议季度复查）
+19. **无障碍覆盖低**：aria-label 13 处、img alt 0 处——自托管小团队可接受，对外产品需补
+20. **纯中文 UI**：定位明确（自用/团队），多语言不在范围
+
 ## 7. 上线前把关清单（专家请重点核查）
 
 | # | 检查项 | 现状 | 风险 |
