@@ -89,6 +89,7 @@ async function openPaper(id) {
       renderContentView();
     }
     restorePos(id);
+    window.loadAnnotations?.();   // 个人标注高亮/批注区渲染
   }).catch(() => { renderContentView(); });
   // 问答 scope 跟随当前论文（用户显式多选了其他论文则保留）
   if (state.qaPapers.size <= 1) {

@@ -17,7 +17,7 @@ import re as _re
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # 重建表时会连带删除其上的索引（DROP TABLE 会删索引）——这些表重建后需逐个恢复。
 # 索引定义与 _SCHEMA / _init_schema 中的保持一致。
@@ -168,6 +168,20 @@ CREATE TABLE IF NOT EXISTS tracker_subs (
     last_error      TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 个人标注层：划词高亮/批注（per-user per-block，可多条）
+CREATE TABLE IF NOT EXISTS paper_annotations (
+    id         TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    paper_id   TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    block_id   TEXT NOT NULL,
+    kind       TEXT NOT NULL DEFAULT 'highlight',   -- highlight | note
+    quote      TEXT NOT NULL DEFAULT '',            -- 被标注原文（高亮定位/批注引用）
+    body       TEXT NOT NULL DEFAULT '',            -- 批注内容（note 必填）
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_user ON paper_annotations(user_id, paper_id);
+CREATE INDEX IF NOT EXISTS idx_annotations_block ON paper_annotations(block_id);
 
 -- 表格工作台：从已解析论文收割的表格（原始提取 + AI 整理 + 取舍状态）
 CREATE TABLE IF NOT EXISTS table_extracts (

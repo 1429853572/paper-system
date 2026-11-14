@@ -572,6 +572,18 @@ table.list th { color: var(--muted); font-weight: 500; }
 .tb-up-list .err { color: var(--err); }
 .tb-up-list div { padding: 2px 0; }
 
+/* ---- 个人标注层 ---- */
+.mark-u { background: rgba(74, 108, 247, .18); border-radius: 2px; padding: 0 1px; }
+[data-theme=dark] .mark-u { background: rgba(107, 133, 247, .28); }
+.ann-zone { padding: 4px 14px 8px; border-bottom: 1px solid var(--border); }
+.ann-zone summary { cursor: pointer; }
+.ann-item { padding: 8px 10px; margin: 6px 0; background: var(--panel); border: 1px solid var(--border);
+            border-radius: var(--r-md); font-size: var(--fs-sm); }
+.ann-quote { color: var(--text-2); border-left: 2px solid var(--tint-primary); padding-left: 8px;
+             font-size: var(--fs-xs); margin-bottom: 4px; }
+.ann-body { white-space: pre-wrap; }
+.ann-ops { display: flex; gap: 4px; margin-top: 4px; }
+
 /* ---- 表格工作台 ---- */
 .tb-wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-bottom: 12px; }
 .tb-card { display: flex; gap: 10px; padding: 10px; }

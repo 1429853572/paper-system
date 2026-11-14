@@ -801,6 +801,8 @@ function showSelBar(sel, text) {
   bar.innerHTML = `<button data-a="explain" title="AI 解读这段文字的含义与上下文">AI 解读</button>
     <button data-a="ask" title="把选中文字作为上下文，输入你的问题">提问</button>
     <button data-a="translate" title="翻译选中文字">翻译</button>
+    <button data-a="highlight" title="高亮选中文字（个人标注，仅自己可见）">高亮</button>
+    <button data-a="note" title="给选中文字加批注">批注</button>
     <button data-a="cite" title="选中参考文献条目后点这里——识别该文献并收进文献库">文献入库</button>`;
   bar.style.top = Math.max(8, rect.top - 36) + 'px';
   bar.style.left = Math.min(innerWidth - 140, Math.max(8, rect.left)) + 'px';
@@ -809,6 +811,8 @@ function showSelBar(sel, text) {
     hideSelBar();
     if (b.dataset.a === 'translate') translateSelection(text);
     else if (b.dataset.a === 'cite') importCitation(text);
+    else if (b.dataset.a === 'highlight') createAnnotation(text, 'highlight');
+    else if (b.dataset.a === 'note') createAnnotation(text, 'note');
     else if (b.dataset.a === 'ask') {
       // 选中文字挂为引用上下文（带页码），输入框聚焦等用户写问题
       switchPage('reader');

@@ -1064,6 +1064,7 @@ async function openPaper(id) {
       renderContentView();
     }
     restorePos(id);
+    window.loadAnnotations?.();   // 个人标注高亮/批注区渲染
   }).catch(() => { renderContentView(); });
   // 问答 scope 跟随当前论文（用户显式多选了其他论文则保留）
   if (state.qaPapers.size <= 1) {
@@ -4023,6 +4024,8 @@ function showSelBar(sel, text) {
   bar.innerHTML = `<button data-a="explain" title="AI 解读这段文字的含义与上下文">AI 解读</button>
     <button data-a="ask" title="把选中文字作为上下文，输入你的问题">提问</button>
     <button data-a="translate" title="翻译选中文字">翻译</button>
+    <button data-a="highlight" title="高亮选中文字（个人标注，仅自己可见）">高亮</button>
+    <button data-a="note" title="给选中文字加批注">批注</button>
     <button data-a="cite" title="选中参考文献条目后点这里——识别该文献并收进文献库">文献入库</button>`;
   bar.style.top = Math.max(8, rect.top - 36) + 'px';
   bar.style.left = Math.min(innerWidth - 140, Math.max(8, rect.left)) + 'px';
@@ -4031,6 +4034,8 @@ function showSelBar(sel, text) {
     hideSelBar();
     if (b.dataset.a === 'translate') translateSelection(text);
     else if (b.dataset.a === 'cite') importCitation(text);
+    else if (b.dataset.a === 'highlight') createAnnotation(text, 'highlight');
+    else if (b.dataset.a === 'note') createAnnotation(text, 'note');
     else if (b.dataset.a === 'ask') {
       // 选中文字挂为引用上下文（带页码），输入框聚焦等用户写问题
       switchPage('reader');
@@ -6379,6 +6384,97 @@ if (!new URLSearchParams(location.search).has('debug')) {
 
 /* ================= 命令面板（Ctrl+K）+ 全局快捷键 + 帮助层 =================
    功能多了之后入口藏得深——面板把 页面/动作/论文/设置 变成一键可达。 */
+
+/* ===== 个人标注层（划词高亮/批注——per-user，仅自己可见） ===== */
+window.createAnnotation = async (text, kind) => {
+  const pid = window.__state?.current?.id;
+  if (!pid) { toast('先打开一篇论文'); return; }
+  const blk = [...document.querySelectorAll('#content-view .blk')].find(b =>
+    (b.textContent || '').includes(text.slice(0, 40)));
+  const bid = blk?.dataset?.bid;
+  if (!bid) { toast('仅支持在解析正文中标注'); return; }
+  let body = '';
+  if (kind === 'note') {
+    body = await (window._uiDialog ? window._uiDialog({title: '添加批注', input: true, multiline: true,
+      okText: '保存', cancelText: '取消', message: '对选中文字的批注（仅自己可见）'}) : Promise.resolve(null));
+    if (!body || !body.trim()) return;
+  }
+  try {
+    await api(`/api/papers/${pid}/annotations`, {method: 'POST',
+      body: JSON.stringify({kind, quote: text.slice(0, 2000), body, block_id: bid})});
+    toast(kind === 'highlight' ? '已高亮' : '批注已保存');
+    loadAnnotations();
+  } catch (e) { toast(friendlyError(e, '标注失败')); }
+};
+
+window.deleteAnnotation = async aid => {
+  try {
+    await api(`/api/annotations/${aid}`, {method: 'DELETE'});
+    loadAnnotations();
+  } catch (e) { toast(friendlyError(e, '删除失败')); }
+};
+
+window.editAnnotation = async (aid, cur) => {
+  const body = await (window._uiDialog ? window._uiDialog({title: '修改批注', input: true, multiline: true,
+    value: cur, okText: '保存', cancelText: '取消'}) : Promise.resolve(null));
+  if (body === null || !body.trim()) return;
+  try {
+    await api(`/api/annotations/${aid}`, {method: 'PATCH', body: JSON.stringify({body})});
+    loadAnnotations();
+  } catch (e) { toast(friendlyError(e, '保存失败')); }
+};
+
+window.loadAnnotations = loadAnnotations;
+async function loadAnnotations() {
+  const pid = window.__state?.current?.id;
+  if (!pid) return;
+  let anns = [];
+  try { anns = (await api(`/api/papers/${pid}/annotations`)).annotations || []; }
+  catch { return; }
+  window.__annotations = anns;
+  // 渲染高亮：把 quote 在对应块文本中找到的位置包 tint span（幂等：先清旧）
+  $$('#content-view .mark-u').forEach(x => { const p = x.parentNode; x.replaceWith(...x.childNodes); p.normalize?.(); });
+  for (const a of anns.filter(x => x.kind === 'highlight')) {
+    const blk = document.querySelector(`#content-view .blk[data-bid="${a.block_id}"]`);
+    if (!blk) continue;
+    const walker = document.createTreeWalker(blk, NodeFilter.SHOW_TEXT);
+    let node; let done = false;
+    while ((node = walker.nextNode()) && !done) {
+      const idx = node.textContent.indexOf(a.quote.slice(0, 60));
+      if (idx >= 0) {
+        const range = document.createRange();
+        const end = Math.min(idx + a.quote.length, node.textContent.length);
+        range.setStart(node, idx); range.setEnd(node, end);
+        const span = document.createElement('span');
+        span.className = 'mark-u'; span.dataset.aid = a.id;
+        try { range.surroundContents(span); done = true; } catch { /* 跨节点高亮放弃（不影响阅读） */ }
+      }
+    }
+  }
+  // 批注列表（侧栏批注区：挂在右栏头部下方的可折叠卡）
+  let zone = $('#ann-zone');
+  if (!zone) {
+    zone = document.createElement('div');
+    zone.id = 'ann-zone';
+    const host = document.querySelector('.r-subtabs');
+    host?.insertAdjacentElement('afterend', zone);
+  }
+  const notes = anns.filter(x => x.kind === 'note');
+  zone.innerHTML = notes.length || anns.some(x => x.kind === 'highlight') ? `
+    <details class="ann-zone" ${notes.length ? 'open' : ''}>
+      <summary class="muted" style="font-size: var(--fs-xs)">${icon('book', 12)} 我的标注（${anns.length}）</summary>
+      ${notes.map(n => `
+        <div class="ann-item" data-aid="${n.id}">
+          <div class="ann-quote">${esc(n.quote.slice(0, 60))}${n.quote.length > 60 ? '…' : ''}</div>
+          <div class="ann-body">${esc(n.body)}</div>
+          <div class="ann-ops">
+            <button class="btn small hover-only" onclick="editAnnotation('${n.id}', ${JSON.stringify(n.body).replace(/"/g, '&quot;')})">${icon('edit', 12)}</button>
+            <button class="btn small danger hover-only" onclick="deleteAnnotation('${n.id}')">${icon('trash', 12)}</button>
+          </div>
+        </div>`).join('')}
+    </details>` : '';
+  // 换论文时重渲染（openPaper 后由视图渲染触发）
+}
 
 /* ===== 论文讨论区（组内成员共享；阅读页右栏按钮 → 面板） ===== */
 (() => {

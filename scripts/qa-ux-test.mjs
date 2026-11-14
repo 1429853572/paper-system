@@ -208,7 +208,7 @@ doc.body.dispatchEvent(new window.Event('mouseup', { bubbles: true }));
 await new Promise((r) => setTimeout(r, 100));
 const selBar = doc.querySelector('#sel-bar');
 ok('选中浮条出现', !!selBar);
-ok('浮条四键（AI 解读/提问/翻译/文献入库）', selBar && selBar.querySelectorAll('button').length === 4);
+ok('浮条六键（AI 解读/提问/翻译/高亮/批注/文献入库）', selBar && selBar.querySelectorAll('button').length === 6);
 selBar.querySelector('[data-a="translate"]').click();
 await new Promise((r) => setTimeout(r, 150));
 ok('翻译请求发出', translateCalls.length === 1 && translateCalls[0].text.includes('gaussians'));

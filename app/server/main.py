@@ -3594,6 +3594,58 @@ async def tracker_smtp_test(request: Request):
     return {"ok": True, "to": to}
 
 
+# ---------------- 个人标注层（划词高亮/批注） ----------------
+@app.get("/api/papers/{paper_id}/annotations")
+def annotations_list(paper_id: str, request: Request, u: dict = Depends(require)):
+    """当前用户在该论文上的全部标注（阅读页渲染高亮/批注）。"""
+    rows = db.all("SELECT * FROM paper_annotations WHERE user_id=? AND paper_id=? ORDER BY created_at",
+                  (u["id"], paper_id))
+    return {"annotations": [dict(r) for r in rows]}
+
+@app.post("/api/papers/{paper_id}/annotations")
+async def annotations_create(paper_id: str, request: Request, u: dict = Depends(require)):
+    u_row = db.one("SELECT 1 FROM papers WHERE id=? AND deleted_at IS NULL", (paper_id,))
+    if not u_row:
+        raise HTTPException(404, "论文不存在")
+    b = await request.json()
+    kind = b.get("kind") if b.get("kind") in ("highlight", "note") else "highlight"
+    quote = (b.get("quote") or "").strip()[:2000]
+    body = (b.get("body") or "").strip()[:4000]
+    block_id = (b.get("block_id") or "").strip()[:80]
+    if not block_id or not quote:
+        raise HTTPException(400, "block_id 与 quote 必填")
+    if kind == "note" and not body:
+        raise HTTPException(400, "批注内容不能为空")
+    aid = "an" + secrets.token_hex(8)
+    with db.write() as c:
+        c.execute("INSERT INTO paper_annotations(id, user_id, paper_id, block_id, kind, quote, body) "
+                  "VALUES(?,?,?,?,?,?,?)", (aid, u["id"], paper_id, block_id, kind, quote, body))
+    emit_data("papers")
+    return {"ok": True, "id": aid}
+
+@app.patch("/api/annotations/{aid}")
+async def annotations_edit(aid: str, request: Request, u: dict = Depends(require)):
+    row = db.one("SELECT * FROM paper_annotations WHERE id=?", (aid,))
+    if row is None or (row["user_id"] != u["id"] and u["role"] != "admin"):
+        raise HTTPException(404, "标注不存在")
+    b = await request.json()
+    body = (b.get("body") or "").strip()[:4000]
+    if not body:
+        raise HTTPException(400, "批注内容不能为空")
+    with db.write() as c:
+        c.execute("UPDATE paper_annotations SET body=?, created_at=created_at WHERE id=?", (body, aid))
+    return {"ok": True}
+
+@app.delete("/api/annotations/{aid}")
+def annotations_delete(aid: str, request: Request, u: dict = Depends(require)):
+    row = db.one("SELECT * FROM paper_annotations WHERE id=?", (aid,))
+    if row is None or (row["user_id"] != u["id"] and u["role"] != "admin"):
+        raise HTTPException(404, "标注不存在")
+    with db.write() as c:
+        c.execute("DELETE FROM paper_annotations WHERE id=?", (aid,))
+    emit_data("papers")
+    return {"ok": True}
+
 # ---------------- 系统健康（管理后台健康卡） ----------------
 @app.get("/api/health/admin")
 def health_admin(request: Request):
