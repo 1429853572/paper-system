@@ -1303,22 +1303,6 @@ def jobs_stream(u: dict = Depends(require)):
 
 
 # ---------------- 用量 ----------------
-@app.get("/api/usage")
-def usage(u: dict = Depends(require)):
-    is_admin = u["role"] == "admin"
-    scope = "" if is_admin else " WHERE user_id=?"
-    args = () if is_admin else (u["id"],)
-    by_user = db.all(
-        f"SELECT COALESCE(u.username,'?') AS username, key_source, purpose, "
-        "SUM(prompt_tokens) AS p, SUM(completion_tokens) AS c, COUNT(*) AS calls "
-        "FROM llm_calls LEFT JOIN users u ON u.id=llm_calls.user_id"
-        f"{scope} GROUP BY llm_calls.user_id, key_source, purpose", args)
-    by_day = db.all(
-        f"SELECT date(created_at) AS day, SUM(prompt_tokens) AS p, SUM(completion_tokens) AS c "
-        f"FROM llm_calls{scope} GROUP BY day ORDER BY day DESC LIMIT 30", args)
-    return {"by_user": [dict(r) for r in by_user], "by_day": [dict(r) for r in by_day]}
-
-
 @app.get("/api/me/quota")
 def me_quota(u: dict = Depends(require)):
     """个人用量自助面板：今日解析配额 / 磁盘占用 / 近 30 天 token。
