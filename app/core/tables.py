@@ -290,6 +290,70 @@ def stats(user_id: int) -> dict:
     return {"counts": counts, "by_paper": by_paper, "by_batch": by_batch}
 
 
+# ---------------- 跨表聚合（对比大表） ----------------
+def _norm_header(cells: list[list[str]]) -> tuple[str, ...]:
+    """规范化表头签名（小写去空格符号）——同构表判定用。"""
+    if not cells or not cells[0]:
+        return tuple()
+    return tuple(re.sub(r"[\s\W]+", "", c.lower()) for c in cells[0])
+
+
+def merge_tables(items: list[dict], mode: str = "stack") -> dict:
+    """N 张表 → 1 张对比大表。
+
+    mode=stack：纵向堆叠——每源表前插入 [来源] 隔离行 + 各自表头行，数据保真可溯源。
+    mode=aligned：同构合并——表头签名一致的表共享一个表头，数据行直接堆叠
+                  （差异表的行用来源标记）；表头不一致的表按 stack 处理。
+    返回 {grid, notes:[...], aligned_n, stacked_n}
+    """
+    if not items:
+        return {"grid": [], "notes": ["没有选择任何表格"], "aligned_n": 0, "stacked_n": 0}
+    notes: list[str] = []
+    grid: list[list[str]] = []
+    aligned_n = stacked_n = 0
+    if mode == "aligned":
+        groups: dict[tuple, list[dict]] = {}
+        for it in items:
+            groups.setdefault(_norm_header(it.get("grid") or []), []).append(it)
+        aligned_groups = {k: v for k, v in groups.items() if k and len(v) >= 2}
+        singles = [it for k, v in groups.items() if not k or len(v) < 2 for it in v]
+        for hdr, group in aligned_groups.items():
+            first = group[0]
+            grid.append([f"【{first.get('paper_title') or ''}·p{(first.get('page_index') or 0)+1}】" ] +
+                        first["grid"][0][1:] if False else list(first["grid"][0]))
+            # 表头行后标注来源列说明
+            for gi, it in enumerate(group):
+                src = f"{it.get('paper_title') or '来源'}·p{(it.get('page_index') or 0)+1}"
+                for r, row in enumerate(it["grid"][1:], 1):
+                    grid.append([f"[{src}] {row[0]}" if r == 1 or not row[0] else row[0]] + row[1:])
+                if gi < len(group) - 1:
+                    grid.append(["—"] * len(hdr))
+            aligned_n += len(group)
+            notes.append(f"同构合并 {len(group)} 张（表头一致）")
+        for it in singles:
+            src = f"{it.get('paper_title') or '来源'}·p{(it.get('page_index') or 0)+1}"
+            grid.append([f"━━ {src} ━━"] + [""] * max(0, len(grid[0]) - 1 if grid else 0))
+            grid.extend(it["grid"])
+            stacked_n += 1
+        if singles:
+            notes.append(f"{len(singles)} 张表头不一致 → 原样堆叠")
+    else:
+        for it in items:
+            src = f"{it.get('paper_title') or '来源'}·p{(it.get('page_index') or 0)+1} · {it.get('caption') or ''}"
+            grid.append([f"━━ {src[:80]} ━━"] + [""] * max(0, (len((it.get('grid') or [[]])[0]) - 1)))
+            grid.extend(it.get("grid") or [])
+            stacked_n += 1
+    return {"grid": grid, "notes": notes, "aligned_n": aligned_n, "stacked_n": stacked_n}
+
+
+def export_merged(items: list[dict], mode: str = "stack") -> bytes:
+    """聚合大表 → 单 sheet xlsx。"""
+    m = merge_tables(items, mode)
+    return build_xlsx([{"paper_title": "跨表聚合", "page_index": 0,
+                        "caption": f"对比大表（{m['aligned_n']} 张对齐 + {m['stacked_n']} 张堆叠）",
+                        "grid": m["grid"]}])
+
+
 # ---------------- xlsx 导出 ----------------
 _SHEET_BAD = re.compile(r"[\\/*?:\[\]]")
 
@@ -341,8 +405,10 @@ def build_xlsx(items: list[dict]) -> bytes:
         if grid:
             width = max(len(r) for r in grid)
             for c in range(1, width + 1):
-                w = max(len(str(grid[r][c - 1] if c - 1 < len(grid[r]) else "")) or ""
-                        for r in range(min(3, len(grid)))) + 4
+                lens = [len(str(grid[r][c - 1]))
+                        for r in range(min(3, len(grid)))
+                        if c - 1 < len(grid[r]) and grid[r][c - 1] is not None]
+                w = (max(lens) if lens else 0) + 4      # str/int 混合比较 TypeError（曾用 or "" 兜底反而引入）
                 ws.column_dimensions[get_column_letter(c)].width = min(40, max(8, w))
     import io
     buf = io.BytesIO()

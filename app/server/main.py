@@ -3815,6 +3815,42 @@ def tables_delete(tid: str, request: Request):
     emit_data("tables")
     return {"ok": True}
 
+@app.post("/api/tables/merge")
+async def tables_merge(request: Request):
+    """跨表聚合：勾选的 N 张表 → 对比大表（单 sheet xlsx 下载）。
+    mode=aligned 同构合并（表头一致共享表头）| stack 纵向堆叠（全部保真）。"""
+    u = require(request)
+    b = await request.json()
+    ids = b.get("ids") or []
+    mode = b.get("mode") if b.get("mode") in ("stack", "aligned") else "stack"
+    if len(ids) < 2:
+        raise HTTPException(400, "至少选择 2 张表才能聚合")
+    rows = []
+    for chunk in [ids[i:i + 500] for i in range(0, len(ids), 500)]:
+        marks = ",".join("?" * len(chunk))
+        rows += db.all(f"SELECT t.*, p.title paper_title FROM table_extracts t "
+                       f"JOIN papers p ON p.id=t.paper_id "
+                       f"WHERE t.user_id=? AND t.id IN ({marks}) AND t.review != 'deleted'",
+                       (u["id"], *chunk))
+    if len(rows) < 2:
+        raise HTTPException(400, "所选表格不足 2 张")
+    items = []
+    for r in rows:
+        grid = None
+        if r["ai_cells"]:
+            try: grid = json.loads(r["ai_cells"])
+            except Exception:  # noqa: BLE001
+                grid = None
+        if not grid:
+            grid = json.loads(r["cells"] or "[]")
+        items.append({"paper_title": r["paper_title"], "page_index": r["page_index"],
+                      "caption": r["caption"], "grid": grid})
+    data = tables_mod.export_merged(items, mode)
+    fname = f"merged_{time.strftime('%Y%m%d_%H%M')}.xlsx"
+    return Response(content=data,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"})
+
 @app.post("/api/tables/export")
 async def tables_export(request: Request):
     """导出 xlsx（每表一 sheet）：ids 指定，或 kept_only=全部保留。"""

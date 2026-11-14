@@ -193,9 +193,11 @@ async function loadTracker() {
         <select id="tk-target-coll" style="width:auto;max-width:200px" onchange="trackerCollChange(this)">${state._trackerCollOpts || '<option value="">默认文献库</option>'}</select></label>
       <span class="muted">共 ${inbox.total} 条</span>
     </div>
-    ${st === 'new' && selMapSize() ? `<div class="lib-batch" style="display:flex;gap:8px;align-items:center;margin-top:8px">
-      已选 ${selMapSize()} 篇
-      <button class="btn small primary" onclick="trackerBatchAccept(this)">批量收进文献库</button>
+    ${selMapSize() ? `<div class="lib-batch" style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      已选 ${selMapSize()} 项
+      ${st === 'new' ? `<button class="btn small primary" onclick="trackerBatchAccept(this)">批量收进文献库</button>` : ''}
+      ${st === 'accepted' && pidsSelected().length >= 2
+        ? `<button class="btn small primary" onclick="trackerSynth()" title="把选中的已收进论文发起综述">${icon('brain')} 发起综述</button>` : ''}
       <button class="btn small" onclick="trackerCkClear()">取消选择</button></div>` : ''}`;
 
   /* ---- 右栏：按天分组的条目流 ---- */
@@ -226,16 +228,26 @@ async function loadTracker() {
       <button class="btn small" onclick="trackerLoadMore()">加载更多（${inbox.total - (state._trackerPage || 1) * 30} 条未显示）</button></div>` : ''}`;
 }
 function selMapSize() { return (state._trackerSel || new Set()).size; }
+function pidsSelected() {
+  const m = state._trackerSelPid || new Map();
+  return [...m.values()].filter(Boolean);
+}
+window.trackerSynth = () => {
+  const pids = pidsSelected();
+  if (pids.length < 2) { toast('综述至少需要 2 篇已收进文献库的论文'); return; }
+  state._trackerSel = new Set(); state._trackerSelPid = new Map();
+  runSynthesis(null, pids);
+};
 function collNameOf(cid) {
   if (!cid) return '默认文献库';
   const opt = [...document.querySelectorAll('#tk-target-coll option')].find(o => o.value === cid);
   return opt?.text || '文献库';
 }
-window.trackerStatus = v => { state._trackerStatus = v; state._trackerSub = ''; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); state._trackerShownItems = null; loadTracker(); };
-window.trackerSubF = id => { state._trackerSub = id; state._trackerStatus = 'new'; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); state._trackerShownItems = null; loadTracker(); };
+window.trackerStatus = v => { state._trackerStatus = v; state._trackerSub = ''; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); state._trackerSelPid = new Map(); state._trackerShownItems = null; loadTracker(); };
+window.trackerSubF = id => { state._trackerSub = id; state._trackerStatus = 'new'; state._trackerTier = ''; state._trackerPage = 1; state._trackerSel = new Set(); state._trackerSelPid = new Map(); state._trackerShownItems = null; loadTracker(); };
 window.trackerTierF = v => { state._trackerTier = v === state._trackerTier ? '' : v; state._trackerPage = 1; state._trackerSel = new Set(); loadTracker(); };
 window.trackerLoadMore = () => { state._trackerPage = (state._trackerPage || 1) + 1; state._trackerAppend = true; loadTracker(); };
-window.trackerCkClear = () => { state._trackerSel = new Set(); loadTracker(); };
+window.trackerCkClear = () => { state._trackerSel = new Set(); state._trackerSelPid = new Map(); loadTracker(); };
 window.trackerCollChange = el => { state._trackerCollId = el.value; };
 
 /* ---------- 收件箱行 ---------- */
@@ -258,8 +270,9 @@ function trackerItemHtml(it, selMap, st) {
   const pdf = it.pdf_url ? ` · <a href="${esc(it.pdf_url)}" target="_blank" rel="noopener" style="color:var(--text-2)">PDF ↗</a>` : '';
   const cite = it.cited_by != null && it.cited_by > 0 ? ` · 被引 ${it.cited_by}` : '';
   const isNew = it.status === 'new' && st !== 'accepted' && st !== 'dismissed';
-  const ck = isNew && st === 'new'
-    ? `<input type="checkbox" class="tk-ck" data-iid="${it.id}" ${checked} onchange="trackerCk(this)" style="margin-top:3px">`
+  const canSel = (it.status === 'accepted' && it.paper_id) || (isNew && st === 'new');
+  const ck = canSel
+    ? `<input type="checkbox" class="tk-ck" data-iid="${it.id}" data-pid="${it.paper_id || ''}" ${checked} onchange="trackerCk(this)" style="margin-top:3px">`
     : '<span style="width:13px;flex:none"></span>';
   const actions = isNew
     ? `<button class="btn small primary" onclick="trackerAccept('${it.id}', this)">收进文献库</button>
@@ -308,6 +321,9 @@ window.trackerToggleAbs = el => {
 window.trackerCk = async (ck) => {
   const sel = state._trackerSel || (state._trackerSel = new Set());
   if (ck.checked) sel.add(ck.dataset.iid); else sel.delete(ck.dataset.iid);
+  state._trackerSelPid = state._trackerSelPid || new Map();
+  if (ck.checked && ck.dataset.pid) state._trackerSelPid.set(ck.dataset.iid, ck.dataset.pid);
+  else if (!ck.checked) state._trackerSelPid.delete(ck.dataset.iid);
   const page = $('#page-tracker');
   const st = page.scrollTop;
   await loadTracker();
