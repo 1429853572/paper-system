@@ -190,6 +190,7 @@ function showOnboardingOnce() {
       <div class="onboard-step"><b>② 等待解析</b><span>GPU 提取全文（列表显示进度），完成后可阅读/翻译/图表</span></div>
       <div class="onboard-step"><b>③ 提问与导读</b><span>右栏「✍️ 提问」对着论文问答（引用可点回原文）；问答右栏「生成导读」产出 9 字段导读；「文献信息」页的「AI 补全」补元数据</span></div>
       <div class="onboard-step"><b>④ 批量与综述</b><span>「文库管理」勾选论文 → 批量条翻译 / 生成综述报告；工具条「采集文献」检索中文文献或建专题跟踪</span></div>
+      <div class="onboard-step"><b>⑤ 追踪与表格</b><span>顶栏「追踪」订阅关键词定时巡逻 arXiv/顶刊，新论文进收件箱一键入库；顶栏「表格」把文献里的表格提取成可编辑数据并导出 xlsx</span></div>
       <div class="onboard-step"><b>找不到入口？</b><span>随时 <code>Ctrl + K</code> 命令面板搜索一切；<code>?</code> 看快捷键</span></div>
     </div>
     <div class="ui-pop-foot"><span class="muted" style="font-size: var(--fs-xs);flex:1">问答/翻译需要 LLM key（「设置」页配置）；管理员开启公共额度池时可直接使用</span>
