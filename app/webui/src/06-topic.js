@@ -606,13 +606,19 @@ async function loadDiscover() {
   const mode = state._discMode;
   const cache = discoverCache();
   if (cache[mode] !== undefined) { renderDiscover(); return; }
-  cache[mode] = [];   // 占位防重复拉
+  cache[mode] = undefined;   // 占位（undefined → 渲染"加载中…"；曾用 [] → 一闪而过"没有结果"）
+  state._discLoading = state._discLoading || {};
+  if (state._discLoading[mode]) { renderDiscover(); return; }   // 已在拉——防重复请求
+  state._discLoading[mode] = true;
+  renderDiscover();          // 切 tab 即渲染加载态（此前要等 API 或二次触发才显示加载提示）
   try {
     const d = await api(`/api/papers/${pid}/discover?mode=${mode}&limit=20`);
     cache[mode] = d.items;
   } catch (e) {
     cache[mode] = null;
     toast('找相关失败: ' + e.message);
+  } finally {
+    state._discLoading[mode] = false;
   }
   if (state.current?.id === pid) renderDiscover();
 }
