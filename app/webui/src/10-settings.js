@@ -153,6 +153,23 @@ const AUDIT_ACT = {
 };
 function auditActionName(a) { return AUDIT_ACT[a] || a; }
 
+function renderAuditTable(rows) {
+  const expanded = state._auditExpanded;
+  const shown = expanded ? rows : rows.slice(0, 8);
+  const trs = shown.map(r => `<tr>
+    <td class="muted" style="font-size: var(--fs-xs)">${esc(relTime(r.created_at))}</td>
+    <td style="font-size: var(--fs-sm)">${esc(r.username || '系统')}</td>
+    <td style="font-size: var(--fs-sm)">${esc(auditActionName(r.action))}${r.detail ? ` <span class="muted">${esc(String(r.detail).slice(0, 40))}</span>` : ''}</td>
+  </tr>`).join('');
+  const more = rows.length > 8 && !expanded
+    ? `<div style="padding:6px 0 0"><button class="btn small" id="audit-more">展开其余 ${rows.length - 8} 条</button></div>`
+    : rows.length > 8 && expanded
+    ? `<div style="padding:6px 0 0"><button class="btn small" id="audit-more">收起</button></div>` : '';
+  return `<table class="list adm-table">
+    <tr><th style="width:110px">时间</th><th style="width:110px">操作者</th><th>操作</th></tr>
+    ${trs}</table>${more}`;
+}
+
 async function renderAdminZone() {
   const el = $('#page-admin');
   if (!el) return;
@@ -285,19 +302,15 @@ async function renderAdminZone() {
     <div class="set-card">
       <div class="set-head">${icon('clock')} 审计日志
         <span class="muted" style="font-weight:400">敏感操作留痕（登录不计）</span></div>
-      ${auditRows.length ? `<table class="list adm-table">
-        <tr><th style="width:110px">时间</th><th style="width:110px">操作者</th><th>操作</th></tr>
-        ${auditRows.slice(0, 8).map(r => `<tr>
-          <td class="muted" style="font-size: var(--fs-xs)">${esc(relTime(r.created_at))}</td>
-          <td style="font-size: var(--fs-sm)">${esc(r.username || '系统')}</td>
-          <td style="font-size: var(--fs-sm)">${esc(auditActionName(r.action))}${r.detail ? ` <span class="muted">${esc(String(r.detail).slice(0, 40))}</span>` : ''}</td>
-        </tr>`).join('')}
-      </table>${auditRows.length > 8 ? `<div style="padding:6px 0 0"><button class="btn small" id="audit-more">展开其余 ${auditRows.length - 8} 条</button></div>` : ''}`
+      ${renderAuditTable(auditRows)}
         : '<p class="muted">暂无记录——删除/重置密码/禁用等敏感操作会记录在此</p>'}
     </div>`;
 
   const more = $('#audit-more');
-  if (more) more.onclick = () => renderAdminZone();
+  if (more) more.onclick = () => {
+    state._auditExpanded = !state._auditExpanded;   // 切换展开（此前盲调 renderAdminZone——重渲染还是 8 条，按钮死循环）
+    renderAdminZone();
+  };
 }
 
 /* 限额编辑弹窗：6 个数字字段（留空=默认），保存复用 saveQuota */
