@@ -7458,8 +7458,10 @@ async function loadTables() {
   ].map(k => `<div class="tk-kpi ${k.cls}"><div class="n">${k.n}</div><div class="t">${k.t}</div></div>`).join('');
 
   /* ---- 工具栏：筛选 + 批量 ---- */
+  const chipsDesc = {active: '没被剔除的（待处理+已标记保留）', pending: '还没决定去留的',
+                     kept: '明确标记要保留的', deleted: '已剔除（软删可恢复）', all: '包含已剔除'};
   const chips = [['active', '全部可用'], ['pending', '待处理'], ['kept', '已标记保留'], ['deleted', '已剔除'], ['all', '全部']]
-    .map(([v, l]) => `<button type="button" class="chip-btn ${review === v ? 'on' : ''}" onclick="tbReviewF('${v}')">${l}</button>`).join(' ');
+    .map(([v, l]) => `<button type="button" class="chip-btn ${review === v ? 'on' : ''}" onclick="tbReviewF('${v}')" title="${chipsDesc[v]}">${l}</button>`).join(' ');
   const selN = (state._tbSel || new Set()).size;
   toolbar.innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
@@ -7541,7 +7543,7 @@ function tbCardHtml(it, sel, review) {
       </div>
       <div class="tb-actions">
         <button class="btn small primary" onclick="tbCompare('${it.id}')">对照</button>
-        <button class="btn small hover-only" onclick="tbTidyOne('${it.id}', this)" title="LLM 整理此表">${icon('bolt', 12)}</button>
+        <button class="btn small hover-only" onclick="tbTidyOne('${it.id}', this)" title="LLM 整理此表" aria-label="AI 整理此表">${icon('bolt', 12)}</button>
         ${del
           ? `<button class="btn small hover-only" onclick="tbReview('${it.id}','pending',this)">恢复</button>
              <button class="btn small danger hover-only" onclick="tbHardDel('${it.id}',this)" title="从工作台彻底删除">${icon('trash', 12)}</button>`

@@ -725,9 +725,17 @@ class Scheduler:
                     self.hard_delete_paper(r["id"])
                 self._daily_backup()
                 self._health_alerts()
+                self._misc_retention()      # 邀请码过期清理 + login-fail 审计 90 天保留
             except Exception:  # noqa: BLE001
                 log.exception("janitor 异常")
             time.sleep(3600)
+
+    def _misc_retention(self) -> None:
+        with db.write() as c:
+            n1 = c.execute("DELETE FROM invite_codes WHERE expires_at < datetime('now', '-7 days')").rowcount
+            n2 = c.execute("DELETE FROM audit_log WHERE action='login-fail' AND created_at < datetime('now', '-90 days')").rowcount
+        if n1 or n2:
+            log.info("retention: 邀请码 -%d, login-fail -%d", n1, n2)
 
     def _health_alerts(self) -> None:
         """每小时健康检查：告警邮件（仅发 admin；同级别同内容 24h 去重）。"""
