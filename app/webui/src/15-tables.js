@@ -98,7 +98,7 @@ async function loadTables() {
   ].map(k => `<div class="tk-kpi ${k.cls}"><div class="n">${k.n}</div><div class="t">${k.t}</div></div>`).join('');
 
   /* ---- 工具栏：筛选 + 批量 ---- */
-  const chips = [['active', '未剔除'], ['pending', '待取舍'], ['kept', '已保留'], ['deleted', '已剔除'], ['all', '全部']]
+  const chips = [['active', '全部可用'], ['pending', '待处理'], ['kept', '已标记保留'], ['deleted', '已剔除'], ['all', '全部']]
     .map(([v, l]) => `<button type="button" class="chip-btn ${review === v ? 'on' : ''}" onclick="tbReviewF('${v}')">${l}</button>`).join(' ');
   const selN = (state._tbSel || new Set()).size;
   toolbar.innerHTML = `
@@ -361,7 +361,7 @@ async function tbExport(ids, btn) {
   else if (ids) await downloadBlob('/api/tables/export', payload, 'table.xlsx', '已下载');
   else {
     const d = state._tbData;
-    if (!(await uiConfirm(`导出全部未剔除表格（约 ${d.counts.total - d.counts.deleted} 张，每表一个 sheet）？`, {title: '导出 xlsx'}))) return;
+    if (!(await uiConfirm(`导出全部可用表格（约 ${d.counts.total - d.counts.deleted} 张，每表一个 sheet）？`, {title: '导出 xlsx'}))) return;
     try {
       await downloadBlob('/api/tables/export', payload, 'tables.xlsx', '已导出——可直接用 Excel/WPS 打开');
     } catch (e) { toast(friendlyError(e, '导出失败')); }
