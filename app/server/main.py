@@ -3727,8 +3727,10 @@ def tables_sources(request: Request):
     for lr in db.all(
             "SELECT pc.paper_id, c.name FROM paper_collections pc "
             "JOIN collections c ON c.id = pc.collection_id "
-            f"WHERE pc.paper_id IN (SELECT b.paper_id FROM blocks b JOIN papers p ON p.id=b.paper_id "
-            f"WHERE b.type='table' AND p.deleted_at IS NULL AND p.parse_status='parsed'){vis} "
+            "WHERE pc.paper_id IN (SELECT b.paper_id FROM blocks b "
+            "JOIN papers p ON p.id = b.paper_id "
+            "WHERE b.type='table' AND p.deleted_at IS NULL AND p.parse_status='parsed' "
+            + ("AND (p.visibility='shared' OR p.owner_id=?) " if u["role"] != "admin" else "") + ") "
             "ORDER BY c.name", args):
         lib_map.setdefault(lr["paper_id"], []).append(lr["name"])
     return {"sources": [{**dict(r), "in_bench": harvested.get(r["paper_id"], 0),
