@@ -173,12 +173,14 @@ function renderAuditTable(rows) {
 async function renderAdminZone() {
   const el = $('#page-admin');
   if (!el) return;
-  const [users, pool, audit, smtp] = await Promise.all([
+  const [users, pool, audit, smtp, health] = await Promise.all([
     api('/api/admin/users'),
     api('/api/admin/pool').catch(() => ({enabled: false})),
     api('/api/admin/audit?limit=50').catch(() => ({rows: []})),
     api('/api/tracker/smtp').catch(() => ({configured: false})),
+    api('/api/health/admin').catch(() => null),
   ]);
+  state._health = health;
   state._smtpReady = !!smtp.configured;
   const list = users.users || [];
   const memberN = list.filter(u => u.role !== 'admin' && u.disabled !== 2).length;
@@ -202,6 +204,23 @@ async function renderAdminZone() {
 
   el.innerHTML = `
     <h2 class="page-h">${icon('crown')} 管理后台</h2>
+
+    ${(() => {
+      if (!state._health) return '';
+      const h = state._health;
+      const color = lv => lv === 'err' ? 'err' : lv === 'warn' ? 'run' : 'ok';
+      const rows = (h.alerts || []).map(a =>
+        `<div style="padding:4px 0"><span class="badge ${color(a.level)}">${a.level === 'err' ? '严重' : '警告'}</span> ${esc(a.msg)}</div>`).join('');
+      const allOk = !(h.alerts || []).length;
+      return `<div class="set-card" style="border-color:${allOk ? '' : 'var(--err)'}">
+        <div class="set-head">${icon('check')} 系统健康
+          <span style="margin-left:auto;font-size:var(--fs-xs);color:var(--text-2)">
+            磁盘 ${h.disk_pct}% · 任务积压 ${h.jobs_active} · 失败 ${h.jobs_failed} ·
+            今日备份 ${h.backup_today ? '✓' : '✗ 缺失'} · 备份目录 ${h.backup_size_gb}GB</span></div>
+        ${allOk ? '<div class="muted" style="padding:2px 14px 10px;font-size:var(--fs-sm)">全部指标正常——告警（磁盘≥80%/90%、备份缺失>15GB、任务失败/积压）会自动发邮件到追踪订阅的收件邮箱</div>'
+          : `<div style="padding:2px 14px 10px;font-size:var(--fs-sm)">${rows}</div>`}
+      </div>`;
+    })()}
 
     <div class="adm-stats">
       <div class="adm-stat"><span class="muted">成员</span><b>${memberN}</b><span class="muted">人活跃 · 管理员 ${adminN}${list.filter(u => u.disabled === 2).length ? ` · 已注销 ${list.filter(u => u.disabled === 2).length}` : ''}</span></div>

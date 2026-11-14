@@ -51,11 +51,15 @@ if manifest["files"]:
 PY2
 
 # 3. 轮转（只保留最近 N 份同名文件）
-for kind in db papers; do
-  ls -1t "$BACKUP_DIR/$kind-"*.db "$BACKUP_DIR/$kind-"*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r f; do
+# 轮转按类别各自保留 N 份（此前 db/papers 混一个 ls -1t 池——mtime 同刻排序漂移
+# 导致 papers 永远轮不掉，10 份堆积 9.6G）
+for pat in "db-*.db" "papers-*.tar.gz"; do
+  ls -1t "$BACKUP_DIR/"$pat 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r f; do
     rm -f "$f"; echo "  - 清理旧备份 $(basename "$f")"
   done
 done
+# 审计预快照（pre-audit-*.db）与手动快照目录超过 7 天的清理——不计入 KEEP
+find "$BACKUP_DIR" -maxdepth 1 -name "pre-audit-*.db" -mtime +7 -delete 2>/dev/null || true
 
 # 4. 报告
 TOTAL=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1)

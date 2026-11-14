@@ -724,9 +724,49 @@ class Scheduler:
                 for r in rows:
                     self.hard_delete_paper(r["id"])
                 self._daily_backup()
+                self._health_alerts()
             except Exception:  # noqa: BLE001
                 log.exception("janitor 异常")
             time.sleep(3600)
+
+    def _health_alerts(self) -> None:
+        """每小时健康检查：告警邮件（仅发 admin；同级别同内容 24h 去重）。"""
+        try:
+            from . import health
+            from .tracker_mail import _send_html, smtp_configured
+            from .db import db as _db
+            admins = [r["id"] for r in _db.all("SELECT id FROM users WHERE role='admin' AND disabled=0")]
+            if not admins or not smtp_configured():
+                return
+            state = health.collect(admins[0], is_admin=True)
+            al = health.alerts(state)
+            if not al:
+                return
+            key = "|".join(f"{a['level']}:{a['msg'][:40]}" for a in al)
+            last = _db.one("SELECT value FROM settings WHERE key='health_alert_last'")
+            if last and last["value"] == key and time.time() - json.loads(
+                    (_db.one("SELECT value FROM settings WHERE key='health_alert_ts'")
+                     or {"value": "0"})["value"]) < 86400:
+                return                                # 24h 内同告警已发过
+            html = health.alert_email_html(al, state)
+            admin_email = None
+            for r in _db.all("SELECT id, username FROM users WHERE role='admin' AND disabled=0"):
+                pass                                  # admin 无 email 列——发到 tracker_subs 里 admin 的收件箱
+            # admin 的收件地址：取任一 admin 已设的追踪收件邮箱
+            mrow = _db.one("SELECT email_to FROM tracker_subs WHERE user_id IN "
+                           f"({','.join(str(a) for a in admins)}) AND email_to != '' LIMIT 1")
+            if not mrow:
+                return                                # 没有任何 admin 收件邮箱 → 无处可发
+            _send_html(mrow["email_to"], "paper-system 系统告警", html)
+            with _db.write() as c:
+                c.execute("INSERT INTO settings(key,value) VALUES('health_alert_last',?) "
+                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key,))
+                c.execute("INSERT INTO settings(key,value) VALUES('health_alert_ts',?) "
+                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                          (str(int(time.time())),))
+            log.info("健康告警已发送: %d 条", len(al))
+        except Exception:  # noqa: BLE001
+            log.exception("健康告警异常")
 
     # ================= 表格整理 worker（LLM 同步调用，单并发，批内逐表） =================
     @staticmethod

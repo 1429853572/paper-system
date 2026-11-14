@@ -3594,6 +3594,16 @@ async def tracker_smtp_test(request: Request):
     return {"ok": True, "to": to}
 
 
+# ---------------- 系统健康（管理后台健康卡） ----------------
+@app.get("/api/health/admin")
+def health_admin(request: Request):
+    u = require(request)
+    if u["role"] != "admin":
+        raise HTTPException(403, "仅管理员可查看系统健康")
+    from core import health
+    state = health.collect(u["id"], is_admin=True)
+    return {**state, "alerts": health.alerts(state)}
+
 # ---------------- 表格工作台（收割 → LLM 整理 → 取舍 → xlsx） ----------------
 _TABLE_REVIEW = ("active", "pending", "kept", "deleted", "all")
 
