@@ -17,7 +17,7 @@ import re as _re
 
 from .config import DB_PATH
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 27
 
 # 重建表时会连带删除其上的索引（DROP TABLE 会删索引）——这些表重建后需逐个恢复。
 # 索引定义与 _SCHEMA / _init_schema 中的保持一致。
@@ -123,7 +123,23 @@ CREATE TABLE IF NOT EXISTS collections (
     name       TEXT NOT NULL,
     owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     parent_id  TEXT,                                  -- 三级库：NULL=顶层库
+    group_id   TEXT REFERENCES lib_groups(id) ON DELETE CASCADE,  -- 群组库：归属协作群组（成员共享读写）
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS lib_groups (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS lib_group_members (
+    group_id  TEXT NOT NULL REFERENCES lib_groups(id) ON DELETE CASCADE,
+    user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role      TEXT NOT NULL DEFAULT 'member',        -- owner | member
+    joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (group_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS paper_reads (
@@ -202,6 +218,20 @@ CREATE TABLE IF NOT EXISTS table_extracts (
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(user_id, paper_id, src_hash)
+);
+
+CREATE TABLE IF NOT EXISTS table_merges (
+    id          TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL DEFAULT '',          -- 合成表标题（首条 AI note 摘要）
+    instruction TEXT NOT NULL DEFAULT '',          -- 当前生效的合成指令
+    grid        TEXT NOT NULL DEFAULT '[]',        -- 当前合成网格 JSON（可编辑覆盖）
+    note        TEXT NOT NULL DEFAULT '',          -- 当前版本的 AI 说明
+    source_ids  TEXT NOT NULL DEFAULT '[]',        -- 源表 id JSON（可追溯）
+    versions    TEXT NOT NULL DEFAULT '[]',        -- 版本栈 JSON [{v,grid,note,ts}]（AI 生成记版本，可回看）
+    cur_ver     INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- 文献追踪：收件箱条目（巡逻结果，审阅后收进文献库成为正式论文）
@@ -746,6 +776,37 @@ class Database:
                       "SELECT MIN(rowid) FROM translations GROUP BY paper_id, cache_key, block_id)")
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_trans_unique "
                       "ON translations(paper_id, cache_key, block_id)")
+        if from_v < 26:
+            # v26：AI 合并表（跨表合成工作台）——新装库已在 _SCHEMA 建表，这里补存量
+            c.execute("""CREATE TABLE IF NOT EXISTS table_merges (
+                id          TEXT PRIMARY KEY,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                title       TEXT NOT NULL DEFAULT '',
+                instruction TEXT NOT NULL DEFAULT '',
+                grid        TEXT NOT NULL DEFAULT '[]',
+                note        TEXT NOT NULL DEFAULT '',
+                source_ids  TEXT NOT NULL DEFAULT '[]',
+                versions    TEXT NOT NULL DEFAULT '[]',
+                cur_ver     INTEGER NOT NULL DEFAULT 1,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            )""")
+        if from_v < 27:
+            # v27：协作群组（Zotero 式）——群组表/成员表 + collections.group_id
+            c.execute("""CREATE TABLE IF NOT EXISTS lib_groups (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )""")
+            c.execute("""CREATE TABLE IF NOT EXISTS lib_group_members (
+                group_id  TEXT NOT NULL REFERENCES lib_groups(id) ON DELETE CASCADE,
+                user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role      TEXT NOT NULL DEFAULT 'member',
+                joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (group_id, user_id)
+            )""")
+            c.execute("ALTER TABLE collections ADD COLUMN group_id TEXT REFERENCES lib_groups(id)")
         c.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
 
     # ---- 备份（在线一致性快照） ----

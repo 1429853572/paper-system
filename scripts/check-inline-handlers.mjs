@@ -54,6 +54,10 @@ const builtin = new Set([
   // DOM/全局内置（不是项目函数，缺失也不报错）
   'document', 'window', 'console', 'fetch', 'setInterval', 'clearInterval',
   'click', 'focus', 'blur', 'removeAttribute', 'setAttribute', 'getAttribute', 'scrollIntoView',
+  // JS 关键字/内建构造器：内联处理器里 if(...)、new Set(...) 这类合法表达式
+  // 会被调用收集正则当成函数名（历史上误报过 if / Set）
+  'if', 'for', 'while', 'switch', 'catch', 'typeof', 'return', 'do',
+  'Set', 'Map', 'Promise', 'RegExp', 'Function', 'Error',
 ]);
 
 const missing = [...called].filter(n => !onWindow.has(n) && !builtin.has(n)).sort();

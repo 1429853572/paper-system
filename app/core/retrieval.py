@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 import numpy as np
 
-from .config import EMBED_DIMS, EMBED_MODEL, config
+from .config import EMBED_BASE_URL, EMBED_DIMS, EMBED_MODEL, config
 from .db import cjk_space, fts_query, db
 
 # ---- 分块（入库时调用） ----
@@ -122,7 +122,7 @@ def _unpack(blob: bytes) -> np.ndarray:
 def embed_texts(texts: list[str], batch_size: int | None = None) -> list[list[float]]:
     """批量调用本地 embedding 服务（xinference / Ollama 均可，OpenAI 兼容）."""
     bs = batch_size or int(config.get("scheduler", "embed_backfill_batch"))
-    base = (os.environ.get("EMBED_BASE_URL") or EMBED_BASE_URL).rstrip("/")
+    base = EMBED_BASE_URL.rstrip("/")
     model = os.environ.get("EMBED_MODEL_NAME") or EMBED_MODEL
     out: list[list[float]] = []
     with httpx.Client(timeout=180) as http:
@@ -163,8 +163,11 @@ def backfill_embeddings(paper_id: str, progress_cb=None) -> int:
 # ---- 向量矩阵缓存（检索热路径：免每次全库 SELECT + 逐条 unpack） ----
 # key → (monotonic时间, 归一化矩阵, chunk_ids)；embedding 只在回填/重建时变化，
 # TTL 兜底 + backfill/reindex 主动失效。
+# 容量上限（多视角评审 P1-4）：scope key 按问答论文组合增长，此前只增不删——
+# 多用户不同组合 → 数 GB 常驻内存。LRU 淘汰（命中即 touch，dict 插入序当队列）。
 _vec_cache: dict[str, tuple[float, np.ndarray, np.ndarray]] = {}
 _VEC_TTL = 600.0
+_VEC_CACHE_MAX = 32   # 份；万级 chunks 每份 ≈ 40MB
 
 
 def invalidate_vec_cache() -> None:
@@ -176,8 +179,11 @@ def _load_matrix(scope_key: str, sql: str, args: tuple) -> tuple[np.ndarray, np.
     """按 scope 缓存归一化向量矩阵。返回 (ids, mat)。维度不符的行（换模型残留）跳过。"""
     hit = _vec_cache.get(scope_key)
     now = time.monotonic()
-    if hit and now - hit[0] < _VEC_TTL:
-        return hit[1], hit[2]
+    if hit:
+        if now - hit[0] < _VEC_TTL:
+            _vec_cache[scope_key] = _vec_cache.pop(scope_key)  # touch：挪到队尾
+            return hit[1], hit[2]
+        _vec_cache.pop(scope_key, None)  # 过期惰性删除
     rows = db.all(sql, args)
     kept_rows = [r for r in rows if len(r["embedding"]) == EMBED_DIMS * 4]
     if kept_rows:
@@ -189,6 +195,8 @@ def _load_matrix(scope_key: str, sql: str, args: tuple) -> tuple[np.ndarray, np.
         ids = np.array([], dtype=np.int64)
         mat = np.zeros((0, EMBED_DIMS), dtype=np.float32)
     _vec_cache[scope_key] = (now, mat, ids)
+    while len(_vec_cache) > _VEC_CACHE_MAX:
+        _vec_cache.pop(next(iter(_vec_cache)))
     return mat, ids
 
 

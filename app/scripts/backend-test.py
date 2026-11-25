@@ -577,6 +577,19 @@ with db.write() as c:
     c.execute("DELETE FROM jobs WHERE id=990001")
     c.execute("DELETE FROM users WHERE id IN (9101, 9102)")
 
+print("== jobs.enqueue batch_id（tidy-batch 曾误作 kwarg 500 的回归）==")
+from core.jobs import Scheduler
+_s = Scheduler()
+_uid = (db.one("SELECT id FROM users LIMIT 1") or {"id": 0})["id"]
+_jid = _s.enqueue(_uid, "table_tidy", None, {"ids": ["tbX"], "batch_id": "回归批次"},
+                  progress_total=1)
+_row = db.one("SELECT batch_id, payload FROM jobs WHERE id=?", (_jid,))
+ok('payload.batch_id 落 jobs.batch_id 列',
+   _row is not None and _row["batch_id"] == "回归批次" and '"ids"' in (_row["payload"] or ""))
+if _jid:
+    with db.write() as c:
+        c.execute("DELETE FROM jobs WHERE id=?", (_jid,))
+
 print(f"\n结果: {PASS} 通过, {FAIL} 失败")
 # 导入 server.main 会启动调度器线程（非 daemon）——进程退出被吊住，用 os._exit 硬退
 import os

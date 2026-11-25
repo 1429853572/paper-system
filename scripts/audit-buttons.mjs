@@ -32,7 +32,7 @@ const PW = process.env.PAPERSYS_ADMIN_PW || (() => {
 if (!PW) { console.error('找不到管理员密码：设置环境变量 PAPERSYS_ADMIN_PW 或 .env 里的 ADMIN_INITIAL_PASSWORD'); process.exit(2); }
 
 // 会改数据 / 花钱 / 登出的按钮一律跳过
-const SKIP = "/彻底删除|清空回收站|清空|删除|移除|✕|上传|导入|翻译|重译|生成导读|生成邀请码|保存配额|退出|重置|重命名|新建|创建|添加子库|批量翻译|批量删除|移入|术语|delGlossary|delLib|delPaperFromLib|col-del|pi-del|togglePool|createInvite|gl-add|renameLib|vis-toggle|sel-toggle|side-collapse|side-expand|upload-arrow|file/";
+const SKIP = "/彻底删除|清空回收站|清空|删除|移除|✕|上传|导入|翻译|重译|生成导读|生成邀请码|保存配额|退出|重置|重命名|新建|创建|添加子库|批量翻译|批量删除|移入|术语|delGlossary|delLib|delPaperFromLib|col-del|pi-del|togglePool|createInvite|gl-add|renameLib|vis-toggle|sel-toggle|side-collapse|side-expand|upload-arrow|file|收集|整理待办|整理选中|整理此表|AI 加工|加工|合并|收集全部剩余|harvest|regen|批量收集|开始合成|重新合成|加入群组|解散群组|邀请|找相关|剔除|标记保留|恢复|保存|导出|对照|下一张|上一张|撤销|重做|还原|下一版|上一版|加入|群组管理/";
 
 const PAGES = [
   { name: '阅读页', page: 'reader', wait: 900 },
@@ -41,6 +41,11 @@ const PAGES = [
   { name: '阅读·JSON', page: 'reader', wait: 900, pre: `document.querySelector('.view-tabs [data-v="json"]')?.click()` },
   { name: '阅读·双语对照', page: 'reader', wait: 1200, pre: `document.querySelector('#r-subtabs [data-s="bilingual"]')?.click()` },
   { name: '阅读·中文', page: 'reader', wait: 1200, pre: `document.querySelector('#r-subtabs [data-s="zh"]')?.click()` },
+  { name: '阅读·表格页签', page: 'reader', wait: 1800, pre: `document.querySelector('.view-tabs [data-v="assets"]')?.click(); document.querySelector('#assets-subtabs [data-at="tables"]')?.click()` },
+  { name: '表格工作台·列表', page: 'tables', wait: 2400, pre: `window.tbViewF('rows')` },
+  { name: '表格工作台·卡片', page: 'tables', wait: 2400, pre: `window.tbViewF('card')` },
+  { name: '任务', page: 'tasks', wait: 1500 },
+  { name: '追踪', page: 'tracker', wait: 1500 },
   { name: '文库管理', page: 'collections', wait: 2200 },
   { name: '回收站', page: 'trash', wait: 1400 },
   { name: '设置页', page: 'settings', wait: 1800 },
@@ -105,7 +110,11 @@ const CHECK_ONCLICK = `(()=>{
   const BUILTIN = new Set(['document','window','console','setTimeout','setInterval','clearTimeout',
     'clearInterval','alert','confirm','prompt','fetch','JSON','Object','Array','String','Number',
     'Boolean','Math','Date','parseInt','parseFloat','isNaN','encodeURIComponent','decodeURIComponent',
-    'Event','CustomEvent','FormData','URL','Blob','File','FileReader','Intl','Map','Set','Promise']);
+    'Event','CustomEvent','FormData','URL','Blob','File','FileReader','Intl','Map','Set','Promise',
+    // DOM 方法：onclick 里 foo(...).removeAttribute(...) 这类链式调用，剥链式前段后
+    // 方法名会裸露成「裸函数」，与 check-inline-handlers 的白名单保持一致
+    'click','focus','blur','removeAttribute','setAttribute','getAttribute','scrollIntoView',
+    'closest','remove','replace','toString','trim','split','join','select','reportValidity']);
   for (const el of document.querySelectorAll('[onclick]')) {
     const attr = el.getAttribute('onclick') || '';
     const key = el.tagName + '|' + (el.id||'') + '|' + attr.slice(0,50);

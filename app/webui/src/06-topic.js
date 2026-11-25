@@ -223,7 +223,7 @@ function renderAcquirePop() {
   $$('.dp-tab', pop).forEach(b => b.onclick = () => { a.site = b.dataset.as; a.items = []; renderAcquirePop(); });
   $('#acq-close').onclick = () => { pop.hidden = true; };
   $('#acq-go').onclick = doAcquireSearch;
-  $('#acq-q').onkeydown = e => { if (e.key === 'Enter') doAcquireSearch(); };
+  $('#acq-q').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) doAcquireSearch(); };   // isComposing：中文选词回车不搜索
   $$('input[data-ai]', pop).forEach(cb => cb.onchange = e => {
     const i = +cb.dataset.ai;
     if (e.target.checked) a.sel.add(i); else a.sel.delete(i);
@@ -358,15 +358,20 @@ async function renderBatchJobs(bid, box) {
       try { sid = JSON.parse(j0.payload || '{}').synthesis_id || ''; } catch { /* ignore */ }
       if (sid) { await renderSynJob(sid, box); return; }
     }
-    box.innerHTML = d.jobs.map(j => `
+    box.innerHTML = d.jobs.map(j => {
+      // P7：明细行补条——total>1 实条；total<=1 且未终态画不定长条
+      const jbar = j.progress_total > 1
+        ? progressBar(Math.round(100 * (j.progress_done || 0) / j.progress_total), false, 'up-bar task')
+        : (['queued', 'pending_gate', 'running'].includes(j.status) ? progressIndet('up-bar indet task') : '');
+      return `
       <div class="bpanel-row sub">
         <span class="badge ${j.status === 'failed' ? 'err' : j.status === 'done' ? 'ok' : j.status === 'canceled' ? 'dim' : 'run'}">${BATCH_ST[j.status] || esc(j.status)}</span>
         <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.title || j.paper_id || '')}</span>
         <span class="muted" style="font-size: var(--fs-xs)">${j.progress_total > 1 ? `${j.progress_done}/${j.progress_total}` : ''}</span>
         ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
         ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
-      </div>${j.error ? `<div class="bpanel-err">${esc(j.error.slice(0, 140))}</div>` : ''}`).join('')
-      || '<p class="muted" style="padding:6px">无任务</p>';
+      </div>${jbar}${j.error ? `<div class="bpanel-err">${esc(j.error.slice(0, 140))}</div>` : ''}`;
+    }).join('') || '<p class="muted" style="padding:6px">无任务</p>';
   } catch (e) { box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
 }
 
@@ -576,6 +581,7 @@ const refreshOnData = throttle(entity => {
   }).catch(() => {});
 }, 3000);
 const refreshSidebarOnParse = throttle(() => loadCollections().catch(() => {}), 3000);
+const refreshRowsOnParseDone = throttle(() => loadPapers().catch(() => {}), 3000);   // P7: 解析终态后刷行内徽标（否则「解析中…」卡住不落「已解析」）
 const refreshTrackerOnParse = throttle(() => { window.renderTrackerPage?.(); }, 4000);   // 追踪页阶段条跟随解析进度
 const refreshTablesOnTidy = throttle(() => { window.renderTablesPage?.(); }, 3000);       // 表格工作台跟随批量整理进度
 
@@ -741,6 +747,13 @@ async function watchJobs() {
       const tpg = $('#page-tracker');
       if (tpg && tpg.style.display !== 'none' && typeof refreshTrackerOnParse === 'function') refreshTrackerOnParse();
     }
+    // 翻译实时进度 → 侧栏行内条（P7 统一进度条；块级 done/total，与解析同模式）
+    if (ev.job_type === 'translate') {
+      const prev = JSON.stringify(state.translateProg[ev.paper_id] || null);
+      if (ev.status === 'running') state.translateProg[ev.paper_id] = {done: ev.done || 0, total: ev.total || 0};
+      else if (['done', 'failed', 'canceled'].includes(ev.status)) delete state.translateProg[ev.paper_id];
+      if (JSON.stringify(state.translateProg[ev.paper_id] || null) !== prev) renderPapers();
+    }
     // 表格工作台：批量整理进度翻牌（与 parse 平级——嵌在 parse 块内恒假，v1.10.1 曾修后回归，此处为根治位）
     if (ev.job_type === 'table_tidy') {
       const tbp = $('#page-tables');
@@ -756,6 +769,7 @@ async function watchJobs() {
     }
     if (ev.job_type === 'parse' && (ev.status === 'done' || ev.status === 'failed')) {
       refreshSidebarOnParse(ev);   // 侧栏计数节流刷新（导入/上传高峰期数字跟着跳）
+      refreshRowsOnParseDone(ev);  // P7: 行内徽标跟随终态（解析中… → 已解析/失败）
       refreshQaPapersOnParse(ev);  // 逐篇事件风暴节流（批量导入 90 篇=90 次全量拉）
     }
     refreshQueueBadge();

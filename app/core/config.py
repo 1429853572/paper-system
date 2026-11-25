@@ -37,12 +37,16 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "disk_quota_gb": 20,
         "global_daily_parse": 600,
         "tracker_subs": 5,           # 每成员订阅数上限（文献追踪；可在成员限额里按人覆盖）
+        "sse_per_user": 4,           # 每用户 SSE 并发连接上限（每标签页常驻 1 条，占线程池 token）
+        "sse_total": 200,            # 全站 SSE 连接上限（超限 429——防线程池被打满整站假死）
     },
     "scheduler": {
         "translate_workers": 4,
         "embed_backfill_batch": 32,
         "poll_interval_sec": 10,
         "retry_max": 3,
+        "parse_task_timeout_sec": 1800,  # 单个 MinerU 远程任务时长上限：卡 running 的任务
+                                         # 会占死唯一 parse worker（全站解析停摆），超时即失败重试
     },
     "rag": {
         "chunk_tokens": 650,
@@ -95,6 +99,10 @@ POOL_API_KEY = os.environ.get("POOL_API_KEY", "")
 POOL_MODEL = os.environ.get("POOL_MODEL", "")
 MINERU_BASE_URL = os.environ.get("MINERU_BASE_URL", "http://mineru:8000")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+# embedding 服务地址：容器内 compose 注入 http://xinference:9997；缺省 localhost:9997
+# 兜底本地直跑场景（多视角评审 P0-2：此前 retrieval 引用了未定义名，裸跑时
+# NameError 被 except 吞掉 → 向量检索静默降级为纯 FTS）
+EMBED_BASE_URL = os.environ.get("EMBED_BASE_URL", "http://localhost:9997")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
 EASYSCHOLAR_KEY = os.environ.get("EASYSCHOLAR_KEY", "")
 S2_API_KEY = os.environ.get("S2_API_KEY", "")

@@ -220,14 +220,15 @@ ok('引文提取走标识符导入', identCalls.length === 1 &&
 ok('译文卡显示', !!doc.querySelector('#sel-result') &&
    doc.querySelector('#sel-result .sr-body').textContent.includes('译文'));
 
-// 9) 标识符导入
+// 9) 标识符导入（P1：入口为导入弹层「链接·标识符」页签）
 doc.querySelector('#upload-arrow').click();
+doc.querySelector('.import-pop .chip-btn[data-tab="ident"]')?.click();
 doc.querySelector('#ident-input').value = '10.1234/abc\narXiv:2401.12345';
 doc.querySelector('#ident-btn').click();
 await new Promise((r) => setTimeout(r, 200));
 ok('标识符导入请求发出（含步骤8引文提取共 2 次）', identCalls.length === 2 &&
    identCalls[1].text.includes('10.1234/abc'));
-ok('上传弹层关闭+列表刷新', doc.querySelector('#upload-pop').hidden);
+ok('导入弹层关闭+列表刷新', !doc.querySelector('.import-pop'));
 
 // 多对多：QA 选文共享库分组 + 多库论文标识
 {

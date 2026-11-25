@@ -67,6 +67,46 @@ def check_css_balance() -> bool:
     return ok
 
 
+def find_terser() -> str | None:
+    """定位 terser：PATH → node 全局 bin 常见位置。都没有则压缩步骤优雅跳过。"""
+    import glob as _glob
+    import shutil
+    found = shutil.which("terser")
+    if found:
+        return found
+    for pat in ("/opt/node*/bin/terser", "/usr/local/bin/terser", str(Path.home() / ".npm-global/bin/terser")):
+        hits = sorted(_glob.glob(pat))
+        if hits:
+            return hits[-1]
+    return None
+
+
+def try_minify() -> bool:
+    """可选压缩（专项轮 R5，见 docs/web-quality-report.md §12）：terser 可用才产出
+    viewer.min.js + map；不可用则保持纯拼接交付，行为与旧版完全一致。
+    不用打包器——只做单文件压缩 + sourcemap，保持「改 src → 重建」的最小工作流。
+    服务端（main.py index）只在 min 比 viewer.js 新时才改指，防止 terser 缺席时
+    旧 min 文件 stale 上线。压缩不改语义：mangle 不碰 window.* 属性名（内联
+    onclick 引用不受影响），源内无 eval/new Function（已核）。"""
+    t = find_terser()
+    if not t:
+        print("· terser 不可用——跳过压缩（viewer.js 原样交付）")
+        return False
+    import subprocess
+    out_min = OUT.with_name("viewer.min.js")
+    r = subprocess.run(
+        [t, str(OUT), "--module", "--compress", "--mangle",
+         "--source-map", f"url='viewer.min.js.map'", "--output", str(out_min)],
+        capture_output=True, text=True, timeout=120,
+    )
+    if r.returncode != 0 or not out_min.exists():
+        print(f"✗ terser 压缩失败（{r.stderr.strip()[:200]}）——viewer.js 原样交付")
+        return False
+    a, b = OUT.stat().st_size, out_min.stat().st_size
+    print(f"✓ 压缩 viewer.min.js（{a//1024}KB → {b//1024}KB，-{round((1-b/a)*100)}%）+ sourcemap")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="只校验产物是否最新")
@@ -88,6 +128,7 @@ def main() -> int:
     OUT.write_text(content, encoding="utf-8")
     n = len(content.split("\n"))
     print(f"✓ 构建 viewer.js（{n} 行，{len(list(SRC.glob('*.js')))} 个源分片）")
+    try_minify()
     return 0
 
 

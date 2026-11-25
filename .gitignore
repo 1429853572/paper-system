@@ -9,3 +9,4 @@ __pycache__/
 MinerU/
 test_papers/
 data/inbox/
+.zcode/

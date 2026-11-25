@@ -113,6 +113,20 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
+  # 外网通道二（可选）：Cloudflare Tunnel——流量走家宽上行，绕开 5Mbps VPS 中转。
+  # profile "cf" 隔离：不带 --profile cf 时完全不启动；.env 填 CF_TUNNEL_TOKEN 后
+  # `docker compose --profile app --profile cf up -d cloudflared` 启用（DEPLOY.md §隧道）。
+  cloudflared:
+    image: cloudflare/cloudflared:2024.10.1   # 版本锁定
+    profiles: ["cf"]
+    container_name: paper-system-cloudflared
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - caddy
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CF_TUNNEL_TOKEN:-missing}"]
+    # 无 ports：隧道是纯出站连接；公网入口由 CF 后台绑域名时指向 http://caddy:7863
+
 volumes:
   caddy_data:
   caddy_config:

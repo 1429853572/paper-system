@@ -37,7 +37,21 @@ def compute_cache_key(source_hashes: str, model: str, gl_ver: str, lang: str = "
     return h.hexdigest()
 
 
-_tb_cache: dict[str, list[dict]] = {}   # run_id → 可翻译块（done run 的 blocks 不可变，可长期缓存）
+# run_id → 可翻译块（done run 的 blocks 不可变，可长期缓存）。
+# 容量上限（多视角评审 P1-4）：无上限时按 run_id 只增不删，多用户批量翻译下
+# 常驻内存无界——LRU 淘汰（命中即 touch，dict 插入序当队列），超限丢最旧重查库。
+_tb_cache: dict[str, list[dict]] = {}
+_TB_CACHE_MAX = 32
+
+
+def _cache_touch(key: str) -> None:
+    _tb_cache[key] = _tb_cache.pop(key)
+
+
+def _cache_put(key: str, val: list[dict]) -> None:
+    _tb_cache[key] = val
+    while len(_tb_cache) > _TB_CACHE_MAX:
+        _tb_cache.pop(next(iter(_tb_cache)))
 
 
 def invalidate_block_cache(run_id: str | None = None) -> None:
@@ -55,6 +69,7 @@ def _translatable_blocks(paper_id: str, run_id: str) -> list[dict]:
     """
     hit = _tb_cache.get(run_id)
     if hit is not None:
+        _cache_touch(run_id)
         return hit
     rows = db.all(
         "SELECT block_id, type, section_path, text, source_hash FROM blocks "
@@ -75,7 +90,7 @@ def _translatable_blocks(paper_id: str, run_id: str) -> list[dict]:
         if b["type"] == "title" and not b["text"].strip():
             continue
         out.append(b)
-    _tb_cache[run_id] = out
+    _cache_put(run_id, out)
     return out
 
 

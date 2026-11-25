@@ -13,11 +13,16 @@ limits:
   # ---- 全局（保护 GPU，admin 也生效） ----
   global_daily_parse: 600   # 全局日解析产能上限
 
+  # ---- SSE 并发连接上限（每标签页常驻 1 条，占一个线程池 token） ----
+  sse_per_user: 4           # 每用户并发连接上限（多开标签页场景）
+  sse_total: 200            # 全站上限（超限返回 429——防线程池打满整站假死）
+
 scheduler:
   translate_workers: 4      # 翻译 worker 池总并发
   embed_backfill_batch: 32  # embedding 后台回填批大小（控 xinference 峰值显存）
   poll_interval_sec: 10     # 队列轮询间隔
   retry_max: 3              # 失败重试次数（指数退避）
+  parse_task_timeout_sec: 1800  # 单个 MinerU 远程任务时长上限（秒）：卡 running 会占死唯一解析 worker
 
 rag:
   chunk_tokens: 650

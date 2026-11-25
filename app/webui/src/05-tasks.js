@@ -100,8 +100,10 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
   };
   const row = j => {
     const tt = taskType(j.job_type);
+    // P7：total>1 画实条；total<=1 且进行中画不定长条（单文件解析只有 0/1，假百分比不如动画条诚实）
     const bar = j.progress_total > 1
-      ? `${progressBar(Math.round(100 * (j.progress_done || 0) / j.progress_total), false, 'up-bar task')}` : '';
+      ? `${progressBar(Math.round(100 * (j.progress_done || 0) / j.progress_total), false, 'up-bar task')}`
+      : (['queued', 'pending_gate', 'running'].includes(j.status) ? progressIndet('up-bar indet task') : '');
     return `<div class="task-row">
       <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
       <span class="task-main">
@@ -145,6 +147,8 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
     const resolved = b.done + b.failed + b.canceled;
     const badge = b.active > 0 ? ['run', '进行中'] : b.failed > 0 ? ['err', '有失败']
       : b.done > 0 ? ['ok', '完成'] : ['dim', '已取消'];
+    // P7：批次头加整批进度条（覆盖批量翻译/重解析/整理/采集等所有带 batch_id 的长操作）
+    const bbar = b.total > 1 ? progressBar(Math.round(100 * b.done / b.total), false, 'up-bar task', 'margin:4px 12px 8px') : '';
     return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
       <div class="bpanel-row head" data-tb="${esc(b.batch_id)}">
         <span class="badge ${badge[0]}">${badge[1]}</span>
@@ -155,6 +159,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         <span class="muted" style="font-size: var(--fs-xs)">${esc(relTime(b.updated_at))}</span>
         <span class="ic">${icon('chevD')}</span>
       </div>
+      ${bbar}
       <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
     </div>`;
   };
@@ -165,7 +170,8 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
     html += sec(`进行中${activeN ? `（${activeN}）` : ''}`,
       (activeBatches.map(batchCard).join('') || '') +
       (looseActive.length ? `<div class="bpanel-batch">${groupByPaper(looseActive).map(paperRow).join('')}</div>` : ''),
-      '没有进行中的任务——发起批量操作或上传论文后，这里实时显示进度');
+      `没有进行中的任务——发起批量操作或导入文献后，这里实时显示进度
+        <button class="btn small primary" style="margin-left:8px" onclick="openImportPop('files')">${icon('upload')} 去文库导入文献</button>`);
   }
   if (!f.status || f.status === 'done' || f.status === 'failed') {
     // 已结束默认折叠（历史任务量大，默认铺开会淹没进行中的）

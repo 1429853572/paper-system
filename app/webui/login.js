@@ -56,3 +56,7 @@
     if (r.ok) location.href = '/';
   });
 })();
+
+// 群组邀请链接（?join_group=<id>）：未登录时暂存，登录进主应用后弹加入确认
+const _jp = new URLSearchParams(location.search).get('join_group');
+if (_jp) localStorage.setItem('ps-pending-join', _jp);

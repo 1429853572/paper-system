@@ -11,3 +11,15 @@ http://papers.local, :7861 {
 		flush_interval -1
 	}
 }
+
+# Cloudflare Tunnel 专用入口（compose 未发布此端口——仅容器网内 cloudflared 可达，
+# frp/局域网路径够不到，客户端伪造不了 CF-* 头）。
+# 登录限速取 XFF 最后一跳当真实客户端：此处用 CF 边缘注入的 CF-Connecting-IP
+# 重写 XFF，令 tunnel 路径与局域网路径同样拿到真实 IP（CF 会剥掉客户端自带的 CF-* 头，不可伪造）。
+:7863 {
+	encode gzip
+	reverse_proxy app:8001 {
+		flush_interval -1   # SSE 流式必需（tunnel 路径同样要过 caddy 这层）
+		header_up X-Forwarded-For "{header.CF-Connecting-IP}"
+	}
+}

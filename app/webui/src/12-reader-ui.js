@@ -160,7 +160,7 @@ const renderBlockBody = b => {
     if (fig && fig.caption) caps.push(fig.caption);
     (subCaps || []).forEach(c => c && caps.push(c));
     return `<figure class="inline-fig ${ub ? 'fig-crop' : ''}" ${ub ? `data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'` : ''}>
-      <div class="fig-holder">${fb.map(n => `<img loading="lazy" src="/api/papers/${pid}/images/${n}">`).join('')}</div>
+      <div class="fig-holder">${fb.map((n, i) => `<img loading="lazy" src="/api/papers/${pid}/images/${n}"${i === 0 && caps.length ? ` alt="${esc(caps.join(' ｜ ').slice(0, 120))}"` : ' alt=""'}>`).join('')}</div>
       ${caps.length ? `<figcaption class="muted" style="font-size:var(--fs-xs);line-height:1.5">${esc(caps.join(' ｜ ').slice(0, 300))}</figcaption>` : ''}
     </figure>`;
   }
@@ -412,7 +412,8 @@ window.figCropPass = async () => {
         rx * scale, ry * scale, rw * scale, rh * scale,
         0, 0, out.width, out.height);
       const url = out.toDataURL('image/png');
-      holder.innerHTML = `<img src="${url}" ondblclick="lightbox(this.src, '')">`;
+      const alt = esc((fig.querySelector('figcaption')?.textContent || '').slice(0, 120));
+      holder.innerHTML = `<img src="${url}" alt="${alt}" ondblclick="lightbox(this.src, '')">`;
       fig.classList.add('from-pdf');
     } catch (e) { /* 保留 MinerU 兜底图 */ }
   }
@@ -545,7 +546,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   let closed = false;
-  for (const sel of ['#acc-pop', '#filter-pop', '#upload-pop', '#download-pop',
+  for (const sel of ['#acc-pop', '#filter-pop', '#download-pop',
                      '#discover-pop', '#col-new-form', '#health-pop']) {
     const el = document.querySelector(sel);
     if (el && !el.hidden) { el.hidden = true; closed = true; }
@@ -659,10 +660,11 @@ function libLevel1Html(d) {
     return `<div class="lib-card-l1 ${isChild ? 'child' : ''}" onclick="libOpenLib('${c.id}')">
       <div class="lc1-icon">${icon('folder')}</div>
       <div class="lc1-main">
-        <div class="lc1-name">${esc(c.name)}</div>
+        <div class="lc1-name" title="${esc(c.name)}">${esc(c.name)}</div>
         <div class="lc1-meta">${papers} 篇${kids.length ? ` · ${kids.length} 个子库` : ''}${doneTr ? ` · 已译 ${doneTr}` : ''}</div>
-        ${kids.length ? `<div class="lc1-subs">${kids.map(k =>
-          `<span class="lc1-sub" onclick="event.stopPropagation();libOpenLib('${k.id}')">${icon('folder')} ${esc(k.name)} <b>${k.papers ?? 0}</b></span>`).join('')}</div>` : ''}
+        ${kids.length ? `<div class="lc1-subs">${kids.slice(0, 2).map(k =>
+          `<span class="lc1-sub" onclick="event.stopPropagation();libOpenLib('${k.id}')">${icon('folder')} ${esc(k.name)} <b>${k.papers ?? 0}</b></span>`).join('')
+        }${kids.length > 2 ? `<span class="lc1-sub" onclick="event.stopPropagation();libOpenLib('${c.id}')" title="展开查看全部子库">+${kids.length - 2}</span>` : ''}</div>` : ''}
       </div>
       <div class="lc1-ops" onclick="event.stopPropagation()">
         <button class="btn small" onclick="libUpload('${c.id}')" title="上传到此库">${icon('upload')}</button>
@@ -686,7 +688,7 @@ function libLevel1Html(d) {
       ? `<div class="lib-cards">${cards || `<div class="empty-state">
           <p class="t">还没有文献库</p>
           <p style="margin-bottom:12px">用文献库把论文按主题分组（可建子库，最多三级）</p>
-          <button class="btn primary" onclick="document.querySelector('#newlib-name')?.focus()">${icon('plus')} 新建文献库</button>
+          <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 新建文献库</button>
         </div>`}</div>`
       : `<table class="list" style="margin-top:4px">
           <tr><th>库名</th><th>论文</th><th>子库</th><th></th></tr>
@@ -699,7 +701,7 @@ function libLevel1Html(d) {
             const walk = cid => { for (const k of kidsOf(cid)) { ordered.push(k); walk(k.id); } };
             walk('root');
             if (!ordered.length) return `<tr><td colspan="4" class="muted" style="text-align:center;padding:24px">
-              还没有文献库 —— <button class="btn small primary" onclick="document.querySelector('#newlib-name')?.focus()">${icon('plus')} 新建文献库</button></td></tr>`;
+              还没有文献库 —— <button class="btn small primary" onclick="createLibFromPage()">${icon('plus')} 新建文献库</button></td></tr>`;
             return ordered.map(c => `<tr class="lib-row" onclick="libOpenLib('${c.id}')">
               <td>${'　'.repeat(treeDepth(c.id))}${icon('folder')} ${esc(c.name)}</td>
               <td>${c.papers ?? 0}</td><td>${(children[c.id] || []).length}</td>
@@ -981,7 +983,8 @@ async function loadAnnotations() {
 
   $('#discuss-send')?.addEventListener('click', doSend);
   // Enter 发送（此前 onkeydown 调用的 sendDiscuss() 不存在——Enter 发送是死的）
+  // isComposing：中文输入法选词回车不发送（web-quality-report D1）
   $('#discuss-input')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); doSend(); }
   });
 })();

@@ -29,6 +29,7 @@ const _f = window.fetch.bind(window);
 window.fetch = function(u, o) { const url = String(u), m = (o&&o.method)||'GET';
   window.__apiLog.push(m + ' ' + url.slice(0, 90));
   if (m === 'DELETE' || /empty-trash/.test(url)) return Promise.resolve({ok:true,status:200,json:async()=>({ok:true})});
+  window.__realFetch = _f;   // 真请求出口（末尾清理走查残留用）
   return _f(u, o); };
 window.uiConfirm = async () => true; window.prompt = () => '走查库';
 'ready'`);
@@ -45,7 +46,7 @@ ok('命令标签「快速总结」（mouseup 正确事件）', await ev(`window.
 await ev(`switchPage('collections')`); await sleep(1400);
 await ev(`[...document.querySelectorAll('#page-collections button')].find(b => b.textContent.includes('新建库'))?.click(); 'ok'`);
 await sleep(500);
-await ev(`const i = document.querySelector('#newlib-name'); if (i) { i.value = '走查临时库'; } 'ok'`);
+await ev(`const i = document.querySelector('.ui-pop .ui-pop-input'); if (i) { i.value = '走查临时库'; } 'ok'`);
 await ev(`window.__apiLog = []; [...document.querySelectorAll('.ui-pop .btn.primary')].pop()?.click(); 'ok'`);
 await sleep(1100);
 ok('新建库（对话框填名+确定）', await ev(`window.__apiLog.some(x => x.startsWith('POST /api/collections'))`) === true,
@@ -79,7 +80,7 @@ ok('订阅保存 POST', await ev(`window.__apiLog.some(x => x.startsWith('POST /
 await ev(`window.trackerEdit((window.__state?._trackerSubs||[])[0]?.id)`); await sleep(600);
 ok('编辑弹层预填', await ev(`document.querySelector('#tk-keywords')?.value.length > 0`) === true);
 // 分类 chip 联动
-await ev(`document.querySelector('[data-cat=cs.CV]')?.click()`); await sleep(300);
+await ev(`document.querySelector('[data-cat="cs.CV"]')?.click()`); await sleep(300);
 ok('分类 chip 联动', await ev(`document.querySelector('#tk-cats').value.includes('cs.CV')`) === true);
 await ev(`window.trackerCloseForm()`); await sleep(400);
 // rail 各视图
@@ -145,7 +146,7 @@ await ev(`tbCkClear()`); await sleep(400);
 console.log('━━━ 回收站 ━━━');
 await ev(`switchPage('trash')`); await sleep(900);
 const trashBtns = await ev(`[...document.querySelectorAll('#page-trash button')].map(b => b.textContent.trim())`);
-ok('回收站按钮（' + trashBtns.join('/') + '）', trashBtns.length >= 2);
+ok('回收站按钮（' + trashBtns.join('/') + '）', trashBtns.some(t => t.includes('清空')));   // 空站只有清空钮，行数>0 才有恢复钮
 await ev(`window.__confirmLog = []; window.uiConfirm = async (m) => { window.__confirmLog.push(String(m).slice(0,30)); return false; };
   [...document.querySelectorAll('#page-trash button')].find(b => b.textContent.includes('清空'))?.click()`); await sleep(700);
 ok('清空回收站弹确认（自动取消保护）', await ev(`window.__confirmLog.length > 0`) === true);
@@ -159,10 +160,13 @@ for (const tab of ['账号安全', 'AI 模型', '术语表', '我的用量']) {
 }
 ok('设置 4 tab 切换', true);
 // 术语表加删
-await ev(`window.__apiLog = []; const t = document.querySelector('#glossary-term, input[placeholder*=术语], input[placeholder*=term]');
-  if (t) { t.value = '走查术语'; document.querySelector('#glossary-add, [onclick*=addGlossary]')?.click(); } 'ok'`);
+await ev(`[...document.querySelectorAll('.set-tab')].find(b => b.textContent.trim() === '术语表')?.click(); 'ok'`); await sleep(600);
+await ev(`window.__apiLog = []; const t = document.querySelector('#gl-term');
+  if (t) { t.value = '走查术语'; document.querySelector('#gl-value').value = 'walkthrough';
+           document.querySelector('#gl-add')?.click(); } 'ok'`);
 await sleep(900);
-ok('术语表添加触发', await ev(`window.__apiLog.some(x => x.includes('glossary'))) === true || true`) === true);
+ok('术语表添加触发 POST /api/glossary', await ev(`window.__apiLog.some(x => x.includes('glossary'))`) === true);
+await ev(`window.__realFetch('/api/glossary/' + encodeURIComponent('走查术语'), {method: 'DELETE'}).catch(() => {}); 'cleaned'`);
 
 // ---- 管理后台 ----
 console.log('━━━ 管理后台 ━━━');
@@ -186,6 +190,17 @@ await ev(`window.openQuotaDialog ? (window.__state._quotaRaw = window.__state._q
 await sleep(600);
 ok('编辑限额弹层（6 字段）', (await ev(`document.querySelectorAll('.adm-q-row').length`)) >= 6);
 await ev(`document.querySelector('.ui-pop .btn.small:not(.primary)')?.click()`); await sleep(400);
+
+// 清理走查残留（新建库 POST 是真发的；DELETE 被拦截 mock，须走 __realFetch）
+await ev(`(async () => {
+  try {
+    const d = await (await window.__realFetch('/api/collections')).json();
+    const junk = (d.collections || []).find(c => c.name === '走查临时库');
+    if (junk) await window.__realFetch('/api/collections/' + junk.id, {method: 'DELETE'});
+  } catch {}
+  return 'cleaned';
+})()`);
+await sleep(500);
 
 console.log(`\n第 2 段+补测：${pass} 通过, ${fail} 失败`);
 if (fails.length) { console.log('失败清单:'); fails.forEach(f => console.log('  ✗ ' + f)); }

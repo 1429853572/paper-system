@@ -321,7 +321,7 @@ async function renderAdminZone() {
     <div class="set-card">
       <div class="set-head">${icon('clock')} 审计日志
         <span class="muted" style="font-weight:400">敏感操作留痕（登录不计）</span></div>
-      ${renderAuditTable(auditRows)}
+      ${auditRows.length ? renderAuditTable(auditRows)
         : '<p class="muted">暂无记录——删除/重置密码/禁用等敏感操作会记录在此</p>'}
     </div>`;
 
@@ -517,10 +517,10 @@ async function renderAssets() {
     if (it.kind === 'fig') {
       const f = it.f;
       return `<div class="asset">
-        ${f.label ? `<span class="asset-badge" onclick="jumpEvidence(${f.page_index})" title="跳到 PDF 该页">${esc(f.label)}</span>` : ''}
+        ${f.label ? `<span class="asset-badge" onclick="tbJumpFlash(${f.page_index}, 'image', 1)" title="跳到 PDF 该页并闪烁高亮图表">${esc(f.label)}</span>` : ''}
         <div class="fig-grid">
-          <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}" ondblclick="lightbox(this.src, '')">
-          ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" ondblclick="lightbox(this.src, '')">`).join('')}
+          <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}" alt="解析产物截图（${esc((f.caption || f.label || '图表').slice(0, 80))}）" ondblclick="lightbox(this.src, '')">
+          ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" alt="" aria-hidden="true" ondblclick="lightbox(this.src, '')">`).join('')}
         </div>
         ${(f.sub_captions || []).length ? `<p class="muted" style="font-size: var(--fs-xs)">${esc(f.sub_captions.join(' | ').slice(0, 200))}</p>` : ''}
         ${capHtml(f.caption || '', `cap-${f.page_index}-${(f.image_path || '').replace(/\W/g, '')}`)}
@@ -540,7 +540,7 @@ async function renderAssets() {
     const tex = (eq.latex || '').trim();
     let r = null;
     if (state.katex && tex) { try { r = state.katex.renderToString(tex, {throwOnError: false, displayMode: true, strict: false, trust: true}); } catch {} }
-    return `<div class="asset eq-asset" onclick="jumpEvidence(${eq.page_index})" title="跳到 PDF 该页">
+    return `<div class="asset eq-asset" onclick="tbJumpFlash(${eq.page_index}, 'equation', 1)" title="跳到 PDF 该式并闪烁高亮">
       ${r ? r : `<code>${esc(tex.slice(0, 400))}</code>`}
     </div>`;
   }).join('');
@@ -550,20 +550,57 @@ async function renderAssets() {
   // 页签在次级工具条上（与原文/双语/中文同一行、同尺寸），这里只刷新计数与态
   $$('#assets-subtabs .asset-sub').forEach(b => {
     b.classList.toggle('on', b.dataset.at === tab);
+    if (b.dataset.at === 'tables') {
+      b.textContent = '表格';
+      b.onclick = () => { state.assetsTab = 'tables'; renderAssets(); };
+      return;
+    }
     b.textContent = b.dataset.at === 'figs' ? `图表 (${figsN})` : `公式 (${eqsN})`;
     b.onclick = () => { state.assetsTab = b.dataset.at; renderAssets(); };
   });
+  // 「表格」子页签：本论文已收集的表格（就地打开对照工作台编辑——工作台能力全在弹层里）
+  if (tab === 'tables') {
+    // 与图表/公式同布局：按页分组流式；每个表格内嵌「可编辑网格 + AI 指令框 + 撤销重做」
+    // ——工作台的核心能力就地可用，完整对照（原图并排）仍可点缩略图/对照打开弹层
+    const pid = window.__state?.current?.id;
+    $('#content-view').innerHTML = '<p class="muted" style="padding:12px"><span class="spin"></span> 加载表格…</p>';
+    api(`/api/tables/list?review=all&paper_id=${pid}&page_size=200&with_cells=1`).then(d => {
+      if (window.__state?.current?.id !== pid || window.__state?.assetsTab !== 'tables') return;   // 已切走：丢弃
+      const items = d.items || [];
+      const tabBtn = document.querySelector('#assets-subtabs [data-at=tables]');
+      if (tabBtn) tabBtn.textContent = `表格 (${items.length})`;
+      if (!items.length) {
+        $('#content-view').innerHTML = `<div class="empty-state" style="padding:16px"><p class="t">本篇还没有收集表格</p>
+          <p style="margin-bottom:12px">解析完成后在「表格工作台 → 收集表格」里勾选本篇即可</p>
+          <button class="btn small" onclick="switchPage('tables');tbCollectOpen()">${icon('inbox')} 去收集</button></div>`;
+        return;
+      }
+      // 按页分组（对齐 figs 的分组头样式）
+      const byPage = new Map();
+      for (const t of items) {
+        if (!byPage.has(t.page_index)) byPage.set(t.page_index, []);
+        byPage.get(t.page_index).push(t);
+      }
+      $('#content-view').innerHTML = [...byPage.entries()].map(([pg, ts]) => `
+        <div class="asset-page">
+          <div class="asset-page-head" onclick="tbInlineJump(${pg}, 0)" title="跳到 PDF 该页并闪烁高亮表格">${icon('doc')} 第 ${pg + 1} 页 <span class="muted">${ts.length} 张 ${icon('arrowR', 11)}</span></div>
+          ${ts.map((t, i) => tbInlineEditor(t, i)).join('')}
+        </div>`).join('');
+      items.forEach(t => tbInlineBind(t));
+    }).catch(e => { $('#content-view').innerHTML = `<p class="muted" style="padding:12px">${esc(friendlyError(e))}</p>`; });
+    return;
+  }
   $('#content-view').innerHTML = `
     ${tab === 'figs'
       ? (merged.length ? groups.map(g => `
           <div class="asset-page">
-            <div class="asset-page-head" onclick="jumpEvidence(${g.page})" title="跳到 PDF 该页">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 项 ${icon('arrowR', 11)}</span></div>
+            <div class="asset-page-head" onclick="tbJumpFlash(${g.page}, 'image', 1)" title="跳到 PDF 该页并闪烁高亮">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 项 ${icon('arrowR', 11)}</span></div>
             ${g.items.map(itemHtml).join('')}
           </div>`).join('')
         : '<p class="muted" style="padding:12px">未提取到图表</p>')
       : (formulas.length ? eqGroups.map(g => `
           <div class="asset-page">
-            <div class="asset-page-head" onclick="jumpEvidence(${g.page})" title="跳到 PDF 该页">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 式 ${icon('arrowR', 11)}</span></div>
+            <div class="asset-page-head" onclick="tbJumpFlash(${g.page}, 'equation', 1)" title="跳到 PDF 该页并闪烁高亮">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 式 ${icon('arrowR', 11)}</span></div>
             ${eqHtml(g)}
           </div>`).join('')
         : '<p class="muted" style="padding:12px">未提取到公式</p>')}
@@ -624,10 +661,9 @@ window.exportChat = exportChat;   // 兼容内联 onclick 调用
 
 /* ---- 📚 文库管理页（左库树 + 右条目 + 详情，参考 Zotero/EndNote 的下钻式） ---- */
 state.libSel = localStorage.getItem('ps-lib-sel') || '';   // '' = 全部文献
-state.scope = '';                                           // 侧栏快捷范围筛选
 state.libQuery = '';                                        // 管理页搜索词
 state._libPage = 1; state._libPageSize = 25;                // 文库表格真分页（25 篇/页）
-state.libLevel = 1;                                         // 管理页层级: 1=库列表 2=库内
+state.libLevel = 2;                                         // 管理页层级: 1=库列表(库管理) 2=库内 —— P2: 文库导航直落论文表格（LenX 式）
 state.libView = 'card';                                     // 库列表视图: card | list
 state._libQTimer = 0;
 

@@ -129,7 +129,7 @@ async function loadTracker() {
   try {
     const collP = api('/api/collections').then(d => {
       const opts = [{id: '', name: '默认文献库'},
-        ...(d.collections || []), ...(d.shared_libs || []).map(x => ({...x, name: x.name + '（共享）'}))];
+        ...(d.collections || []), ...(d.shared_libs || []).map(x => ({...x, name: `${x.name}（${x.owner || '他人'} 共享）`}))];
       state._trackerCollOpts = opts.map(o => `<option value="${o.id}" ${o.id === (state._trackerCollId || '') ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
     }).catch(() => {});
     [subs, inbox] = await Promise.all([

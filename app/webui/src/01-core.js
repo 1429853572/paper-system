@@ -7,7 +7,8 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
 const state = {
   me: null, papers: [], q: '',
-  filter: localStorage.getItem('ps-filter') || '',   // ''|parsed|parsing|failed|private
+  filter: localStorage.getItem('ps-filter') || '',   // ''|parsed|parsing|failed|skipped（private 已并入 scope）
+  scope: localStorage.getItem('ps-scope') || '',     // ''|private|unread|untranslated（阅读范围，可再点取消）
   sortBy: localStorage.getItem('ps-sort') || 'recent', // recent|title|pages|size
   current: null,          // 当前论文 dict
   pdfDoc: null, pageNum: 1, scale: 1.0,
@@ -17,6 +18,7 @@ const state = {
   qaSession: '', health: {},
   uploads: new Map(),     // 上传中占位：name → {pct, phase: uploading|saving|error, msg, file, cid}
   parseProg: {},          // 解析实时进度：paper_id → {done, total}（SSE 推送 + statuses 水合）
+  translateProg: {},      // 翻译实时进度：paper_id → {done, total}（SSE 推送，块级粒度）
   cmdtags: [],            // 自定义命令标签（服务端 settings 存储；内置标签在代码里）
   qaHistory: [],          // 问答输入历史（↑↓ 回溯）
 };
@@ -69,15 +71,48 @@ function fmtTime(s) {
   return t.length >= 16 ? t.slice(5, 16) : t;
 }
 /* 弹窗基座：ui-backdrop + ui-pop 脚手架（Esc / 点外关闭统一；原先 8 处手写同款）。
-   返回 {pop, close}，内容由调用方填充。 */
-function openPop(className = '') {
+   返回 {pop, close}，内容由调用方填充。
+   opts.beforeClose(): 关闭前钩子，返回 false 则拦截关闭（工作台用来保住未保存编辑）。
+   Esc 在 contenteditable 单元格内时放行（不拦截不关闭）——让单元格自己的
+   「Esc 还原」先生效，二次 Esc 才关弹层。 */
+function openPop(className = '', opts = {}) {
   const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
   const pop = Object.assign(document.createElement('div'), {className: 'ui-pop' + (className ? ' ' + className : '')});
+  // 语义化弹层（a11y 专项轮 R1）：30+ 手写弹层统一 dialog 语义 + 焦点移交 + Tab 圈禁
+  // + 关闭还焦——读屏器感知「进入了对话框」，键盘焦点不逃逸到被遮罩的页面。
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-modal', 'true');
+  pop.tabIndex = -1;
+  const invoker = document.activeElement;   // 关闭时还焦给触发者（元素已移除则自然跳过）
   backdrop.appendChild(pop);
   document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  pop.focus({preventScroll: true});
+  // Tab 焦点圈禁：循环限制在弹层内（含 contenteditable 单元格）
+  const trap = e => {
+    if (e.key !== 'Tab') return;
+    const list = [...pop.querySelectorAll('button, [href], input, select, textarea, [tabindex="0"], [contenteditable="true"]')]
+      .filter(el => !el.disabled && el.offsetParent !== null && el.getAttribute('tabindex') !== '-1');
+    if (!list.length) return;
+    const first = list[0], last = list[list.length - 1];
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === pop)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    else if (!e.shiftKey && !pop.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  };
+  const close = () => {
+    if (opts.beforeClose && opts.beforeClose() === false) return;
+    pop.remove(); backdrop.remove();
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('keydown', trap, true);
+    if (invoker && invoker.isConnected) invoker.focus?.({preventScroll: true});
+  };
+  const onKey = e => {
+    if (e.key !== 'Escape') return;
+    const a = document.activeElement;
+    if (a && a.isContentEditable) return;   // 单元格编辑中：放行给单元格还原
+    e.stopPropagation(); close();
+  };
   document.addEventListener('keydown', onKey, true);
+  document.addEventListener('keydown', trap, true);
   backdrop.onclick = e => { if (e.target === backdrop) close(); };
   return { pop, close };
 }
@@ -109,6 +144,10 @@ async function downloadBlob(url, payload, filename, okMsg) {
 /* 进度细条（上传/解析/任务行共用，warn=true 转警示色） */
 function progressBar(pct, warn = false, cls = 'up-bar', style = '') {
   return `<div class="${cls}"${style ? ` style="${style}"` : ''}><i style="width:${Math.min(100, pct || 0)}%${warn ? ';background:var(--warn)' : ''}"></i></div>`;
+}
+/* 不定长进度条：总进度未知时用（排队 / 单文件解析只有 0/1），条纹滚动比假百分比诚实 */
+function progressIndet(cls = 'up-bar indet', style = '') {
+  return `<div class="${cls}"${style ? ` style="${style}"` : ''}><i></i></div>`;
 }
 /* 前沿节流：ms 内只放行第一次调用（SSE 事件风暴/轮询兜底共用） */
 function throttle(fn, ms = 2000) {
@@ -370,7 +409,7 @@ window.icon = (name, size = 14) =>
 /* ---------------- 健康自检 ---------------- */
 async function pollHealth() {
   try {
-    state.health = await api('/api/health');
+    state.health = await api('/api/health', {priority: 'low'});   // 健康轮询降级：让位用户请求
     // 注意键名：/api/health 返回 db/mineru/ai（xinference 替换 ollama 后 ai 为检索服务总开关）
     const ok = state.health.db && state.health.mineru && state.health.ai;
     $('#health-dot').className = 'health-dot ' + (ok ? 'ok' : 'bad');
@@ -406,6 +445,74 @@ document.addEventListener('click', e => {
 });
 setInterval(() => { if (!document.hidden) pollHealth(); }, 20000)   // 后台标签页暂停;
 
+/* ---------------- a11y 兜底（专项轮 R1，见 docs/web-quality-report.md §12） ----------------
+   onclick 挂非交互元素（div/span/b/td/tr…，运行时 ~143 处）的键盘可达：hydration 补
+   tabindex/role + 全局 Enter/Space 委托触发 click——一处收口覆盖全部现有与未来模板，
+   比逐模板改 46 处更可维护。附带 placeholder → aria-label 兑底（placeholder 不构成
+   可编程名）。rAF 去抖：innerHTML 大块替换后一帧内只 walk 一次（~8k 节点 ≈1ms）。 */
+const _A11Y_SKIP_TAGS = new Set(['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'LABEL', 'AUDIO', 'VIDEO']);
+const _a11yHydrate = () => {
+  $$('[onclick]').forEach(el => {
+    const tag = el.tagName;
+    if (_A11Y_SKIP_TAGS.has(tag) || el.closest('[contenteditable="true"]')) return;
+    const oc = el.getAttribute('onclick') || '';
+    if (/^event\.stopPropagation\(\)\s*;?\s*$/.test(oc)) return;   // 纯阻止冒泡，无动作
+    if (el.closest('.tb-edit-grid')) return;                        // 表格网格自有键盘模型
+    if (!el.hasAttribute('tabindex')) {
+      el.tabIndex = 0;
+      if (tag !== 'TR' && tag !== 'TD' && tag !== 'TH') el.setAttribute('role', 'button');   // 表格行保持 row 语义
+    }
+  });
+  $$(':is(input,textarea)[placeholder]:not([aria-label]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button])')
+    .forEach(el => el.setAttribute('aria-label', el.getAttribute('placeholder')));
+};
+let _a11yRaf = 0;
+new MutationObserver(() => {
+  if (_a11yRaf) return;
+  _a11yRaf = requestAnimationFrame(() => { _a11yRaf = 0; try { _a11yHydrate(); } catch {} });
+}).observe(document.body, { childList: true, subtree: true });
+_a11yHydrate();
+// 键盘激活委托：Enter/Space 在带 onclick 的非交互元素上模拟点击（Space 阻断页面滚动）
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (!t || _A11Y_SKIP_TAGS.has(t.tagName) || t.closest?.('[contenteditable="true"]')) return;
+  if (!t.hasAttribute?.('onclick')) return;
+  e.preventDefault();
+  t.click();
+});
+
 /* ---------------- 文献库 ---------------- */
 state.collections = [];
 state.currentCollection = '';
+
+
+/* ---------------- 网格编辑内核（工作台/合并/阅读页内嵌三处共用） ----------------
+   渲染=thead 首行+tbody、data-r/data-c、contenteditable；收集=按 r/c 读实时文本
+   （\u00a0 归一）；栈=撤销/重做双栈（50 上限，新动作截断重做分支）。
+   工作台的 ✕ 行列操作列是其特有外壳（tbRenderGrid 自己包），内核只管纯网格。 */
+window.tbGridKernel = {
+  render(el, grid) {
+    const cell = (v, r, c) => `<${r === 0 ? 'th' : 'td'} contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</${r === 0 ? 'th' : 'td'}>`;
+    el.innerHTML = `<thead><tr>${(grid[0] || []).map((v, c) => cell(v, 0, c)).join('')}</tr></thead>` +
+      `<tbody>${grid.slice(1).map((row, r) => `<tr>${row.map((v, c) => cell(v, r + 1, c)).join('')}</tr>`).join('')}</tbody>`;
+  },
+  collect(el) {
+    const out = [];
+    el.querySelectorAll('[data-r]').forEach(td => {
+      (out[+td.dataset.r] ||= [])[+td.dataset.c] = (td.textContent ?? '').replace(/\u00a0/g, ' ').trim();
+    });
+    return out.map(r => r || []);
+  },
+  stack(limit = 50) {
+    const undo = [], redo = [];
+    return {
+      snap(grid) { undo.push(JSON.stringify(grid)); redo.length = 0; if (undo.length > limit) undo.shift(); },
+      undo(cur) { if (!undo.length) return null; redo.push(JSON.stringify(cur)); return JSON.parse(undo.pop()); },
+      redo(cur) { if (!redo.length) return null; undo.push(JSON.stringify(cur)); return JSON.parse(redo.pop()); },
+      canUndo: () => undo.length > 0,
+      canRedo: () => redo.length > 0,
+    };
+  },
+};

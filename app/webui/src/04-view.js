@@ -196,11 +196,13 @@ $$('.r-subtabs [data-s]').forEach(b => b.onclick = () => switchView('read', b.da
 /* ---------------- 页签切换 ---------------- */
 $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.dataset.page));
 function switchPage(page) {
+  state._page = page;   // 侧栏软收起判定用（表格/追踪页自带左栏）
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
   $('#page-title').textContent = {reader: '阅读', collections: '文库管理',
     tasks: '任务中心', tracker: '文献追踪', tables: '表格工作台', trash: '回收站', settings: '设置',
     admin: '管理后台'}[page] || 'paper-system';
   syncSynBackBtn();
+  applySidebarCollapse();
   for (const p of ['reader', 'collections', 'tasks', 'tracker', 'tables', 'trash', 'settings', 'admin']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
@@ -241,8 +243,10 @@ const refreshQueueBadge = throttle(async () => { await _refreshQueueBadge(); }, 
 async function _refreshQueueBadge() {
   if (document.hidden) return;   // 后台标签页暂停轮询（回来时 visibilitychange 立即刷一次）
   try {
-    // 轻量计数端点（两个数字）——原先拉全量 ?limit=200（~70KB）只为数个数
-    const d = await api('/api/jobs/count');
+    // 轻量计数端点（两个数字）——原先拉全量 ?limit=200（~70KB）只为数个数；
+    // priority:low = 后台轮询让位于用户触发的请求（MWG deprioritize-background-fetches，
+    // 不支持的浏览器忽略该选项，无副作用）
+    const d = await api('/api/jobs/count', {priority: 'low'});
     const badge = $('#qbadge');
     if (badge) {
       badge.hidden = !(d.active + d.mcp_pending);

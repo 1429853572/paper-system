@@ -84,6 +84,7 @@ class Scheduler:
         self._last_user: dict[str, int] = {}  # job_type -> 上次服务的 user_id（轮转指针）
         self._paused_types: set[str] = set()  # 暂停的批量类型（parse/translate）
         self._translate_slots: dict[int, int] = {}  # user_id -> 在跑翻译数
+        self._last_prog: dict[tuple, float] = {}  # (job_id,"d")→done数 int / (job_id,"ts")→时间戳 float
         # 全局翻译并发上限（scheduler.translate_workers；per-user 上限另由 translate_concurrency 控制）
         self._translate_sem = threading.Semaphore(int(config.get("scheduler", "translate_workers")))
 
@@ -101,6 +102,7 @@ class Scheduler:
             ("janitor", self._janitor_loop),
             ("tracker", self._tracker_loop),
             ("table-tidy", self._table_tidy_loop),
+            ("table-regen", self._table_regen_loop),
         ):
             t = threading.Thread(target=fn, name=name, daemon=True)
             t.start()
@@ -127,7 +129,7 @@ class Scheduler:
                                 (r["id"],),
                             )
                         log.info("job %s 远程任务失效，已重排队", r["id"])
-            elif r["job_type"] in ("embed_backfill", "translate", "synthesis", "acquire", "table_tidy"):
+            elif r["job_type"] in ("embed_backfill", "translate", "synthesis", "acquire", "table_tidy", "table_regen"):
                 if r["job_type"] == "table_tidy":
                     # 批内表状态一并回「待整理」（重启丢进度——续跑按钮可重来）
                     ids = (json.loads(r["payload"] or "{}").get("ids") or [])
@@ -159,29 +161,33 @@ class Scheduler:
 
     # ---- 公平取任务 ----
     def _next_job(self, job_type: str) -> Any:
-        """两层优先级 + 层内按用户 round-robin。"""
-        rows = db.all(
-            "SELECT * FROM jobs WHERE job_type=? AND status='queued' "
-            "ORDER BY created_at LIMIT 400",
-            (job_type,),
-        )
-        if not rows:
+        """两层优先级 + 层内按用户 round-robin。
+
+        优先级分桶各自取窗口（多视角评审 P1-3）：此前单窗口 ORDER BY created_at
+        LIMIT 400 再内存分层——积压超 400 后新入队的 interactive 任务落在窗口外
+        不可见，两层优先级与 round-robin 全部失效（饿死）。
+        """
+        if job_type in self._paused_types:
             return None
-        interactive = [r for r in rows if r["priority"] == "interactive"]
-        background = [r for r in rows if r["priority"] != "interactive"]
-        last = self._last_user.get(job_type, -1)
-        for layer in (interactive, background):
-            if layer and job_type not in self._paused_types:
-                # round-robin: 各用户各取一个，从上次服务用户的下一个开始
-                by_user: dict[int, list] = {}
-                for r in layer:
-                    by_user.setdefault(r["user_id"], []).append(r)
-                users = sorted(by_user)
-                if last in users:
-                    users = users[users.index(last) + 1:] + users[:users.index(last) + 1]
-                for uid in users:
-                    self._last_user[job_type] = uid
-                    return by_user[uid][0]
+        for prio_sql in ("priority='interactive'", "priority!='interactive'"):
+            rows = db.all(
+                f"SELECT * FROM jobs WHERE job_type=? AND status='queued' AND {prio_sql} "
+                "ORDER BY created_at LIMIT 400",
+                (job_type,),
+            )
+            if not rows:
+                continue
+            # round-robin: 各用户各取一个，从上次服务用户的下一个开始
+            by_user: dict[int, list] = {}
+            for r in rows:
+                by_user.setdefault(r["user_id"], []).append(r)
+            users = sorted(by_user)
+            last = self._last_user.get(job_type, -1)
+            if last in users:
+                users = users[users.index(last) + 1:] + users[:users.index(last) + 1]
+            for uid in users:
+                self._last_user[job_type] = uid
+                return by_user[uid][0]
         return None
 
     def _claim(self, job_id: int, status: str = "running") -> bool:
@@ -298,18 +304,29 @@ class Scheduler:
 
         # 轮询到终态
         run_id = payload.get("run_id")
+        t0 = time.monotonic()
+        timeout = int(config.get("scheduler", "parse_task_timeout_sec") or 1800)
         while True:
             if self._stop.is_set():
                 return  # SIGTERM：远程任务保留，重启后 recover 接续
+            # 终态超时（多视角评审 P1-1）：远程任务卡 running 会无限期占死唯一
+            # parse worker（全站解析停摆）——超时即取消远端任务并走失败重试
+            if time.monotonic() - t0 > timeout:
+                try:
+                    mineru.cancel(task_id)
+                except Exception:  # noqa: BLE001 —— 取消失败不掩盖超时事实
+                    log.warning("job %s 超时后取消远程任务 %s 失败", job["id"], task_id)
+                raise RuntimeError(f"MinerU 任务超时（>{timeout // 60} 分钟未到终态）")
             snap = mineru.poll(task_id)
             f = snap["files"][0]
             status = f["status"]
             prog = snap.get("progress", {})
             # 进度节流：变化 <10% 且距上次 emit <15s 跳过（每 5s 一 UPDATE+SELECT+SSE 广播，
-            # 89 篇批量时前端 badge 又被每个事件触发拉全量 jobs——雪上加霜）
+            # 89 篇批量时前端 badge 又被每个事件触发拉全量 jobs——雪上加霜）。
+            # 状态存 self._last_prog（多视角评审 P0-4：此前 getattr 临时 dict 写完即丢，
+            # 节流从未生效）
             _new_d, _new_t = int(prog.get("completed", 0)), int(prog.get("total", 1))
-            _last = getattr(self, "_last_prog", {})
-            _key = (job["id"], "d")
+            _last = self._last_prog
             _last_d, _last_ts = _last.get((job["id"], "d"), -1), _last.get((job["id"], "ts"), 0.0)
             small = (_last_d >= 0 and _new_t > 0 and
                      (_new_d - _last_d) / _new_t < 0.10 and time.time() - _last_ts < 15)
@@ -723,6 +740,7 @@ class Scheduler:
                 )
                 for r in rows:
                     self.hard_delete_paper(r["id"])
+                self._cleanup_jobs()
                 self._daily_backup()
                 self._health_alerts()
                 self._misc_retention()      # 邀请码过期清理 + login-fail 审计 90 天保留
@@ -860,6 +878,94 @@ class Scheduler:
                          error=("预算已用尽——剩余表保持待整理，可稍后「继续整理」" if budget_stop else None))
         bus.publish({"type": "data", "entity": "tables", "user_id": None})
 
+    def _table_regen_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                job = self._next_job("table_regen")
+                if job is None:
+                    time.sleep(3)
+                    continue
+                if not self._claim(job["id"]):
+                    continue
+                try:
+                    self._run_table_regen(job)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("table_regen job %s 异常", job["id"])
+                    self._update(job["id"], status="failed", error=str(e)[:400])
+            except Exception:  # noqa: BLE001
+                log.exception("table_regen worker 异常")
+                time.sleep(3)
+
+    def _run_table_regen(self, job: Any) -> None:
+        """指令式批量重整（导出前的 AI 加工）：payload = {ids, instruction}。
+        逐表以「当前内容（ai_cells 优先，落回 cells）」为底稿按用户指令重生成，
+        结果落 ai_cells（ai_status=done）——与 AI 页签单表 regen 同语义，可继续编辑/
+        撤销/重生成。单表失败记 note 不拖垮整批；预算尽/无 key 提前收工。"""
+        from . import tables as tables_mod
+        from .costing import BudgetExceeded
+        from .llm import NoKeyError
+        payload = json.loads(job["payload"] or "{}")
+        ids = payload.get("ids") or []
+        instruction = (payload.get("instruction") or "").strip()
+        uid = job["user_id"]
+        if not ids or not instruction:
+            self._update(job["id"], status="failed", error="ids/instruction 缺失")
+            return
+        total = len(ids)
+        self._update(job["id"], status="running", progress_total=total, progress_done=0)
+        done = failed = 0
+        no_key = budget_stop = False
+        for tid in ids:
+            te = db.one("SELECT * FROM table_extracts WHERE id=? AND user_id=?", (tid, uid))
+            if te is None or te["review"] == "deleted":
+                done += 1
+                continue
+            grid = None
+            if te["ai_cells"]:
+                try:
+                    grid = json.loads(te["ai_cells"])
+                except Exception:  # noqa: BLE001
+                    grid = None
+            if not grid:
+                try:
+                    grid = json.loads(te["cells"] or "[]")
+                except Exception:  # noqa: BLE001
+                    grid = []
+            try:
+                r = tables_mod.regen_one(uid, te, grid, instruction)
+                with db.write() as c:
+                    if r.get("error"):
+                        failed += 1
+                        c.execute("UPDATE table_extracts SET ai_note=? WHERE id=?",
+                                  (f"AI 加工失败：{r['error'][:150]}", tid))
+                    else:
+                        c.execute("UPDATE table_extracts SET ai_cells=?, ai_note=?, ai_status='done', "
+                                  "updated_at=datetime('now') WHERE id=?",
+                                  (json.dumps(r["rows"], ensure_ascii=False), r["note"], tid))
+            except NoKeyError:
+                no_key = True
+                break
+            except BudgetExceeded:
+                budget_stop = True
+                break
+            except Exception as e:  # noqa: BLE001 —— 单表异常隔离
+                failed += 1
+                with db.write() as c:
+                    c.execute("UPDATE table_extracts SET ai_note=? WHERE id=?",
+                              (f"AI 加工失败：{str(e)[:150]}", tid))
+            done += 1
+            self._update(job["id"], progress_done=done)
+        if no_key:
+            self._update(job["id"], status="failed", progress_done=done,
+                         error="未配置 LLM key——AI 加工需要可用模型（设置页配置或联系管理员）")
+        elif budget_stop:
+            self._update(job["id"], status="failed", progress_done=done,
+                         error="预算已用尽——剩余表未加工，可稍后重试")
+        else:
+            self._update(job["id"], status="done", progress_done=done,
+                         error=(f"{failed} 张加工失败（已保留原样，见表备注）" if failed else None))
+        bus.publish({"type": "data", "entity": "tables", "user_id": None})
+
     def _tracker_loop(self) -> None:
         """文献追踪巡逻：30 分钟醒一次，跑所有到期的订阅；有新条目则 SSE 广播。"""
         while not self._stop.is_set():
@@ -871,6 +977,15 @@ class Scheduler:
             except Exception:  # noqa: BLE001
                 log.exception("tracker 巡逻异常")
             time.sleep(1800)
+
+    def _cleanup_jobs(self) -> None:
+        """每日清理 30 天前的终态 job（done/failed/cancelled）——历史无限涨会拖慢
+        任务中心查询；进行中/排队中的不动。保留量小，审计走 audit_log。"""
+        with db.write() as c:
+            n = c.execute("DELETE FROM jobs WHERE status IN ('done','failed','cancelled') "
+                          "AND updated_at < datetime('now', '-30 days')").rowcount
+        if n:
+            log.info("janitor 清理 %s 条历史 job", n)
 
     def _daily_backup(self) -> None:
         """每日自动备份：DB 快照（VACUUM INTO）+ papers/ 文件目录打包；按 backup_keep 轮转."""
@@ -896,13 +1011,23 @@ class Scheduler:
             shutil.make_archive(str(papers_tar)[:-7], "gztar",
                                 root_dir=DATA_DIR.parent, base_dir="data/papers")
         # 清单 + 哈希：恢复时先验完整性，而不是只看"备份成功"
+        # 流式分块读取（多视角评审 P1-6）：tar 可达数十 GB，整个 read_bytes 进
+        # 内存算哈希会让 janitor 线程制造内存尖峰
         import hashlib
         import json
+
+        def _sha256_file(path) -> str:
+            h = hashlib.sha256()
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+
         manifest = {"created": today, "files": {}}
         for f in [bdir / f"db-{today}.db", bdir / f"papers-{today}.tar.gz"]:
             if f.exists():
                 manifest["files"][f.name] = {
-                    "sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
+                    "sha256": _sha256_file(f),
                     "size": f.stat().st_size}
         (bdir / f"manifest-{today}.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")

@@ -10,7 +10,7 @@ const CMD_PAGES = [
   {label: '表格工作台', hint: '页面', kw: 'tables 表格 收割 整理 导出 xlsx', run: () => switchPage('tables')},
   {label: '管理后台', hint: '页面 · admin', kw: 'admin 管理 成员 限额 邮件', run: () => switchPage('admin')},
   {label: '新建追踪订阅', hint: '动作', kw: 'tracker 订阅 subscribe 关键词 巡逻 新建', run: () => { switchPage('tracker'); setTimeout(() => window.trackerNew?.(), 200); }},
-  {label: '表格收表', hint: '动作', kw: 'tables 收表 harvest 收割', run: () => { switchPage('tables'); setTimeout(() => window.tbHarvestOpen?.(), 200); }},
+  {label: '表格批量收集', hint: '动作', kw: 'tables 收表 收集 harvest', run: () => { switchPage('tables'); setTimeout(() => window.tbHarvestOpen?.(), 200); }},
   {label: '上传 PDF（表格链）', hint: '动作', kw: 'tables upload 上传 解析 收表', run: () => { switchPage('tables'); setTimeout(() => window.tbUploadOpen?.(), 200); }},
   {label: '打开论文讨论区', hint: '动作', kw: 'discuss 讨论 评论 留言', run: () => { switchPage('reader'); setTimeout(() => { if (window.__state?.current?.id) document.querySelector('#discuss-open')?.click(); else toast('先在左侧打开一篇论文'); }, 300); }},
   {label: '回收站', hint: '页面', kw: 'trash 回收 删除', run: () => switchPage('trash')},
@@ -18,13 +18,9 @@ const CMD_PAGES = [
   {label: '我的用量', hint: '页面', kw: 'usage 用量 配额 磁盘 token', run: () => { switchPage('settings'); setTimeout(() => renderSettings('usage'), 120); }},
 ];
 const CMD_ACTIONS = [
-  {label: '上传文献', hint: '动作', kw: 'upload 上传 pdf', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); }},
-  {label: '粘贴 DOI / arXiv / BibTeX 导入', hint: '动作', kw: 'doi arxiv bibtex 导入 identifier', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); setTimeout(() => $('#ident-input')?.focus(), 200); }},
-  {label: '目录批量导入', hint: '动作', kw: '目录 导入 inbox dir', run: () => {
-    switchPage('reader');
-    $('#upload-arrow')?.click();
-    setTimeout(() => $('#dir-select')?.focus(), 250);   // 此前与「上传文献」完全同动作——伪入口
-  }},
+  {label: '导入文献（文件 / DOI / 目录）', hint: '动作', kw: 'upload import 上传 导入 文献 pdf doi url', run: () => openImportPop('files')},
+  {label: '粘贴 DOI / arXiv / BibTeX 导入', hint: '动作', kw: 'doi arxiv bibtex 导入 identifier', run: () => openImportPop('ident')},
+  {label: '目录批量导入（服务器 inbox）', hint: '动作', kw: '目录 导入 inbox dir', run: () => openImportPop('dir')},
   {label: '新建专题跟踪', hint: '动作', kw: 'topic 专题 采集 关键词', run: () => { switchPage('collections'); setTimeout(() => { openCollectPanel(); newTopicDialog(); }, 250); }},
   {label: '快速采集文献（检索入库）', hint: '动作', kw: 'acquire 采集 检索 知网 chinaxiv', run: () => { switchPage('collections'); setTimeout(() => openAcquirePop(), 250); }},
   {label: '发起综述', hint: '动作', kw: 'synthesis 综述 survey 报告', run: () => { switchPage('collections'); setTimeout(() => runSynthesis(null), 250); }},
@@ -125,6 +121,12 @@ const SHORTCUTS = [
   ['↑ / ↓（输入框内）', '翻提问历史'],
   ['/（问答输入框）', '选参与问答的论文'],
   ['Esc', '关闭弹窗/弹层/选文面板'],
+  ['← / →（表格工作台）', '对照审阅翻表'],
+  ['X（表格工作台）', '剔除并下一张'],
+  ['J（表格工作台）', '标记保留'],
+  ['Enter / Shift+Enter（单元格）', '表格编辑下移 / 上移'],
+  ['Esc（单元格内）', '还原单元格编辑'],
+  ['右键（表格单元格）', '合并/插行列/移动/清空菜单（Ctrl+Z 撤销结构操作）'],
 ];
 function showShortcutHelp() {
   const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});

@@ -12,7 +12,8 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
 const state = {
   me: null, papers: [], q: '',
-  filter: localStorage.getItem('ps-filter') || '',   // ''|parsed|parsing|failed|private
+  filter: localStorage.getItem('ps-filter') || '',   // ''|parsed|parsing|failed|skipped（private 已并入 scope）
+  scope: localStorage.getItem('ps-scope') || '',     // ''|private|unread|untranslated（阅读范围，可再点取消）
   sortBy: localStorage.getItem('ps-sort') || 'recent', // recent|title|pages|size
   current: null,          // 当前论文 dict
   pdfDoc: null, pageNum: 1, scale: 1.0,
@@ -22,6 +23,7 @@ const state = {
   qaSession: '', health: {},
   uploads: new Map(),     // 上传中占位：name → {pct, phase: uploading|saving|error, msg, file, cid}
   parseProg: {},          // 解析实时进度：paper_id → {done, total}（SSE 推送 + statuses 水合）
+  translateProg: {},      // 翻译实时进度：paper_id → {done, total}（SSE 推送，块级粒度）
   cmdtags: [],            // 自定义命令标签（服务端 settings 存储；内置标签在代码里）
   qaHistory: [],          // 问答输入历史（↑↓ 回溯）
 };
@@ -74,15 +76,48 @@ function fmtTime(s) {
   return t.length >= 16 ? t.slice(5, 16) : t;
 }
 /* 弹窗基座：ui-backdrop + ui-pop 脚手架（Esc / 点外关闭统一；原先 8 处手写同款）。
-   返回 {pop, close}，内容由调用方填充。 */
-function openPop(className = '') {
+   返回 {pop, close}，内容由调用方填充。
+   opts.beforeClose(): 关闭前钩子，返回 false 则拦截关闭（工作台用来保住未保存编辑）。
+   Esc 在 contenteditable 单元格内时放行（不拦截不关闭）——让单元格自己的
+   「Esc 还原」先生效，二次 Esc 才关弹层。 */
+function openPop(className = '', opts = {}) {
   const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
   const pop = Object.assign(document.createElement('div'), {className: 'ui-pop' + (className ? ' ' + className : '')});
+  // 语义化弹层（a11y 专项轮 R1）：30+ 手写弹层统一 dialog 语义 + 焦点移交 + Tab 圈禁
+  // + 关闭还焦——读屏器感知「进入了对话框」，键盘焦点不逃逸到被遮罩的页面。
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-modal', 'true');
+  pop.tabIndex = -1;
+  const invoker = document.activeElement;   // 关闭时还焦给触发者（元素已移除则自然跳过）
   backdrop.appendChild(pop);
   document.body.appendChild(backdrop);
-  const close = () => { pop.remove(); backdrop.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  pop.focus({preventScroll: true});
+  // Tab 焦点圈禁：循环限制在弹层内（含 contenteditable 单元格）
+  const trap = e => {
+    if (e.key !== 'Tab') return;
+    const list = [...pop.querySelectorAll('button, [href], input, select, textarea, [tabindex="0"], [contenteditable="true"]')]
+      .filter(el => !el.disabled && el.offsetParent !== null && el.getAttribute('tabindex') !== '-1');
+    if (!list.length) return;
+    const first = list[0], last = list[list.length - 1];
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === pop)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    else if (!e.shiftKey && !pop.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  };
+  const close = () => {
+    if (opts.beforeClose && opts.beforeClose() === false) return;
+    pop.remove(); backdrop.remove();
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('keydown', trap, true);
+    if (invoker && invoker.isConnected) invoker.focus?.({preventScroll: true});
+  };
+  const onKey = e => {
+    if (e.key !== 'Escape') return;
+    const a = document.activeElement;
+    if (a && a.isContentEditable) return;   // 单元格编辑中：放行给单元格还原
+    e.stopPropagation(); close();
+  };
   document.addEventListener('keydown', onKey, true);
+  document.addEventListener('keydown', trap, true);
   backdrop.onclick = e => { if (e.target === backdrop) close(); };
   return { pop, close };
 }
@@ -114,6 +149,10 @@ async function downloadBlob(url, payload, filename, okMsg) {
 /* 进度细条（上传/解析/任务行共用，warn=true 转警示色） */
 function progressBar(pct, warn = false, cls = 'up-bar', style = '') {
   return `<div class="${cls}"${style ? ` style="${style}"` : ''}><i style="width:${Math.min(100, pct || 0)}%${warn ? ';background:var(--warn)' : ''}"></i></div>`;
+}
+/* 不定长进度条：总进度未知时用（排队 / 单文件解析只有 0/1），条纹滚动比假百分比诚实 */
+function progressIndet(cls = 'up-bar indet', style = '') {
+  return `<div class="${cls}"${style ? ` style="${style}"` : ''}><i></i></div>`;
 }
 /* 前沿节流：ms 内只放行第一次调用（SSE 事件风暴/轮询兜底共用） */
 function throttle(fn, ms = 2000) {
@@ -375,7 +414,7 @@ window.icon = (name, size = 14) =>
 /* ---------------- 健康自检 ---------------- */
 async function pollHealth() {
   try {
-    state.health = await api('/api/health');
+    state.health = await api('/api/health', {priority: 'low'});   // 健康轮询降级：让位用户请求
     // 注意键名：/api/health 返回 db/mineru/ai（xinference 替换 ollama 后 ai 为检索服务总开关）
     const ok = state.health.db && state.health.mineru && state.health.ai;
     $('#health-dot').className = 'health-dot ' + (ok ? 'ok' : 'bad');
@@ -411,9 +450,77 @@ document.addEventListener('click', e => {
 });
 setInterval(() => { if (!document.hidden) pollHealth(); }, 20000)   // 后台标签页暂停;
 
+/* ---------------- a11y 兜底（专项轮 R1，见 docs/web-quality-report.md §12） ----------------
+   onclick 挂非交互元素（div/span/b/td/tr…，运行时 ~143 处）的键盘可达：hydration 补
+   tabindex/role + 全局 Enter/Space 委托触发 click——一处收口覆盖全部现有与未来模板，
+   比逐模板改 46 处更可维护。附带 placeholder → aria-label 兑底（placeholder 不构成
+   可编程名）。rAF 去抖：innerHTML 大块替换后一帧内只 walk 一次（~8k 节点 ≈1ms）。 */
+const _A11Y_SKIP_TAGS = new Set(['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'LABEL', 'AUDIO', 'VIDEO']);
+const _a11yHydrate = () => {
+  $$('[onclick]').forEach(el => {
+    const tag = el.tagName;
+    if (_A11Y_SKIP_TAGS.has(tag) || el.closest('[contenteditable="true"]')) return;
+    const oc = el.getAttribute('onclick') || '';
+    if (/^event\.stopPropagation\(\)\s*;?\s*$/.test(oc)) return;   // 纯阻止冒泡，无动作
+    if (el.closest('.tb-edit-grid')) return;                        // 表格网格自有键盘模型
+    if (!el.hasAttribute('tabindex')) {
+      el.tabIndex = 0;
+      if (tag !== 'TR' && tag !== 'TD' && tag !== 'TH') el.setAttribute('role', 'button');   // 表格行保持 row 语义
+    }
+  });
+  $$(':is(input,textarea)[placeholder]:not([aria-label]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button])')
+    .forEach(el => el.setAttribute('aria-label', el.getAttribute('placeholder')));
+};
+let _a11yRaf = 0;
+new MutationObserver(() => {
+  if (_a11yRaf) return;
+  _a11yRaf = requestAnimationFrame(() => { _a11yRaf = 0; try { _a11yHydrate(); } catch {} });
+}).observe(document.body, { childList: true, subtree: true });
+_a11yHydrate();
+// 键盘激活委托：Enter/Space 在带 onclick 的非交互元素上模拟点击（Space 阻断页面滚动）
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (!t || _A11Y_SKIP_TAGS.has(t.tagName) || t.closest?.('[contenteditable="true"]')) return;
+  if (!t.hasAttribute?.('onclick')) return;
+  e.preventDefault();
+  t.click();
+});
+
 /* ---------------- 文献库 ---------------- */
 state.collections = [];
 state.currentCollection = '';
+
+
+/* ---------------- 网格编辑内核（工作台/合并/阅读页内嵌三处共用） ----------------
+   渲染=thead 首行+tbody、data-r/data-c、contenteditable；收集=按 r/c 读实时文本
+   （\u00a0 归一）；栈=撤销/重做双栈（50 上限，新动作截断重做分支）。
+   工作台的 ✕ 行列操作列是其特有外壳（tbRenderGrid 自己包），内核只管纯网格。 */
+window.tbGridKernel = {
+  render(el, grid) {
+    const cell = (v, r, c) => `<${r === 0 ? 'th' : 'td'} contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</${r === 0 ? 'th' : 'td'}>`;
+    el.innerHTML = `<thead><tr>${(grid[0] || []).map((v, c) => cell(v, 0, c)).join('')}</tr></thead>` +
+      `<tbody>${grid.slice(1).map((row, r) => `<tr>${row.map((v, c) => cell(v, r + 1, c)).join('')}</tr>`).join('')}</tbody>`;
+  },
+  collect(el) {
+    const out = [];
+    el.querySelectorAll('[data-r]').forEach(td => {
+      (out[+td.dataset.r] ||= [])[+td.dataset.c] = (td.textContent ?? '').replace(/\u00a0/g, ' ').trim();
+    });
+    return out.map(r => r || []);
+  },
+  stack(limit = 50) {
+    const undo = [], redo = [];
+    return {
+      snap(grid) { undo.push(JSON.stringify(grid)); redo.length = 0; if (undo.length > limit) undo.shift(); },
+      undo(cur) { if (!undo.length) return null; redo.push(JSON.stringify(cur)); return JSON.parse(undo.pop()); },
+      redo(cur) { if (!redo.length) return null; undo.push(JSON.stringify(cur)); return JSON.parse(redo.pop()); },
+      canUndo: () => undo.length > 0,
+      canRedo: () => redo.length > 0,
+    };
+  },
+};
 /* ===== 02-library.js —— 文献库与侧栏：集合树/论文列表/上传导入/筛选 =====
    由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
    请勿直接改 app/webui/viewer.js（构建产物）。 */
@@ -464,19 +571,27 @@ function renderCollections() {
       <span class="col-arrow-none"></span><span class="col-name">${icon('inbox')} 未归类</span>
       <span class="col-count">${unassigned}</span></div>` : '') +
     sharedLibs.map(l => `<div class="col-item ${state.currentCollection === l.id ? 'on' : ''}" data-id="${l.id}">
-      <span class="col-arrow-none"></span><span class="col-name">${icon('folder')} ${esc(l.name)} <span class="muted" style="font-size: var(--fs-xs)">共享</span></span>
+      <span class="col-arrow-none"></span><span class="col-name">${icon('folder')} ${esc(l.name)} <span class="muted" style="font-size: var(--fs-xs)">${esc(l.owner || '')} 共享</span></span>
       <span class="col-count">${l.papers}</span></div>`).join('') +
-    `<button class="col-new" id="col-new">${icon('plus')} 新建文献库</button>
-     <div class="col-new-form" id="col-new-form" hidden>
-       <input id="col-new-name" placeholder="文献库名称，回车创建" maxlength="50">
-       <div><button class="btn small primary" id="col-new-ok">创建</button>
-       <button class="btn small" id="col-new-cancel">取消</button></div>
-     </div>`;
+    (state.groups || []).map(g => `
+    <div class="col-item ${state.currentCollection === g.root_cid ? 'on' : ''}" data-id="${g.root_cid}" title="群组「${esc(g.name)}」· ${g.members_n} 位成员 · 点行筛选群组文献">
+      <span class="col-arrow-none"></span>
+      <span class="col-name">${icon('user')} ${esc(g.name)} <span class="muted" style="font-size: var(--fs-xs)">${g.members_n}人${g.role === 'owner' ? ' · 我管理' : ''}</span></span>
+      <button class="group-mng" title="群组管理（成员/解散）" onclick="event.stopPropagation();tbGroupManage('${g.id}')">${icon('sliders')}</button>
+      <span class="col-count">${g.papers}</span>
+    </div>`).join('') +
+    `<button class="col-new" id="col-group">${icon('user')} 群组</button>`;
   $$('.col-item', el).forEach(item => item.onclick = e => {
     if (e.target.closest?.('.col-del') || e.target.dataset.toggle) return;
     const id = item.dataset.id;
+    // 文库页/表格页联动只对自己的库树生效——共享库/群组的 id 不在 collections 树里，
+    // 塞给 selectLib/tbCollF 会渲染成空表；这类行走旧路径（筛侧栏列表）。
+    const inTree = (state.collections || []).some(c => c.id === id);
+    // 表格页上下文：库行点击分派为表格筛选（复用同一份库树，不重复渲染侧栏）
+    if (state._page === 'tables' && inTree) { window.tbCollF(id); return; }
+    // 文库页上下文：库行点击同步主区表格（P2 侧栏树 ↔ 主表格联动）
+    if (state._page === 'collections' && inTree) { window.selectLib(id); return; }
     state.currentCollection = id;
-    updateUploadTarget();
     renderCollections(); loadPapers();
   });
   $$('.col-arrow', el).forEach(a => a.onclick = e => {
@@ -495,27 +610,65 @@ function renderCollections() {
     if (state.currentCollection === cid) state.currentCollection = '';
     await refreshLib();
   });
-  $('#col-new').onclick = () => {
-    const form = $('#col-new-form');
-    form.hidden = !form.hidden;
-    if (!form.hidden) $('#col-new-name').focus();
-  };
-  const createCol = async () => {
-    const name = $('#col-new-name').value.trim();
-    if (!name) { toast('请输入名称'); return; }
-    try {
-      const d = await api('/api/collections', {method: 'POST', body: JSON.stringify({name})});
-      $('#col-new-name').value = '';
-      $('#col-new-form').hidden = true;
-      state.currentCollection = d.id;
-      updateUploadTarget();
-      await refreshLib();
-    } catch (e) { toast('创建失败: ' + e.message); }
-  };
-  $('#col-new-ok').onclick = createCol;
-  $('#col-new-name').onkeydown = e => { if (e.key === 'Enter') createCol(); if (e.key === 'Escape') $('#col-new-form').hidden = true; };
-  $('#col-new-cancel').onclick = () => { $('#col-new-form').hidden = true; };
+  if (!$('#col-group')) return;   // 侧栏结构异常时保底（不中断 loadPapers 等后续逻辑）
+  $('#col-group').onclick = () => openGroupEntryPop('create');
 }
+/* P4 群组入口合一：创建 / 加入（群组 ID）两 Tab 弹层，取代侧栏两个按钮+两份内联表单。
+   isComposing：中文输入法选词回车不触发提交（web-quality-report D1，同 13-cmd.js 先例）。 */
+window.openGroupEntryPop = (tab = 'create') => {
+  const {pop, close} = openPop('group-entry-pop');
+  pop.innerHTML = `
+  <div class="ui-pop-title">${icon('user')} 协作群组
+    <button class="btn small ic-only" data-x aria-label="关闭">${icon('close')}</button></div>
+  <div class="imp-tabs">
+    <button type="button" class="chip-btn ${tab === 'create' ? 'on' : ''}" data-tab="create">${icon('plus', 12)} 创建群组</button>
+    <button type="button" class="chip-btn ${tab === 'join' ? 'on' : ''}" data-tab="join">${icon('user', 12)} 加入群组</button>
+  </div>
+  <div class="imp-body" id="gp-entry-body" style="min-height:0"></div>`;
+  pop.querySelector('[data-x]').onclick = () => close();
+  const render = t => {
+    pop.querySelectorAll('.imp-tabs .chip-btn').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+    const body = pop.querySelector('#gp-entry-body');
+    body.innerHTML = t === 'create'
+      ? `<label class="imp-fld">群组名称（成员共享读写）
+           <input id="gp-new-name" maxlength="50" placeholder="如：课题组 · GNN 研究">
+           <button class="btn small primary" id="gp-new-ok" style="align-self:flex-start">创建</button></label>`
+      : `<label class="imp-fld">群组 ID（向群主要，或用邀请链接）
+           <input id="gp-join-id" maxlength="20" placeholder="粘贴群组 ID">
+           <button class="btn small primary" id="gp-join-ok" style="align-self:flex-start">加入</button></label>`;
+    if (t === 'create') {
+      const go = async () => {
+        const name = $('#gp-new-name').value.trim();
+        if (!name) { toast('请输入名称'); return; }
+        try {
+          const d = await api('/api/groups', {method: 'POST', body: JSON.stringify({name})});
+          state.currentCollection = d.root_collection;
+          close(); await refreshLib();
+          toast(`群组「${name}」已创建——点群组行尾 ⚙ 邀请成员`, 4500);
+        } catch (e) { toast('创建失败: ' + e.message); }
+      };
+      body.querySelector('#gp-new-ok').onclick = go;
+      body.querySelector('#gp-new-name').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) go(); };
+      body.querySelector('#gp-new-name').focus();
+    } else {
+      const go = async () => {
+        const gid = $('#gp-join-id').value.trim();
+        if (!gid) { toast('请输入群组 ID'); return; }
+        try {
+          const d = await api('/api/groups/join', {method: 'POST', body: JSON.stringify({gid})});
+          state.currentCollection = '';
+          close(); await refreshLib();
+          toast(`已加入群组「${d.name}」`);
+        } catch (e) { toast(friendlyError(e, '加入失败')); }
+      };
+      body.querySelector('#gp-join-ok').onclick = go;
+      body.querySelector('#gp-join-id').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) go(); };
+      body.querySelector('#gp-join-id').focus();
+    }
+  };
+  pop.querySelectorAll('.imp-tabs .chip-btn').forEach(b => b.onclick = () => render(b.dataset.tab));
+  render(tab);
+};
 function treeDepth(cid) {
   let d = 0, cur = state.collections.find(c => c.id === cid);
   while (cur && cur.parent_id) { cur = state.collections.find(c => c.id === cur.parent_id); d++; }
@@ -530,18 +683,21 @@ function treeDepth(cid) {
    collections 只拉一次，三处共用（refreshLib 传 preset 给 renderCollectionsPage）。 */
 async function refreshLib() {
   const d = await api('/api/collections');
+  state.groups = d.groups || [];            // 协作群组（侧栏群组区 + 管理弹层用）
   loadCollections(d);                       // 侧栏文库树（含各库计数）
   await loadPapers();                      // 侧栏论文列表
   const pg = $('#page-collections');
   if (pg && pg.style.display !== 'none') await renderCollectionsPage(d);   // 文库管理页
-  // 解析进度水合（SSE 只覆盖在线期间的变更，刷新后从 statuses 补齐“提取中 x/y”）
+  // 解析/翻译进度水合（SSE 只覆盖在线期间的变更，刷新后从 statuses 补齐行内条）
   api('/api/statuses').then(s => {
-    const map = {};
+    const pmap = {}, tmap = {};
     for (const [pid, st] of Object.entries(s.statuses || {})) {
-      const pj = st.parse_job;
-      if (pj && pj.status === 'running') map[pid] = {done: pj.done || 0, total: pj.total || 0};
+      const pj = st.parse_job, tj = st.translate_job;
+      if (pj && pj.status === 'running') pmap[pid] = {done: pj.done || 0, total: pj.total || 0};
+      if (tj && tj.status === 'running') tmap[pid] = {done: tj.done || 0, total: tj.total || 0};
     }
-    state.parseProg = map;
+    state.parseProg = pmap;
+    state.translateProg = tmap;
     renderPapers();
   }).catch(() => {});
 }
@@ -572,17 +728,15 @@ async function loadPapers(append = false) {
     ? [state.currentCollection, ...colDescendants(state.currentCollection)].join(',') : '';
   const page = append ? (state.papersPage || 1) + 1 : 1;
   const params = new URLSearchParams({q: state.q.trim(), collection_id: scope,
-    status: state.filter === 'private' ? '' : state.filter, page, page_size: 200});
+    status: state.filter, page, page_size: 200});
   const d = await api('/api/papers?' + params);
-  let papers = state.filter === 'private' ? d.papers.filter(p => p.visibility === 'private') : d.papers;
+  let papers = d.papers;
   // 快捷范围（服务端筛不了的在前端过滤）
   if (state.scope === 'untranslated') {
     const st = state._statuses || {};
     papers = papers.filter(p => st[p.id]?.translate_job?.status !== 'done');
   } else if (state.scope === 'unread') {
     papers = papers.filter(p => !p.read_status);
-  } else if (state.scope === 'parsing') {
-    papers = papers.filter(p => ['parsing', 'pending'].includes(p.parse_status));
   } else if (state.scope === 'private') {
     papers = papers.filter(p => p.visibility === 'private');
   }
@@ -595,7 +749,7 @@ function statusBadge(p) {  if (p.deleted_at) return '<span class="badge err">回
   // 解析中带 SSE 水合进度（比 parse_status 细）；其余状态统一走 parseBadge（全站唯一出口）
   if (p.parse_status === 'parsing') {
     const pr = (state.parseProg || {})[p.id];
-    return `<span class="badge run">${pr && pr.total ? `解析中 ${pr.done}/${pr.total}` : '解析中'}</span>`;
+    return `<span class="badge run">${pr && pr.total > 1 ? `解析中 ${pr.done}/${pr.total}` : '解析中…'}</span>`;
   }
   if (p.parse_status === 'skipped')
     return '<span class="badge dim" title="超页数上限未自动解析，可手动重解析">跳过</span>';
@@ -626,15 +780,24 @@ function renderPapers() {
     el.innerHTML = `<div class="empty-state">
       <p class="t">这里还没有论文</p>
       <p style="margin-bottom:14px">把 PDF 拖到这里，或从下方入口导入（也支持 DOI / arXiv / BibTeX）</p>
-      <button class="btn primary" onclick="document.querySelector('#upload-arrow')?.click()">${icon('upload')} 上传第一篇</button>
-      <button class="btn" onclick="document.querySelector('#upload-arrow')?.click(); setTimeout(()=>document.querySelector('#ident-input')?.focus(), 200)">粘贴 DOI 导入</button>
+      <button class="btn primary" onclick="openImportPop('files')">${icon('upload')} 导入第一篇</button>
+      <button class="btn" onclick="openImportPop('ident')">粘贴 DOI 导入</button>
     </div>`;
     return;
   }
   const listHtml = sortPapers(state.papers).map(p => {
+    // 行内进度条（P7 统一进度条）：解析中 = x/y 实条或 0/1 不定长条；翻译中 = 块级实条或不定长条
     const pr = (state.parseProg || {})[p.id];
-    const bar = p.parse_status === 'parsing' && pr?.total
-      ? `${progressBar(Math.round(100 * pr.done / pr.total), false, 'up-bar parse')}` : '';
+    const tr = (state.translateProg || {})[p.id];
+    let bar = '';
+    if (p.parse_status === 'parsing')
+      bar += pr?.total > 1 ? progressBar(Math.round(100 * pr.done / pr.total), false, 'up-bar parse')
+                           : progressIndet('up-bar indet parse');
+    else if (p.parse_status === 'pending')
+      bar += progressIndet('up-bar indet parse dim');   // 排队中也有条（灰色不定长）——不是死的
+    else if (tr)
+      bar += tr.total > 1 ? progressBar(Math.round(100 * tr.done / tr.total), false, 'up-bar')
+                          : progressIndet('up-bar indet');
     return `
     <div class="paper-item ${state.current?.id === p.id ? 'sel' : ''}" data-id="${p.id}">
       <div class="info">
@@ -656,6 +819,8 @@ function renderPapers() {
     if (!id) return;   // 上传占位行无 paper id（由下方 up-act 接管）
     item.onclick = e => {
       if (e.target.closest?.('.pi-del')) { quickDelete(id, e.target.closest('.pi-del')); return; }   // closest：按钮内嵌 SVG 图标，e.target 常是 svg/path
+      // 表格页上下文：论文行点击分派为筛选该论文的表格（再点取消）
+      if (state._page === 'tables') { window.tbPaperF(id); return; }
       openPaper(id);   // 单击任意位置直接打开（批量选择在文库管理页）
     };
   });
@@ -671,24 +836,10 @@ function renderPapers() {
   });
 }
 
-/* 上传：入口是工具条图标 + 直接把文件拖到论文列表区（不再有独立大拖放框） */
+/* ===== 导入文献弹层（P1 入口归一）：原侧栏 240px 窄弹层升级为居中三 Tab 弹层 =====
+   文件（拖放区 + 全生命周期进度行：上传% → 解析排队 → 解析中 → 完成）/ 链接·标识符 / 服务器目录；
+   公共底栏：目标库下拉 + 仅自己可见 + 解析过滤。列表拖放上传与占位行保留不动。 */
 state.uploadPrivate = localStorage.getItem('ps-upload-private') === '1';
-function updateUploadTarget() {
-  const el = $('#upload-target');
-  if (el) el.textContent = '放入：' +
-    (state.currentCollection ? (state.collections.find(c => c.id === state.currentCollection)?.name || '默认文献库')
-     : '默认文献库（可在文库管理移动）');
-}
-function updateVisToggle() {
-  const cb = $('#upload-private');
-  if (cb) cb.checked = state.uploadPrivate;
-}
-$('#upload-private')?.addEventListener('change', e => {
-  state.uploadPrivate = e.target.checked;
-  localStorage.setItem('ps-upload-private', state.uploadPrivate ? '1' : '0');
-  toast(state.uploadPrivate ? '新上传的文献将仅自己可见' : '新上传的文献将对所有人可见');
-});
-const upPop = $('#upload-pop');
 /* 429 预知与友好化：弹层打开即展示今日余量；「上限」类错误附重置说明、不渲染无效重试按钮 */
 const quotaTip = msg => /上限/.test(msg || '') ? msg + '——明日 0 点重置，也可请管理员在设置页调整限额' : msg;
 async function refreshQuotaHint() {
@@ -698,33 +849,211 @@ async function refreshQuotaHint() {
   if (!q) { el.textContent = ''; return; }
   el.textContent = `今日解析 ${q.parse_used}/${q.parse_limit} 篇 · 磁盘 ${fmtGBs(q.disk_used_bytes)}/${q.disk_limit_gb} GB`;
 }
-$('#upload-arrow')?.addEventListener('click', e => {
-  e.stopPropagation();
-  upPop.hidden = !upPop.hidden;
-  upPop.style.bottom = '52px'; upPop.style.top = 'auto';
-  upPop.style.right = '12px'; upPop.style.left = 'auto';
-  updateUploadTarget(); updateVisToggle();
-  if (!upPop.hidden) refreshQuotaHint();
-});
-$('#upload-file-btn').onclick = () => { upPop.hidden = true; $('#file-input').click(); };
-outsideClose(upPop, $('#upload-arrow'), $('#upload-file-btn'));
-$('#file-input').onchange = e => { uploadFiles(e.target.files); e.target.value = ''; };
-$('#url-import-btn').onclick = async () => {
+let _importPop = null, _importPoll = null, _importTab = 'files', _importTarget = '';
+/* 弹层内的目标库：下拉为唯一真值来源；弹层外（拖到列表）仍用当前侧栏选中库 */
+const _importTargetOf = () => (_importPop ? ($('#imp-coll')?.value || null) : (state.currentCollection || null));
+window.openImportPop = (tab = 'files', targetCid = '') => {
+  _importPop?.close();          // beforeClose 已做清理（见下）
+  _importTab = tab;
+  _importTarget = targetCid || '';
+  const {pop, close} = openPop('import-pop', {beforeClose: () => {
+    clearInterval(_importPoll); _importPoll = null;
+    state.impTrack = new Map();
+    _importPop = null;
+    return true;
+  }});
+  _importPop = {pop, close};
+  pop.innerHTML = `
+  <div class="ui-pop-title">${icon('upload')} 导入文献
+    <button class="btn small ic-only" data-x aria-label="关闭">${icon('close')}</button></div>
+  <div class="imp-tabs" role="tablist">
+    ${[['files', 'doc', '文件'], ['ident', 'key', '链接·标识符'], ['dir', 'folder', '服务器目录']].map(([id, ic, label]) =>
+      `<button type="button" class="chip-btn ${tab === id ? 'on' : ''}" data-tab="${id}" role="tab" aria-selected="${tab === id}">${icon(ic, 12)} ${label}</button>`).join('')}
+  </div>
+  <div class="imp-quota muted" id="quota-hint"></div>
+  <div class="imp-body" id="imp-body"></div>
+  <div class="imp-foot">
+    <label class="imp-coll">放入文献库
+      <select id="imp-coll"><option value="">默认文献库</option></select></label>
+    <label class="imp-vis"><input type="checkbox" id="upload-private" ${state.uploadPrivate ? 'checked' : ''}> 仅自己可见</label>
+    <button type="button" class="btn small" id="pf-adv-toggle">⚙ 解析过滤<span class="muted" id="pf-adv-hint" style="font-size:var(--fs-xs);margin-left:4px"></span></button>
+    <div id="pf-adv" hidden class="imp-pf">
+      <label>页数上限 <input id="pf-max" type="number" min="0" max="2000" style="width:64px">（0=不限）</label>
+      <label>排除文件名 <input id="pf-exclude" placeholder="supplement, /翻译/" style="flex:1"></label>
+      <span class="muted" style="font-size:var(--fs-xs)">逗号分隔子串或 /正则/；超页数入库但不自动解析，可手动重解析</span>
+    </div>
+  </div>`;
+  pop.querySelector('[data-x]').onclick = () => _importPop?.close();
+  pop.querySelectorAll('.imp-tabs .chip-btn').forEach(b => b.onclick = () => {
+    _importTab = b.dataset.tab;
+    pop.querySelectorAll('.imp-tabs .chip-btn').forEach(x => {
+      x.classList.toggle('on', x.dataset.tab === _importTab);
+      x.setAttribute('aria-selected', x.dataset.tab === _importTab);
+    });
+    _renderImportBody();
+  });
+  pop.querySelector('#upload-private').onchange = e => {
+    state.uploadPrivate = e.target.checked;
+    localStorage.setItem('ps-upload-private', state.uploadPrivate ? '1' : '0');
+    toast(state.uploadPrivate ? '新上传的文献将仅自己可见' : '新上传的文献将对所有人可见');
+  };
+  pop.querySelector('#pf-adv-toggle').onclick = () => {
+    const adv = pop.querySelector('#pf-adv');
+    if (adv) adv.hidden = !adv.hidden;
+  };
+  const pfMax = pop.querySelector('#pf-max'), pfEx = pop.querySelector('#pf-exclude');
+  if (pfMax) pfMax.onchange = saveParseFilter;
+  if (pfEx) pfEx.onchange = saveParseFilter;
+  // 目标库选项（与表格工作台上传同源）：库名列表异步填充
+  fetch('/api/collections').then(r => r.json()).then(d => {
+    const opts = [...(d.collections || []),
+      ...((d.shared_libs || []).map(x => ({...x, name: `${x.name}（${x.owner || '他人'} 共享）`}))),
+      ...((d.group_libs || []).map(x => ({...x, name: `${x.name} · ${x.group_name}`})))];
+    const sel = pop.querySelector('#imp-coll');
+    if (!sel) return;
+    const want = _importTarget || state.currentCollection || '';
+    sel.innerHTML = `<option value="">默认文献库</option>` + opts.map(o =>
+      `<option value="${o.id}" ${o.id === want ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+  }).catch(() => {});
+  loadParseFilter();
+  refreshQuotaHint();
+  _renderImportBody();
+};
+window.closeImportPop = () => _importPop?.close();
+const _renderImportBody = () => {
+  if (!_importPop) return;
+  const box = $('#imp-body');
+  if (!box) return;
+  box.innerHTML = '';
+  (_importTab === 'files' ? _impFilesBody : _importTab === 'ident' ? _impIdentBody : _impDirBody)(box);
+};
+/* 文件 Tab：拖放区 + 生命周期进度行（上传% → 解析排队/解析中 → ✓/✗） */
+const _impFilesBody = box => {
+  box.innerHTML = `
+  <div class="imp-drop" id="imp-drop" tabindex="0" role="button" aria-label="选择或拖入文件">
+    ${icon('upload', 26)}
+    <div class="t">点击选择，或将文件拖到这里</div>
+    <div class="muted" style="font-size:var(--fs-xs)">支持 PDF / 图片 / Word / PPT / Excel，可多选；也支持直接拖到左侧论文列表</div>
+  </div>
+  <div class="imp-rows" id="imp-rows"></div>`;
+  const drop = box.querySelector('#imp-drop');
+  drop.onclick = () => $('#file-input').click();
+  drop.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#file-input').click(); } };
+  ['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => uploadFiles(e.dataTransfer.files, _importTargetOf() || undefined));
+  renderImportRows();
+};
+/* 链接·标识符 Tab：URL 直链 + DOI/arXiv/BibTeX */
+const _impIdentBody = box => {
+  box.innerHTML = `
+  <label class="imp-fld">网页 URL（PDF / arXiv 直链）
+    <span class="imp-inline"><input id="url-import-input" placeholder="https://…  或  https://arxiv.org/abs/…"><button class="btn small primary" id="url-import-btn">导入 URL</button></span></label>
+  <label class="imp-fld">DOI / arXiv ID / BibTeX（可多条，自动抓元数据 + OA PDF）
+    <textarea id="ident-input" rows="5" placeholder="10.xxxx/xxxxx&#10;arXiv:2401.12345&#10;@article{…}"></textarea>
+    <button class="btn small" id="ident-btn" style="align-self:flex-start">导入 ID</button></label>`;
+  box.querySelector('#url-import-btn').onclick = urlImportGo;
+  box.querySelector('#url-import-input').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) $('#url-import-btn').click(); };
+  box.querySelector('#ident-btn').onclick = identImportGo;
+  box.querySelector('#ident-input').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) $('#ident-btn').click(); };
+};
+/* 服务器目录 Tab：data/inbox/ 下子目录批量入库（CAJ/KDH 自动转 PDF） */
+const _impDirBody = box => {
+  box.innerHTML = `
+  <label class="imp-fld">选择目录
+    <span class="imp-inline"><select id="dir-select" style="flex:1"><option value="">从服务器目录导入…</option></select>
+    <button class="btn small ic-only" id="dir-refresh" title="重新扫描 data/inbox/ 目录列表">${icon('retry')}</button></span></label>
+  <button class="btn small" id="dir-btn" style="align-self:flex-start">${icon('folder')} 目录导入</button>
+  <p class="muted" style="font-size:var(--fs-xs)">把知网等下载器输出的文件放进服务器 <code style="user-select:all">data/inbox/&lt;目录&gt;/</code> 后点 ⟳ 刷新；入库与解析进度见「任务中心」。</p>`;
+  loadImportDirs();
+  box.querySelector('#dir-btn').onclick = dirImportGo;
+  box.querySelector('#dir-refresh').onclick = () => loadImportDirs();
+};
+/* 弹层内进度行：上半 = 正在上传的（uploads Map），下半 = 已入库跟踪解析的（impTrack）。
+   impTrack 由 uploadFiles 成功入库时登记，解析进度经 4s 轮询 /api/statuses 推进（P7）。 */
+function renderImportRows() {
+  if (!_importPop) return;
+  const box = $('#imp-rows');
+  if (!box) return;
+  const rows = [];
+  for (const [name, u] of state.uploads.entries()) {
+    rows.push(u.phase === 'error'
+      ? `<div class="imp-row err"><div class="n">${esc(name)}</div>
+           <div class="s"><span class="badge err">失败</span>
+           <span class="muted" style="font-size:var(--fs-xs)" title="${esc(u.msg || '')}">${esc((u.msg || '').slice(0, 40))}</span></div></div>`
+      : `<div class="imp-row"><div class="n">${esc(name)}</div>
+           <div class="s"><span class="up-pct">${u.phase === 'saving' ? '保存中…' : '上传中 ' + (u.pct || 0) + '%'}</span>
+           ${progressBar(u.pct || 0)}</div></div>`);
+  }
+  for (const [name, t] of (state.impTrack || new Map()).entries()) {
+    if (t.status === 'parsed')
+      rows.push(`<div class="imp-row ok"><div class="n">${esc(name)}</div>
+        <div class="s"><span class="badge ok">✓ 已完成</span><button class="up-act" data-open="${t.paper_id}">阅读</button></div></div>`);
+    else if (t.status === 'failed')
+      rows.push(`<div class="imp-row err"><div class="n">${esc(name)}</div>
+        <div class="s"><span class="badge err">解析失败</span><span class="muted" style="font-size:var(--fs-xs)">详情见任务中心</span></div></div>`);
+    else if (t.status === 'skipped')
+      rows.push(`<div class="imp-row ok"><div class="n">${esc(name)}</div>
+        <div class="s"><span class="badge dim">已入库（超页数上限未解析）</span></div></div>`);
+    else {
+      const pr = (state.parseProg || {})[t.paper_id] || {};
+      const xy = pr.total > 1;
+      rows.push(`<div class="imp-row"><div class="n">${esc(name)}</div>
+        <div class="s"><span class="up-pct">${t.status === 'parsing' ? (xy ? `解析中 ${pr.done}/${pr.total}` : '解析中…') : '已入库 · 解析排队'}</span>
+        ${t.status === 'parsing' && xy ? progressBar(Math.round(100 * pr.done / pr.total), false, 'up-bar parse')
+                                       : progressIndet('up-bar indet' + (t.status === 'parsing' ? '' : ' dim'))}</div></div>`);
+    }
+  }
+  box.innerHTML = rows.join('');
+  box.querySelectorAll('[data-open]').forEach(b => b.onclick = () => {
+    const pid = b.dataset.open;
+    closeImportPop();
+    openPaper(pid);
+  });
+}
+/* 弹层打开期间的解析进度轮询（tbTrackParse 同款模式，关弹层自动清掉） */
+function startImportPoll() {
+  if (_importPoll) return;
+  _importPoll = setInterval(async () => {
+    if (!_importPop) { clearInterval(_importPoll); _importPoll = null; return; }
+    const ids = [...(state.impTrack || [])]
+      .filter(([, t]) => !['parsed', 'failed', 'skipped'].includes(t.status)).map(([, t]) => t.paper_id);
+    if (!ids.length) return;
+    try {
+      const d = await api('/api/statuses?paper_ids=' + ids.join(','));
+      for (const [, t] of (state.impTrack || new Map()).entries()) {
+        const s = d.statuses?.[t.paper_id];
+        if (!s) continue;
+        t.status = s.parse_status;
+        if (s.parse_status === 'parsing' && s.parse_job) {
+          state.parseProg ||= {};
+          state.parseProg[t.paper_id] = {done: s.parse_job.done || 0, total: s.parse_job.total || 0};
+        }
+      }
+      renderImportRows();
+    } catch { /* ignore */ }
+  }, 4000);
+}
+$('#upload-arrow')?.addEventListener('click', () => openImportPop());
+$('#file-input').onchange = e => {
+  uploadFiles(e.target.files, _importPop ? (_importTargetOf() || undefined) : undefined);
+  e.target.value = '';
+};
+async function urlImportGo() {
   const url = $('#url-import-input').value.trim();
   if (!url) { toast('请输入 URL'); return; }
   try {
     const r = await api('/api/papers/import-url', {method: 'POST', body: JSON.stringify({
       url, visibility: state.uploadPrivate ? 'private' : 'shared',
-      collection_id: state.currentCollection || undefined})});
+      collection_id: _importTargetOf() || undefined})});
     toast(r.status === 'duplicate' ? (r.linked ? '该 URL 已在库中——已挂进当前文献库' : '该 URL 已在库中') : '已加入解析队列');
     $('#url-import-input').value = '';
-    upPop.hidden = true;
+    closeImportPop();
     await refreshLib();
   } catch (e) { toast(quotaTip('导入失败: ' + e.message), 5000); }
-};
-$('#url-import-input').onkeydown = e => { if (e.key === 'Enter') $('#url-import-btn').click(); };
+}
 /* 标识符导入（zotero-mcp 式）：DOI / arXiv ID / BibTeX → 元数据 + OA PDF */
-$('#ident-btn').onclick = async () => {
+async function identImportGo() {
   const ta = $('#ident-input');
   const text = ta.value.trim();
   if (!text) { toast('先粘贴 DOI / arXiv ID 或 BibTeX'); return; }
@@ -733,7 +1062,7 @@ $('#ident-btn').onclick = async () => {
   try {
     const d = await api('/api/papers/import-identifier', {method: 'POST', body: JSON.stringify({
       text, visibility: state.uploadPrivate ? 'private' : 'shared',
-      collection_id: state.currentCollection || null})});
+      collection_id: _importTargetOf()})});
     const q = d.results.filter(x => x.status === 'queued').length;
     const dup = d.results.filter(x => x.status === 'duplicate').length;
     const nopdf = d.results.filter(x => x.status === 'no_pdf').length;
@@ -743,11 +1072,10 @@ $('#ident-btn').onclick = async () => {
     if (nopdf) msg += `，${nopdf} 篇无公开 PDF`;
     if (nf) msg += `，${nf} 条未识别`;
     toast(msg, 4000);
-    if (q) { ta.value = ''; upPop.hidden = true; await loadCollections(); await refreshLib(); }
+    if (q) { ta.value = ''; closeImportPop(); await loadCollections(); await refreshLib(); }
   } catch (e) { toast(quotaTip('导入失败: ' + e.message), 5000); }
   btn.disabled = false; btn.textContent = '导入 ID';
-};
-$('#ident-input').onkeydown = e => { if (e.key === 'Enter' && e.ctrlKey) $('#ident-btn').click(); };
+}
 /* 目录批量入库：inbox/ 下子目录 → 扫描入库（CAJ 自动转 PDF），进度见任务中心 */
 async function loadImportDirs() {
   try {
@@ -762,14 +1090,14 @@ async function loadImportDirs() {
     if (cur) sel.value = cur;
   } catch { /* ignore */ }
 }
-$('#dir-btn').onclick = async () => {
+async function dirImportGo() {
   const path = $('#dir-select').value;
   if (!path) { toast('先选择要导入的目录'); return; }
   const btn = $('#dir-btn');
   btn.disabled = true; btn.textContent = '扫描中…';
   try {
     const d = await api('/api/import-directory', {method: 'POST',
-      body: JSON.stringify({path, collection_id: state.currentCollection || null,
+      body: JSON.stringify({path, collection_id: _importTargetOf(),
                             visibility: state.uploadPrivate ? 'private' : 'shared'})});
     const q = d.queued.length, sk = d.skipped.length;
     toast(`已入库 ${q} 篇${sk ? `，跳过 ${sk} 个` : ''}——解析进度见「任务中心」`, 4000);
@@ -778,26 +1106,24 @@ $('#dir-btn').onclick = async () => {
       await uiConfirm(`以下文件未能入库：<br>${esc(reasons)}${sk > 3 ? `<br>…共 ${sk} 个` : ''}`,
                       {title: '跳过明细', okText: '知道了', hideCancel: true, html: true});
     }
-    upPop.hidden = true;
+    closeImportPop();
     await loadImportDirs();
     await refreshLib();
   } catch (e) { toast(quotaTip('目录导入失败: ' + e.message), 5000); }
   btn.disabled = false; btn.innerHTML = icon('folder') + ' 目录导入';
-};
-loadImportDirs();
+}
 /* 解析过滤器（llm4z 式：页数上限 + 文件名排除；服务端上传时执行，设置跟随账号） */
-$('#pf-adv-toggle').onclick = () => { $('#pf-adv').hidden = !$('#pf-adv').hidden; };
 async function loadParseFilter() {
   try {
     const d = await api('/api/settings/parse-filter');
-    $('#pf-max').value = d.max_pages || 0;
-    $('#pf-exclude').value = d.exclude || '';
-    $('#pf-adv-hint').textContent =
+    const max = $('#pf-max'), ex = $('#pf-exclude'), hint = $('#pf-adv-hint');
+    if (!max) return;
+    max.value = d.max_pages || 0;
+    ex.value = d.exclude || '';
+    hint.textContent =
       d.max_pages || d.exclude ? `（≤${d.max_pages || '∞'}页${d.exclude ? '·排除' + d.exclude.split(',')[0] : ''}）` : '';
   } catch { /* ignore */ }
 }
-$('#pf-max').onchange = saveParseFilter;
-$('#pf-exclude').onchange = saveParseFilter;
 async function saveParseFilter() {
   try {
     const d = await api('/api/settings/parse-filter', {method: 'PUT', body: JSON.stringify({
@@ -807,7 +1133,6 @@ async function saveParseFilter() {
     toast('解析过滤规则已保存');
   } catch (e) { toast('保存失败: ' + e.message); }
 }
-loadParseFilter();
 // 论文列表区 = 拖放上传目标
 const plist = $('#paper-list');
 ['dragover', 'dragenter'].forEach(ev => plist.addEventListener(ev, e => {
@@ -836,7 +1161,7 @@ async function uploadFiles(files, targetCid) {
   for (const f of pdfs) {
     const up = {pct: 0, phase: 'uploading', msg: '', file: f, cid};
     state.uploads.set(f.name, up);
-    renderPapers();
+    renderPapers(); renderImportRows();
     try {
       const d = await new Promise((resolve, reject) => {
         const fd = new FormData();
@@ -845,9 +1170,9 @@ async function uploadFiles(files, targetCid) {
         xhr.open('POST', `/api/papers/upload?visibility=${vis}${col}`);
         xhr.responseType = 'json';
         xhr.upload.onprogress = e => {
-          if (e.lengthComputable) { up.pct = Math.round(e.loaded / e.total * 100); renderPapers(); }
+          if (e.lengthComputable) { up.pct = Math.round(e.loaded / e.total * 100); renderPapers(); renderImportRows(); }
         };
-        xhr.upload.onload = () => { up.phase = 'saving'; up.pct = 100; renderPapers(); };
+        xhr.upload.onload = () => { up.phase = 'saving'; up.pct = 100; renderPapers(); renderImportRows(); };
         xhr.onerror = () => reject(new Error('网络错误'));
         xhr.onload = () => {
           const body = xhr.response || {};
@@ -864,13 +1189,20 @@ async function uploadFiles(files, targetCid) {
       }
       else if (res.status === 'skipped') {
         state.uploads.delete(f.name); okN++;
+        (state.impTrack ||= new Map()).set(f.name, {paper_id: res.paper_id, status: 'skipped'});
         setTimeout(() => toast(`《${(res.name || '文件').slice(0, 30)}》已入库但超出解析页数上限，未排队解析（可手动重解析）`, 5000), 400);
       }
-      else { state.uploads.delete(f.name); okN++; }
+      else {
+        state.uploads.delete(f.name); okN++;
+        // 已入库 → 弹层内继续跟踪解析生命周期（列表侧由 SSE 驱动的 parseProg 接管）
+        (state.impTrack ||= new Map()).set(f.name, {paper_id: res.paper_id, status: 'pending'});
+        startImportPoll();
+      }
       await refreshLib();
+      renderImportRows();
       if (up.phase === 'error') renderPapers();
     } catch (e) {
-      up.phase = 'error'; up.msg = e.message; rejN++; renderPapers();
+      up.phase = 'error'; up.msg = e.message; rejN++; renderPapers(); renderImportRows();
     }
   }
   if (!rejN && !dupN) toast(`已排队 ${okN} 篇`);
@@ -884,9 +1216,18 @@ async function uploadFiles(files, targetCid) {
 }
 
 /* 多选模式与批量操作 */
-/* ---- 筛选与排序菜单（▾）---- */
-const FILTERS = [['', '全部'], ['parsed', '已解析'], ['parsing', '解析中'], ['skipped', '已跳过'], ['failed', '失败'], ['private', '仅私人']];
-const SORTS = [['recent', '最近更新'], ['title', '标题'], ['pages', '页数'], ['size', '文件大小']];
+/* ---- 筛选（漏斗）与排序（并列图标）菜单 ---- */
+/* 旧值迁移：private 此前是解析状态组的成员（前端过滤），并入「阅读范围」后口径统一 */
+if (state.filter === 'private') {
+  state.filter = '';
+  state.scope = 'private';
+  localStorage.setItem('ps-filter', '');
+  localStorage.setItem('ps-scope', 'private');
+}
+const FILTERS = [['', '全部论文'], ['parsed', '已解析'], ['parsing', '解析中'],
+                 ['failed', '解析失败'], ['skipped', '已跳过']];
+const SCOPES = [['', '全部'], ['private', '仅我可见'], ['unread', '还没读'], ['untranslated', '还没翻译']];
+const SORTS = [['recent', '最近添加'], ['title', '标题（拼音）'], ['pages', '页数从多到少'], ['size', '文件从大到小']];
 function sortPapers(list) {
   const arr = [...list];
   const by = state.sortBy;
@@ -897,23 +1238,36 @@ function sortPapers(list) {
   return arr;
 }
 function markFilterMenu() {
-  const pop = $('#filter-pop');
-  if (pop) {
-    $$('.tp-item', pop).forEach(it => {
-      const on = it.dataset.f !== undefined ? it.dataset.f === state.filter : it.dataset.s === state.sortBy;
-      it.classList.toggle('on', on);
-    });
+  $$('#filter-pop .tp-item').forEach(it => {
+    const on = it.dataset.f !== undefined ? it.dataset.f === state.filter
+      : it.dataset.scope !== undefined ? it.dataset.scope === state.scope : false;
+    it.classList.toggle('on', on);
+  });
+  $$('#sort-pop .tp-item').forEach(it => it.classList.toggle('on', it.dataset.s === state.sortBy));
+  const arrow = $('#filter-arrow'), sarrow = $('#sort-arrow');
+  if (arrow) {
+    const parts = [];
+    if (state.filter) parts.push(FILTERS.find(f => f[0] === state.filter)?.[1]);
+    if (state.scope) parts.push(SCOPES.find(s => s[0] === state.scope)?.[1]);
+    arrow.classList.toggle('has-val', parts.length > 0);
+    arrow.title = parts.length ? `筛选中：${parts.join(' + ')}` : '筛选（解析状态 / 阅读范围）';
   }
-  const arrow = $('#filter-arrow');
-  if (!arrow) return;
-  const fn = FILTERS.find(f => f[0] === state.filter)?.[1] || '全部';
-  const sn = SORTS.find(s => s[0] === state.sortBy)?.[1] || '最近更新';
-  arrow.classList.toggle('has-val', !!state.filter || state.sortBy !== 'recent');
-  arrow.title = `筛选：${fn} · 排序：${sn}`;
+  if (sarrow) {
+    sarrow.classList.toggle('has-val', state.sortBy !== 'recent');
+    sarrow.title = `排序：${SORTS.find(s => s[0] === state.sortBy)?.[1] || '最近添加'}`;
+  }
 }
 $('#filter-arrow').onclick = e => {
   e.stopPropagation();
+  $('#sort-pop').hidden = true;
   const pop = $('#filter-pop');
+  pop.hidden = !pop.hidden;
+  markFilterMenu();
+};
+$('#sort-arrow').onclick = e => {
+  e.stopPropagation();
+  $('#filter-pop').hidden = true;
+  const pop = $('#sort-pop');
   pop.hidden = !pop.hidden;
   markFilterMenu();
 };
@@ -923,31 +1277,49 @@ $('#filter-pop').onclick = e => {
   if (item.dataset.f !== undefined) {
     state.filter = item.dataset.f;
     localStorage.setItem('ps-filter', state.filter);
-  } else if (item.dataset.s) {
-    state.sortBy = item.dataset.s;
-    localStorage.setItem('ps-sort', state.sortBy);
+  } else if (item.dataset.scope !== undefined) {
+    state.scope = state.scope === item.dataset.scope ? '' : item.dataset.scope;   // 再点取消
+    localStorage.setItem('ps-scope', state.scope);
   }
   $('#filter-pop').hidden = true;
   markFilterMenu();
   loadPapers();
+  if (state._page === 'tables') loadTables();   // 解析状态/阅读范围筛选 → 表格区同步收窄
+};
+$('#sort-pop').onclick = e => {
+  const item = e.target.closest('.tp-item');
+  if (!item?.dataset.s) return;
+  state.sortBy = item.dataset.s;
+  localStorage.setItem('ps-sort', state.sortBy);
+  $('#sort-pop').hidden = true;
+  markFilterMenu();
+  loadPapers();
+  if (state._page === 'tables') loadTables();   // 侧栏排序变化 → 表格卡片墙同键跟随（v1.12 合并后两侧一体）
 };
 outsideClose($('#filter-pop'), $('#filter-arrow'));
+outsideClose($('#sort-pop'), $('#sort-arrow'));
 markFilterMenu();
 
 /* ---- 侧栏折叠 / 展开（MinerU 风格浮动箭头）---- */
 state.sidebarCollapsed = localStorage.getItem('ps-sidebar-collapsed') === '1';
 window.applySidebarCollapse = () => {
   const sb = $('.sidebar');
-  sb.classList.toggle('collapsed', state.sidebarCollapsed);
-  $('#side-rail').hidden = !state.sidebarCollapsed;
+  // 任务/追踪两页自带工作区（或需要全宽）——主侧栏软收起；表格页已合并全局侧栏（不再软收起）；
+  // 不写用户偏好（ps-sidebar-collapsed 不动），回阅读页自动恢复。
+  // _softKeep：用户在软收起页里显式点过 » ——本次会话尊重其选择
+  const soft = ['tasks', 'tracker'].includes(state._page || 'reader') && !state._softKeep;
+  sb.classList.toggle('collapsed', state.sidebarCollapsed || soft);
+  $('#side-rail').hidden = !(state.sidebarCollapsed || soft);
 };
 $('#side-collapse').onclick = () => {
   state.sidebarCollapsed = true;
+  state._softKeep = false;
   localStorage.setItem('ps-sidebar-collapsed', '1');
   applySidebarCollapse();
 };
 $('#side-expand').onclick = () => {
   state.sidebarCollapsed = false;
+  state._softKeep = true;   // 软收起页里显式展开：本次会话不再自动收
   localStorage.setItem('ps-sidebar-collapsed', '0');
   applySidebarCollapse();
 };
@@ -960,19 +1332,100 @@ if (innerWidth < 1100 && !state.sidebarCollapsed) {
 /* 批量选择已收敛到「文库管理」页（勾选 → 完整批量条）与「批量中心」页；
    侧栏回归纯导航。state.selected 仍由文库页复选框维护（全站共享）。 */
 
-/* 搜索 + 快捷范围 chips */
+/* 搜索（快捷范围 chips 已并入筛选弹层「阅读范围」组——v1.11.4 截图反馈） */
 $('#lib-search').oninput = debounce(e => {   // 300ms 防抖：大库逐键触发全文检索会请求风暴
   state.q = e.target.value;
   loadPapers();
 }, 300);
-$$('#scope-chips .chip-btn').forEach(b => b.addEventListener('click', () => {
-  const s = b.dataset.scope;
-  state.scope = state.scope === s ? '' : s;      // 再点取消
-  $$('#scope-chips .chip-btn').forEach(x => x.classList.toggle('on', x.dataset.scope === state.scope));
-  loadPapers();
-}));
 
 /* ---------------- 阅读器 ---------------- */
+
+/* ---------- 群组管理弹层（成员邀请/移除/解散——仅群主可管理） ---------- */
+window.tbGroupManage = async gid => {
+  const {pop, close} = openPop('group-manage-pop');
+  const d = await api(`/api/groups/${gid}/members`).catch(e => { close(); toast(friendlyError(e)); return null; });
+  if (!d) return;
+  const render = (members, iAmOwner) => {
+    pop.innerHTML = `
+    <div class="ui-pop-title">${icon('user')} 群组管理
+      <button class="btn small ic-only" data-x aria-label="关闭">${icon('close')}</button></div>
+    <div class="muted" style="font-size:var(--fs-xs);margin-top:6px">成员共享读写：往群组库收集/上传/移除论文、建子库。解散群组只摘论文挂链，论文本体不受影响。</div>
+    ${iAmOwner ? `
+    <div style="display:flex;gap:6px;margin-top:10px">
+      <input id="gp-invite" placeholder="按用户名邀请成员…" style="flex:1" onkeydown="if(event.key==='Enter'&&!event.isComposing)gpInvite('${gid}')">
+      <button class="btn small primary" onclick="gpInvite('${gid}')">邀请</button>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+      <button class="btn small" onclick="gpCopyLink('${gid}')">${icon('copy', 12)} 复制邀请链接</button>
+      <span class="muted" style="font-size:var(--fs-xs)">或把群组 ID <code style="user-select:all">${gid}</code> 发给同事，对方在侧栏「群组 → 加入群组」输入即可自助加入</span>
+    </div>` : ''}
+    <div style="margin-top:10px">
+      ${members.map(m => `
+      <div class="col-item" style="cursor:default">
+        <span class="col-arrow-none"></span>
+        <span class="col-name">${esc(m.username)}${m.role === 'owner' ? ' <span class="badge ok">群主</span>' : ''}</span>
+        ${iAmOwner && m.role !== 'owner' ? `<button class="col-del" style="display:inline" onclick="gpRemove('${gid}', ${m.user_id}, '${esc(m.username)}')" title="移出群组">${icon('close')}</button>` : ''}
+      </div>`).join('')}
+    </div>
+    ${iAmOwner ? `<button class="btn small danger" style="margin-top:12px" onclick="gpDisband('${gid}')">${icon('trash')} 解散群组</button>` : ''}`;
+    pop.querySelector('[data-x]').onclick = close;
+    if (iAmOwner) window._gpRefresh = () => tbGroupManage(gid);
+  };
+  render(d.members, d.iAmOwner);
+};
+window.gpCopyLink = async gid => {
+  const url = `${location.origin}/?join_group=${gid}`;
+  try { await navigator.clipboard.writeText(url); toast('邀请链接已复制——发给同事，打开即可加入', 4000); }
+  catch { toast('复制失败，请手动复制：' + url, 8000); }
+};
+window.gpInvite = async gid => {
+  const inp = document.querySelector('#gp-invite');
+  const name = inp?.value.trim();
+  if (!name) return;
+  try {
+    await api(`/api/groups/${gid}/members`, {method: 'POST', body: JSON.stringify({username: name})});
+    toast(`已邀请 ${name}`);
+    window._gpRefresh?.();
+  } catch (e) { toast(friendlyError(e, '邀请失败')); }
+};
+window.gpRemove = async (gid, uid, name) => {
+  if (!(await uiConfirm(`把 ${name} 移出群组？`, {title: '移除成员'}))) return;
+  await api(`/api/groups/${gid}/members/${uid}`, {method: 'DELETE'});
+  toast(`已移出 ${name}`);
+  window._gpRefresh?.();
+};
+window.gpDisband = async gid => {
+  if (!(await uiConfirm('解散群组？群组库树将删除（论文本体不受影响，只摘除挂链）。', {title: '解散群组', danger: true}))) return;
+  await api(`/api/groups/${gid}`, {method: 'DELETE'});
+  _tbCollectPop?.close?.();
+  toast('群组已解散');
+  document.querySelectorAll('.ui-backdrop').forEach(x => x.remove());
+  await refreshLib();
+};
+
+
+/* ---------- 群组邀请链接深链（?join_group=<id>） ----------
+   登录状态下直接弹加入确认；未登录先进 login.js 暂存，登录后此处接管。
+   加入成功/拒绝都清掉暂存与 URL 参数，避免重复弹。 */
+async function processPendingGroupJoin() {
+  const gid = new URLSearchParams(location.search).get('join_group')
+    || localStorage.getItem('ps-pending-join');
+  if (!gid) return;
+  localStorage.removeItem('ps-pending-join');
+  history.replaceState(null, '', location.pathname);
+  try {
+    const r = await api('/api/groups/join', {method: 'POST', body: JSON.stringify({gid})});
+    state.groups = [];
+    await refreshLib();
+    toast(`已加入群组「${r.name}」——群组文献见侧栏`, 6000);
+  } catch (e) {
+    const msg = friendlyError(e);
+    if (/已是该群组成员/.test(msg)) toast('你已在该群组中');
+    else if (/不存在/.test(msg)) toast('邀请链接失效：群组不存在或已解散', 6000);
+    else toast(msg, 6000);
+  }
+}
+processPendingGroupJoin();
 /* ===== 03-reader.js —— 阅读器：PDF 渲染/覆盖层/中英对照/翻译 =====
    由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
    请勿直接改 app/webui/viewer.js（构建产物）。 */
@@ -1023,10 +1476,42 @@ async function openPaper(id) {
   $('#page-title').textContent = d.paper.title || d.paper.id;
   // PDF
   try {
-    state.pdfDoc = await pdfjsLib.getDocument(`/api/papers/${id}/pdf`).promise;
-    state.pageNum = 1; state.fitWidth = true; _pdfBuilt = null;
-    $('#pdf-toolbar').hidden = false;
-    renderPage();
+    ensurePdfViewerCss();   // pdf_viewer.css（100KB）按需注入——不进全局 <head>（专项轮 R5）
+    // 加载进度条（工具条下细条）：下载阶段按字节百分比，下载完转「渲染中」不确定动画，
+    // 首屏 canvas 出现后收起——大 PDF 的灰色空窗不再是无反馈的等待。
+    // epoch 守卫：换论文重入后旧闭包（迟到的 onProgress/收起定时器）不得触碰新状态；
+    // done 标记：pdf.js 的 Range 续传（206 分段）在 promise resolve 后仍会反复触发
+    // onProgress——没有 done 的话，收起的条会被迟到的进度更新重新拉出来。
+    _loadbarEpoch++;
+    const epoch = _loadbarEpoch;
+    const loadbar = $('#pdf-loadbar'), bar = loadbar?.querySelector('i');
+    let done = false;
+    const showBar = pct => { if (!loadbar || done || epoch !== _loadbarEpoch) return; loadbar.hidden = false;
+      loadbar.classList.toggle('indet', pct == null);
+      if (pct != null) bar.style.width = Math.round(pct * 100) + '%'; };
+    const hideBar = () => { if (!loadbar || done || epoch !== _loadbarEpoch) return;
+      done = true;
+      bar.style.width = '100%'; setTimeout(() => {
+        if (epoch !== _loadbarEpoch) return;   // 定时器触发前已换论文：不收新条
+        loadbar.hidden = true; bar.style.width = '0'; }, 250); };
+    try {
+      showBar(0);
+      const task = pdfjsLib.getDocument(`/api/papers/${id}/pdf`);
+      task.onProgress = ({loaded, total}) => showBar(total ? loaded / total : null);
+      state.pdfDoc = await task.promise;
+      if (state.current?.id !== id) return;   // 迟到的 PDF：已切别的论文，丢弃（防旧 doc 覆盖新骨架——assets 拉取同款守卫）
+      showBar(null);            // 下载完 → 渲染阶段不确定动画（首屏 canvas 出现前）
+      state.pageNum = 1; state.fitWidth = true; _pdfBuilt = null;
+      $('#pdf-toolbar').hidden = false;
+      renderPage();             // 渲染在后台进行；收条以首屏 canvas 出现为准（MutationObserver），
+      await new Promise(res => {   // 不依赖 renderPage 的 promise 链——快速换论文的交错路径不会卡条
+        if ($('#pdf-host canvas')) return res();
+        const mo = new MutationObserver(() => {
+          if ($('#pdf-host canvas')) { mo.disconnect(); res(); }
+        });
+        mo.observe($('#pdf-host'), {childList: true, subtree: true});
+      });
+    } finally { hideBar(); }
     applyVsplit();   // 按当前分栏宽度自适应首帧
     figCropPass();   // PDF 就绪，补跑原图裁剪
   } catch (e) {
@@ -1095,30 +1580,40 @@ async function pdfEnsureAll() {
     host.appendChild(w);
     wraps.set(i - 1, w);
   }
-  // 预计算各页高度（按第一页比例），占位防跳动
+  // 预计算各页几何（按第一页比例），占位防跳动；pgW/pgRatio 留给缩放做纯算术（R3）：
+  // 此前每次缩放对全部页串行 getPage+getViewport（O(N)），叠加全文档重排造成缩放冻结
+  // ——实测（web-quality-report §1.2）6 步缩放 14 个长任务、最重 600ms。
   const p1 = await state.pdfDoc.getPage(1);
   const v1 = p1.getViewport({scale: state.scale});
   state.pdfDoc.pgHeights = [];
+  state.pdfDoc.pgW = [];       // scale=1 基准宽（页间尺寸可不同）
+  state.pdfDoc.pgRatio = [];   // 高/宽比
   for (let i = 1; i <= state.pdfDoc.numPages; i++) {
     const pg = await state.pdfDoc.getPage(i);
     const vp = pg.getViewport({scale: state.scale});
     state.pdfDoc.pgHeights[i-1] = vp.height;
+    state.pdfDoc.pgW[i-1] = vp.width / state.scale;
+    state.pdfDoc.pgRatio[i-1] = vp.height / vp.width;
     const w = wraps.get(i - 1);
     if (!w) continue;   // 换文档竞态（切论文时 numPages 变化）→ 该页骨架已不存在，跳过
     const ph = w.querySelector('.pdf-ph');
     if (ph) ph.style.height = Math.round(vp.height) + 'px';
-    state.pdfDoc[`pgvp_${i}`] = vp;
   }
-  // 懒渲染观察器：进入视口即渲染该页（画布+文字层+覆盖层）
+  // 懒渲染观察器：进入视口即渲染该页（画布+文字层+覆盖层）；出离视口即释放位图（D4：
+  // 此前永不卸载，翻完一篇 15 页全部 canvas 驻留——量变风险见 docs/web-quality-report.md B3）。
+  // rootMargin 600px ≈ 视口前后各留 ~1 页缓冲，翻回时观察器自动重渲染。
   if (state._pdfObs) state._pdfObs.disconnect();
   state._pdfObs = new IntersectionObserver(async entries => {
     for (const en of entries) {
-      if (!en.isIntersecting) continue;
       const wrap = en.target;
-      // 倍率变了也要重绘（否则旧尺寸画布留在页面上）
-      if (!wrap.dataset.rendered || wrap._scale !== state.scale) {
-        wrap.dataset.rendered = '1';
-        await renderOneWrap(wrap);
+      if (en.isIntersecting) {
+        // 倍率变了也要重绘（否则旧尺寸画布留在页面上）
+        if (!wrap.dataset.rendered || wrap._scale !== state.scale) {
+          wrap.dataset.rendered = '1';
+          await renderOneWrap(wrap);
+        }
+      } else {
+        releasePdfWrap(wrap);
       }
     }
   }, { root: $('#pdf-host'), rootMargin: '600px 0px' });
@@ -1142,6 +1637,19 @@ async function pdfEnsureAll() {
 }
 /* 倍率变化：只更新占位高度 + 重绘当前可见页（DOM 骨架不动，滚动位置保持） */
 let _pdfFitBusy = false, _pdfFitPending = false;
+let _pdfCssInjected = false;
+let _loadbarEpoch = 0;   // PDF 加载进度条代数：openPaper 每次递增，旧闭包（迟到 onProgress/收起定时器）失效
+function ensurePdfViewerCss() {
+  /* pdf_viewer.css 只提供 .textLayer 样式（阅读页专用）——首开论文时注入一次。
+     在 getDocument 之前调用：本地 100KB 常趁 PDF 拉取完成前就绪，无样式闪跳。 */
+  if (_pdfCssInjected || document.querySelector('link[data-pdf-viewer-css]')) return;
+  _pdfCssInjected = true;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/static/vendor/pdfjs/pdf_viewer.css';
+  link.dataset.pdfViewerCss = '1';
+  document.head.appendChild(link);
+}
 async function _pdfRescale() {
   if (_pdfFitBusy) { _pdfFitPending = true; return; }   // 拖拽时可能重入：合并到下一次
   _pdfFitBusy = true;
@@ -1150,14 +1658,17 @@ async function _pdfRescale() {
     const host = $('#pdf-host');
     const cur = b.wraps.get(state.pageNum - 1);
     const oldTop = cur?.offsetTop ?? 0, oldScroll = host.scrollTop;
+    const prevScale = b.scale;
     b.scale = state.scale;
+    // 占位几何纯算术（R3）：基准宽 × 新倍率 + 高宽比——消除串行 getPage O(N)；
+    // 剩余的缩放成本是占位高度变化引发的全文档重排（结构性，见报告 §1.2 分解）
     for (let i = 1; i <= state.pdfDoc.numPages; i++) {
-      const pg = await state.pdfDoc.getPage(i);
-      const vp = pg.getViewport({scale: state.scale});
-      state.pdfDoc.pgHeights[i-1] = vp.height;
-      state.pdfDoc[`pgvp_${i}`] = vp;
+      const w0 = state.pdfDoc.pgW?.[i-1];
+      const ratio = state.pdfDoc.pgRatio?.[i-1];
+      const h = (w0 && ratio) ? w0 * state.scale * ratio : (state.pdfDoc.pgHeights[i-1] || 1000) * (state.scale / prevScale);
+      state.pdfDoc.pgHeights[i-1] = h;
       const ph = b.wraps.get(i - 1)?.querySelector('.pdf-ph');
-      if (ph) ph.style.height = Math.round(vp.height) + 'px';
+      if (ph) ph.style.height = Math.round(h) + 'px';
     }
     // 视口内的页立即按新倍率重绘；视口外的页滚进来时由观察器重绘
     const hr = host.getBoundingClientRect();
@@ -1181,6 +1692,12 @@ function updateZoomLabel() {
 }
 async function renderOneWrap(wrap) {
   if (!wrap) return;
+  wrap._rendering = true;   // 渲染中标记：释放逻辑跳过在渲染的页（竞态防护）
+  try {
+    await _renderOneWrapInner(wrap);
+  } finally { wrap._rendering = false; }
+}
+async function _renderOneWrapInner(wrap) {
   const idx = +wrap.dataset.page;
   const page = await state.pdfDoc.getPage(idx + 1);
   const vp = page.getViewport({scale: state.scale});           // CSS 尺寸：覆盖层/文字层/点击命中都用它
@@ -1203,6 +1720,17 @@ async function renderOneWrap(wrap) {
     await new pdfjsLib.TextLayer({textContentSource: tc, container: tl, viewport: vp}).render();
   } catch (e) {}
   drawOverlays(wrap);
+}
+/* 远页释放（D4）：出离视口 600px 外的已渲染页退回等高占位——位图（HiDPI 下每页可达
+   数十 MB RGBA）不再永久驻留；翻回时观察器按 data-rendered 空自动重渲染。
+   _rendering 防卸载正在渲染的页；占位用 pgHeights 等高 → 释放/重渲染均零布局跳动。 */
+function releasePdfWrap(wrap) {
+  if (!wrap || wrap._rendering || !wrap.dataset.rendered) return;
+  wrap._pageObj?.cleanup?.();   // pdf.js 页对象释放（重取 getPage 会拿新代理，官方安全）
+  const h = Math.round(state.pdfDoc.pgHeights?.[+wrap.dataset.page] || 1000);
+  wrap.innerHTML = `<div class="pdf-ph" style="height:${h}px"></div>`;
+  delete wrap.dataset.rendered;
+  wrap._vp = null; wrap._pageObj = null; wrap._scale = null;
 }
 function drawOverlays(wrap) {
   if (!wrap || !wrap._vp) return;
@@ -1662,11 +2190,13 @@ $$('.r-subtabs [data-s]').forEach(b => b.onclick = () => switchView('read', b.da
 /* ---------------- 页签切换 ---------------- */
 $$('.topnav button[data-page]').forEach(b => b.onclick = () => switchPage(b.dataset.page));
 function switchPage(page) {
+  state._page = page;   // 侧栏软收起判定用（表格/追踪页自带左栏）
   $$('.topnav button[data-page]').forEach(x => x.classList.toggle('on', x.dataset.page === page));
   $('#page-title').textContent = {reader: '阅读', collections: '文库管理',
     tasks: '任务中心', tracker: '文献追踪', tables: '表格工作台', trash: '回收站', settings: '设置',
     admin: '管理后台'}[page] || 'paper-system';
   syncSynBackBtn();
+  applySidebarCollapse();
   for (const p of ['reader', 'collections', 'tasks', 'tracker', 'tables', 'trash', 'settings', 'admin']) {
     $('#page-' + p).style.display = p === page ? (p === 'reader' ? 'flex' : 'block') : 'none';
   }
@@ -1707,8 +2237,10 @@ const refreshQueueBadge = throttle(async () => { await _refreshQueueBadge(); }, 
 async function _refreshQueueBadge() {
   if (document.hidden) return;   // 后台标签页暂停轮询（回来时 visibilitychange 立即刷一次）
   try {
-    // 轻量计数端点（两个数字）——原先拉全量 ?limit=200（~70KB）只为数个数
-    const d = await api('/api/jobs/count');
+    // 轻量计数端点（两个数字）——原先拉全量 ?limit=200（~70KB）只为数个数；
+    // priority:low = 后台轮询让位于用户触发的请求（MWG deprioritize-background-fetches，
+    // 不支持的浏览器忽略该选项，无副作用）
+    const d = await api('/api/jobs/count', {priority: 'low'});
     const badge = $('#qbadge');
     if (badge) {
       badge.hidden = !(d.active + d.mcp_pending);
@@ -1936,8 +2468,10 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
   };
   const row = j => {
     const tt = taskType(j.job_type);
+    // P7：total>1 画实条；total<=1 且进行中画不定长条（单文件解析只有 0/1，假百分比不如动画条诚实）
     const bar = j.progress_total > 1
-      ? `${progressBar(Math.round(100 * (j.progress_done || 0) / j.progress_total), false, 'up-bar task')}` : '';
+      ? `${progressBar(Math.round(100 * (j.progress_done || 0) / j.progress_total), false, 'up-bar task')}`
+      : (['queued', 'pending_gate', 'running'].includes(j.status) ? progressIndet('up-bar indet task') : '');
     return `<div class="task-row">
       <span class="tt ${tt.cls}">${icon(tt.icon, 11)} ${tt.label}</span>
       <span class="task-main">
@@ -1981,6 +2515,8 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
     const resolved = b.done + b.failed + b.canceled;
     const badge = b.active > 0 ? ['run', '进行中'] : b.failed > 0 ? ['err', '有失败']
       : b.done > 0 ? ['ok', '完成'] : ['dim', '已取消'];
+    // P7：批次头加整批进度条（覆盖批量翻译/重解析/整理/采集等所有带 batch_id 的长操作）
+    const bbar = b.total > 1 ? progressBar(Math.round(100 * b.done / b.total), false, 'up-bar task', 'margin:4px 12px 8px') : '';
     return `<div class="bpanel-batch" data-batch="${esc(b.batch_id)}">
       <div class="bpanel-row head" data-tb="${esc(b.batch_id)}">
         <span class="badge ${badge[0]}">${badge[1]}</span>
@@ -1991,6 +2527,7 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
         <span class="muted" style="font-size: var(--fs-xs)">${esc(relTime(b.updated_at))}</span>
         <span class="ic">${icon('chevD')}</span>
       </div>
+      ${bbar}
       <div class="bpanel-jobs" data-jobs="${esc(b.batch_id)}" ${state._batchOpen.has(b.batch_id) ? '' : 'hidden'}></div>
     </div>`;
   };
@@ -2001,7 +2538,8 @@ function taskBody(activeBatches, settledBatches, looseActive, looseDone, activeN
     html += sec(`进行中${activeN ? `（${activeN}）` : ''}`,
       (activeBatches.map(batchCard).join('') || '') +
       (looseActive.length ? `<div class="bpanel-batch">${groupByPaper(looseActive).map(paperRow).join('')}</div>` : ''),
-      '没有进行中的任务——发起批量操作或上传论文后，这里实时显示进度');
+      `没有进行中的任务——发起批量操作或导入文献后，这里实时显示进度
+        <button class="btn small primary" style="margin-left:8px" onclick="openImportPop('files')">${icon('upload')} 去文库导入文献</button>`);
   }
   if (!f.status || f.status === 'done' || f.status === 'failed') {
     // 已结束默认折叠（历史任务量大，默认铺开会淹没进行中的）
@@ -2353,7 +2891,7 @@ function renderAcquirePop() {
   $$('.dp-tab', pop).forEach(b => b.onclick = () => { a.site = b.dataset.as; a.items = []; renderAcquirePop(); });
   $('#acq-close').onclick = () => { pop.hidden = true; };
   $('#acq-go').onclick = doAcquireSearch;
-  $('#acq-q').onkeydown = e => { if (e.key === 'Enter') doAcquireSearch(); };
+  $('#acq-q').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) doAcquireSearch(); };   // isComposing：中文选词回车不搜索
   $$('input[data-ai]', pop).forEach(cb => cb.onchange = e => {
     const i = +cb.dataset.ai;
     if (e.target.checked) a.sel.add(i); else a.sel.delete(i);
@@ -2488,15 +3026,20 @@ async function renderBatchJobs(bid, box) {
       try { sid = JSON.parse(j0.payload || '{}').synthesis_id || ''; } catch { /* ignore */ }
       if (sid) { await renderSynJob(sid, box); return; }
     }
-    box.innerHTML = d.jobs.map(j => `
+    box.innerHTML = d.jobs.map(j => {
+      // P7：明细行补条——total>1 实条；total<=1 且未终态画不定长条
+      const jbar = j.progress_total > 1
+        ? progressBar(Math.round(100 * (j.progress_done || 0) / j.progress_total), false, 'up-bar task')
+        : (['queued', 'pending_gate', 'running'].includes(j.status) ? progressIndet('up-bar indet task') : '');
+      return `
       <div class="bpanel-row sub">
         <span class="badge ${j.status === 'failed' ? 'err' : j.status === 'done' ? 'ok' : j.status === 'canceled' ? 'dim' : 'run'}">${BATCH_ST[j.status] || esc(j.status)}</span>
         <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.title || j.paper_id || '')}</span>
         <span class="muted" style="font-size: var(--fs-xs)">${j.progress_total > 1 ? `${j.progress_done}/${j.progress_total}` : ''}</span>
         ${j.status === 'failed' ? `<button class="btn small" data-retry="${j.id}">重试</button>` : ''}
         ${['queued', 'pending_gate', 'running'].includes(j.status) ? `<button class="btn small danger" data-cancel="${j.id}">取消</button>` : ''}
-      </div>${j.error ? `<div class="bpanel-err">${esc(j.error.slice(0, 140))}</div>` : ''}`).join('')
-      || '<p class="muted" style="padding:6px">无任务</p>';
+      </div>${jbar}${j.error ? `<div class="bpanel-err">${esc(j.error.slice(0, 140))}</div>` : ''}`;
+    }).join('') || '<p class="muted" style="padding:6px">无任务</p>';
   } catch (e) { box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
 }
 
@@ -2706,6 +3249,7 @@ const refreshOnData = throttle(entity => {
   }).catch(() => {});
 }, 3000);
 const refreshSidebarOnParse = throttle(() => loadCollections().catch(() => {}), 3000);
+const refreshRowsOnParseDone = throttle(() => loadPapers().catch(() => {}), 3000);   // P7: 解析终态后刷行内徽标（否则「解析中…」卡住不落「已解析」）
 const refreshTrackerOnParse = throttle(() => { window.renderTrackerPage?.(); }, 4000);   // 追踪页阶段条跟随解析进度
 const refreshTablesOnTidy = throttle(() => { window.renderTablesPage?.(); }, 3000);       // 表格工作台跟随批量整理进度
 
@@ -2871,6 +3415,13 @@ async function watchJobs() {
       const tpg = $('#page-tracker');
       if (tpg && tpg.style.display !== 'none' && typeof refreshTrackerOnParse === 'function') refreshTrackerOnParse();
     }
+    // 翻译实时进度 → 侧栏行内条（P7 统一进度条；块级 done/total，与解析同模式）
+    if (ev.job_type === 'translate') {
+      const prev = JSON.stringify(state.translateProg[ev.paper_id] || null);
+      if (ev.status === 'running') state.translateProg[ev.paper_id] = {done: ev.done || 0, total: ev.total || 0};
+      else if (['done', 'failed', 'canceled'].includes(ev.status)) delete state.translateProg[ev.paper_id];
+      if (JSON.stringify(state.translateProg[ev.paper_id] || null) !== prev) renderPapers();
+    }
     // 表格工作台：批量整理进度翻牌（与 parse 平级——嵌在 parse 块内恒假，v1.10.1 曾修后回归，此处为根治位）
     if (ev.job_type === 'table_tidy') {
       const tbp = $('#page-tables');
@@ -2886,6 +3437,7 @@ async function watchJobs() {
     }
     if (ev.job_type === 'parse' && (ev.status === 'done' || ev.status === 'failed')) {
       refreshSidebarOnParse(ev);   // 侧栏计数节流刷新（导入/上传高峰期数字跟着跳）
+      refreshRowsOnParseDone(ev);  // P7: 行内徽标跟随终态（解析中… → 已解析/失败）
       refreshQaPapersOnParse(ev);  // 逐篇事件风暴节流（批量导入 90 篇=90 次全量拉）
     }
     refreshQueueBadge();
@@ -2970,7 +3522,7 @@ async function renderMeta() {
       <div class="ref-list" id="ref-list"></div></div>
     <div class="card"><h3>${icon('folder')} 文献库</h3>
       <div id="m-collection-chips" class="chip-row"></div>
-      <select id="m-collection-add" style="max-width:200px;font-size: var(--fs-sm)"></select></div>`;
+      <select id="m-collection-add" aria-label="加入文献库" style="max-width:200px;font-size: var(--fs-sm)"></select></div>`;
 
   renderCiteCard();
 
@@ -3135,7 +3687,18 @@ window.extractMeta = async (pid) => {
   } catch (e) { toast('提取失败: ' + e.message); }
 };
 /* 引用：卡片里选样式 + 即时预览 + 复制。
-   CSL 样式（12 种）经 citeproc-js 本地渲染（vendor），BibTeX 与兜底用后端预渲染。 */
+   CSL 样式（12 种）经 citeproc-js 本地渲染（vendor），BibTeX 与兜底用后端预渲染。
+   citeproc 按需加载（专项轮 R5）：原 967KB 阻塞每页首屏、仅此模块在用——首次调用时
+   注入压缩版（vendor/citeproc.min.js，373KB），调用方拿到的 Promise 复用不重复注入。 */
+let _citeprocLoad = null;
+const ensureCiteproc = () => _citeprocLoad ??= new Promise((resolve, reject) => {
+  if (window.citeproc) return resolve();
+  const s = document.createElement('script');
+  s.src = '/static/vendor/citeproc/citeproc.min.js';
+  s.onload = resolve;
+  s.onerror = () => { _citeprocLoad = null; reject(new Error('citeproc 加载失败')); };
+  document.head.appendChild(s);
+});
 const _cslCache = {xml: {}, locale: {}};
 async function _fetchText(url, cache, key) {
   if (cache[key]) return cache[key];
@@ -3146,7 +3709,7 @@ async function _fetchText(url, cache, key) {
   return t;
 }
 async function cslRender(item, styleId) {
-  if (!window.citeproc) throw new Error('citeproc 未加载');
+  await ensureCiteproc();
   const styleXml = await _fetchText(`/static/vendor/csl/${styleId}.csl`, _cslCache.xml, styleId);
   const lang = item.language || 'en-US';
   await _fetchText(`/static/vendor/citeproc/locales-${lang}.xml`, _cslCache.locale, lang);
@@ -3184,7 +3747,7 @@ function renderCiteCard() {
 async function _renderCiteBox(box, c, styleId) {
   const pid = c.paper_id;
   const put = html => { if (state.current?.id === pid && state._cite?.paper_id === pid) box.innerHTML = html; };
-  if (styleId === 'bibtex' || !window.citeproc) {
+  if (styleId === 'bibtex') {   // bibtex 走后端预渲染；其余样式由 cslRender 内部按需加载 citeproc
     const html = c.styles?.[styleId]?.html || '（该样式需要 citeproc 支持库）';
     put(html);
     state._citeRendered = {pid, styleId, html};
@@ -3238,7 +3801,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
         <button class="btn small" id="qa-pick-close" title="收起（Esc / 点面板外也可关）">${icon('close')}</button></div>
         <div class="qa-pick-tools">
           <input id="qa-pick-filter" placeholder="搜索标题…" style="font-size: var(--fs-sm)">
-          <select id="qa-pick-sort" title="组内排序" style="font-size: var(--fs-sm);width:auto;flex:none">
+          <select id="qa-pick-sort" title="组内排序" aria-label="组内排序" style="font-size: var(--fs-sm);width:auto;flex:none">
             <option value="recent">最近添加</option>
             <option value="title">标题 A-Z</option>
             <option value="year">年份（新→旧）</option>
@@ -4145,7 +4708,7 @@ async function boot() {
   await initPdfJs();
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
   applyQaLayout();
-  updateVisToggle(); updateUploadTarget(); updateExportBtn();
+  updateExportBtn();
   if (state.qaOpen) renderQaTab();   // 问答 dock（按记忆的开合状态）
   await loadCollections();
   await loadPapers();
@@ -4700,7 +5263,7 @@ async function renderAdminZone() {
     <div class="set-card">
       <div class="set-head">${icon('clock')} 审计日志
         <span class="muted" style="font-weight:400">敏感操作留痕（登录不计）</span></div>
-      ${renderAuditTable(auditRows)}
+      ${auditRows.length ? renderAuditTable(auditRows)
         : '<p class="muted">暂无记录——删除/重置密码/禁用等敏感操作会记录在此</p>'}
     </div>`;
 
@@ -4896,10 +5459,10 @@ async function renderAssets() {
     if (it.kind === 'fig') {
       const f = it.f;
       return `<div class="asset">
-        ${f.label ? `<span class="asset-badge" onclick="jumpEvidence(${f.page_index})" title="跳到 PDF 该页">${esc(f.label)}</span>` : ''}
+        ${f.label ? `<span class="asset-badge" onclick="tbJumpFlash(${f.page_index}, 'image', 1)" title="跳到 PDF 该页并闪烁高亮图表">${esc(f.label)}</span>` : ''}
         <div class="fig-grid">
-          <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}" ondblclick="lightbox(this.src, '')">
-          ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" ondblclick="lightbox(this.src, '')">`).join('')}
+          <img loading="lazy" src="/api/papers/${pid}/images/${f.image_path.split('/').pop()}" alt="解析产物截图（${esc((f.caption || f.label || '图表').slice(0, 80))}）" ondblclick="lightbox(this.src, '')">
+          ${(f.extra_images || []).map(p => `<img loading="lazy" src="/api/papers/${pid}/images/${p.split('/').pop()}" alt="" aria-hidden="true" ondblclick="lightbox(this.src, '')">`).join('')}
         </div>
         ${(f.sub_captions || []).length ? `<p class="muted" style="font-size: var(--fs-xs)">${esc(f.sub_captions.join(' | ').slice(0, 200))}</p>` : ''}
         ${capHtml(f.caption || '', `cap-${f.page_index}-${(f.image_path || '').replace(/\W/g, '')}`)}
@@ -4919,7 +5482,7 @@ async function renderAssets() {
     const tex = (eq.latex || '').trim();
     let r = null;
     if (state.katex && tex) { try { r = state.katex.renderToString(tex, {throwOnError: false, displayMode: true, strict: false, trust: true}); } catch {} }
-    return `<div class="asset eq-asset" onclick="jumpEvidence(${eq.page_index})" title="跳到 PDF 该页">
+    return `<div class="asset eq-asset" onclick="tbJumpFlash(${eq.page_index}, 'equation', 1)" title="跳到 PDF 该式并闪烁高亮">
       ${r ? r : `<code>${esc(tex.slice(0, 400))}</code>`}
     </div>`;
   }).join('');
@@ -4929,20 +5492,57 @@ async function renderAssets() {
   // 页签在次级工具条上（与原文/双语/中文同一行、同尺寸），这里只刷新计数与态
   $$('#assets-subtabs .asset-sub').forEach(b => {
     b.classList.toggle('on', b.dataset.at === tab);
+    if (b.dataset.at === 'tables') {
+      b.textContent = '表格';
+      b.onclick = () => { state.assetsTab = 'tables'; renderAssets(); };
+      return;
+    }
     b.textContent = b.dataset.at === 'figs' ? `图表 (${figsN})` : `公式 (${eqsN})`;
     b.onclick = () => { state.assetsTab = b.dataset.at; renderAssets(); };
   });
+  // 「表格」子页签：本论文已收集的表格（就地打开对照工作台编辑——工作台能力全在弹层里）
+  if (tab === 'tables') {
+    // 与图表/公式同布局：按页分组流式；每个表格内嵌「可编辑网格 + AI 指令框 + 撤销重做」
+    // ——工作台的核心能力就地可用，完整对照（原图并排）仍可点缩略图/对照打开弹层
+    const pid = window.__state?.current?.id;
+    $('#content-view').innerHTML = '<p class="muted" style="padding:12px"><span class="spin"></span> 加载表格…</p>';
+    api(`/api/tables/list?review=all&paper_id=${pid}&page_size=200&with_cells=1`).then(d => {
+      if (window.__state?.current?.id !== pid || window.__state?.assetsTab !== 'tables') return;   // 已切走：丢弃
+      const items = d.items || [];
+      const tabBtn = document.querySelector('#assets-subtabs [data-at=tables]');
+      if (tabBtn) tabBtn.textContent = `表格 (${items.length})`;
+      if (!items.length) {
+        $('#content-view').innerHTML = `<div class="empty-state" style="padding:16px"><p class="t">本篇还没有收集表格</p>
+          <p style="margin-bottom:12px">解析完成后在「表格工作台 → 收集表格」里勾选本篇即可</p>
+          <button class="btn small" onclick="switchPage('tables');tbCollectOpen()">${icon('inbox')} 去收集</button></div>`;
+        return;
+      }
+      // 按页分组（对齐 figs 的分组头样式）
+      const byPage = new Map();
+      for (const t of items) {
+        if (!byPage.has(t.page_index)) byPage.set(t.page_index, []);
+        byPage.get(t.page_index).push(t);
+      }
+      $('#content-view').innerHTML = [...byPage.entries()].map(([pg, ts]) => `
+        <div class="asset-page">
+          <div class="asset-page-head" onclick="tbInlineJump(${pg}, 0)" title="跳到 PDF 该页并闪烁高亮表格">${icon('doc')} 第 ${pg + 1} 页 <span class="muted">${ts.length} 张 ${icon('arrowR', 11)}</span></div>
+          ${ts.map((t, i) => tbInlineEditor(t, i)).join('')}
+        </div>`).join('');
+      items.forEach(t => tbInlineBind(t));
+    }).catch(e => { $('#content-view').innerHTML = `<p class="muted" style="padding:12px">${esc(friendlyError(e))}</p>`; });
+    return;
+  }
   $('#content-view').innerHTML = `
     ${tab === 'figs'
       ? (merged.length ? groups.map(g => `
           <div class="asset-page">
-            <div class="asset-page-head" onclick="jumpEvidence(${g.page})" title="跳到 PDF 该页">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 项 ${icon('arrowR', 11)}</span></div>
+            <div class="asset-page-head" onclick="tbJumpFlash(${g.page}, 'image', 1)" title="跳到 PDF 该页并闪烁高亮">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 项 ${icon('arrowR', 11)}</span></div>
             ${g.items.map(itemHtml).join('')}
           </div>`).join('')
         : '<p class="muted" style="padding:12px">未提取到图表</p>')
       : (formulas.length ? eqGroups.map(g => `
           <div class="asset-page">
-            <div class="asset-page-head" onclick="jumpEvidence(${g.page})" title="跳到 PDF 该页">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 式 ${icon('arrowR', 11)}</span></div>
+            <div class="asset-page-head" onclick="tbJumpFlash(${g.page}, 'equation', 1)" title="跳到 PDF 该页并闪烁高亮">${icon('doc')} 第 ${g.page + 1} 页 <span class="muted">${g.items.length} 式 ${icon('arrowR', 11)}</span></div>
             ${eqHtml(g)}
           </div>`).join('')
         : '<p class="muted" style="padding:12px">未提取到公式</p>')}
@@ -5003,10 +5603,9 @@ window.exportChat = exportChat;   // 兼容内联 onclick 调用
 
 /* ---- 📚 文库管理页（左库树 + 右条目 + 详情，参考 Zotero/EndNote 的下钻式） ---- */
 state.libSel = localStorage.getItem('ps-lib-sel') || '';   // '' = 全部文献
-state.scope = '';                                           // 侧栏快捷范围筛选
 state.libQuery = '';                                        // 管理页搜索词
 state._libPage = 1; state._libPageSize = 25;                // 文库表格真分页（25 篇/页）
-state.libLevel = 1;                                         // 管理页层级: 1=库列表 2=库内
+state.libLevel = 2;                                         // 管理页层级: 1=库列表(库管理) 2=库内 —— P2: 文库导航直落论文表格（LenX 式）
 state.libView = 'card';                                     // 库列表视图: card | list
 state._libQTimer = 0;
 
@@ -5074,16 +5673,19 @@ window.libOpenLib = cid => {          // 第一层点库 → 进第二层
   renderCollectionsPage();
 };
 
-/* 文库管理顶部工具条（第一/第二层共用：标题/搜索/新建库/导出弹层） */
+/* 文库管理顶部工具条（第一/第二层共用：标题/搜索/新建库/导出弹层）
+   P2：新建库改弹层输入（去掉常驻内联输入框）；文库导航直落表格层，工具条提供「库管理」回卡片层
+   与「导入文献」主色 CTA（LenX 式：主操作显眼、低频操作收拢）。 */
 function libMgrToolbarHtml(d) {
   return `
     <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <h2 class="page-h row" style="flex:1">文献库管理</h2>
       <button class="btn" onclick="openCollectPanel()" title="按关键词检索中文文献并入库（一次性或建专题跟踪）">${icon('inbox')} 采集文献</button>
       <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:200px" value="${esc(state.libQuery)}">
-      <input id="newlib-name" placeholder="新库名称" style="max-width:150px">
-      <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 新建库</button>
+      <button class="btn" onclick="createLibFromPage()" title="新建顶层文献库">${icon('plus')} 新建库</button>
       <button class="btn" id="export-btn" title="批量导出当前范围/勾选的论文">${icon('download')} 导出</button>
+      ${state.libLevel === 2 ? `<button class="btn" onclick="libGoL1()" title="库卡片视图：新建子库/重命名/删除库等库管理操作">${icon('library')} 库管理</button>` : ''}
+      <button class="btn primary" onclick="openImportPop('files')" title="导入文献：文件 / DOI·arXiv·BibTeX / 服务器目录">${icon('upload')} 导入文献</button>
       <div class="tool-pop export-pop" id="export-pop" hidden>
         <div class="tp-label">范围</div>
         <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
@@ -5143,6 +5745,11 @@ async function renderCollectionsPage(preset = null) {
   const q = state.libQuery.toLowerCase();
 
   // ---- 当前选中范围（库 + 其子孙，与侧栏一致）----
+  // libSel 持久化可能指向已删库/共享库/群组库（不在自己的树里）——失效即复位到全部文献，
+  // 否则主表格渲染成「文献库 共 N 篇」的空壳（scopeName 兜底但 scope 无意义）
+  if (state.libSel && !d.collections.some(c => c.id === state.libSel)) {
+    state.libSel = ''; localStorage.removeItem('ps-lib-sel');
+  }
   const sel = state.libSel;
   const scopeIds = sel ? libDescendants(sel, d.collections) : [];
   const scopeKey = sel || 'all';
@@ -5202,9 +5809,10 @@ async function renderCollectionsPage(preset = null) {
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${selBucket(scopeKey).has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
           ${p.read_status ? '' : '<span class="unread-dot" title="未读" style="margin-right:4px"></span>'}${esc(p.title || p.id)}
+          <span class="muted" style="font-size: var(--fs-xs)">${p.page_count ? ` · ${p.page_count}页` : ''}${p.file_size ? ` · ${(p.file_size/1048576).toFixed(1)}M` : ''}</span>
           ${ownerNames.length && scopeIds.length > 1 ? `<span class="muted" style="font-size: var(--fs-xs)"> · ${esc(ownerNames.join(' · '))}</span>` : ''}
           ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" style="font-size: var(--fs-xs)" title="上传者"> · ${esc(p.owner_name)}</span>` : ''}</td>
-        <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
+        <td>${parseBadge}${['pending', 'parsing'].includes(p.parse_status) ? progressIndet('up-bar indet parse' + (p.parse_status === 'pending' ? ' dim' : ''), 'width:72px;margin-top:4px') : ''}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
           <button class="btn small danger hover-only" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">${icon('trash')}</button>
@@ -5215,7 +5823,7 @@ async function renderCollectionsPage(preset = null) {
   const selNameArg = jsArg(selName);   // 塞进内联 onclick 的参数（引号/&/双引号全兜）
   el.innerHTML = libMgrToolbarHtml(d) + `
     <div class="lib-crumb">
-      ${state.libLevel === 2 ? `<a href="#" onclick="libGoL1();return false">← 全部库</a> <span class="muted">›</span> ` : '<span class="muted">位置：</span>'}
+      ${state.libLevel === 1 ? '<span class="muted">位置：</span> ' : ''}
       ${(() => {
         const chain = [];
         let cur = d.collections.find(c => c.id === sel);
@@ -5491,12 +6099,7 @@ window.libBatchDelete = async cid => {
   } catch (e) { toast(friendlyError(e, '批量删除失败')); }
   await refreshLib();
 };
-window.libUpload = cid => {
-  const inp = document.createElement('input');
-  inp.type = 'file'; inp.multiple = true;   // 不设 accept：与侧栏上传一致（PDF/图片/Office），由 uploadFiles 统一过滤
-  inp.onchange = () => uploadFiles(inp.files, cid);
-  inp.click();
-};
+window.libUpload = cid => openImportPop('files', cid);   // P1 入口归一：库卡片/库头的「上传」统一走导入弹层（带目标库预设）
 window.renameLib = async (cid, oldName) => {
   const name = await uiPrompt('重命名文献库', {value: oldName, okText: '保存'});
   if (!name?.trim() || name === oldName) return;
@@ -5518,13 +6121,11 @@ window.delLib = async (cid, name) => {
   toast('已删除'); await refreshLib();
 };
 window.createLibFromPage = async () => {
-  const inp = $('#newlib-name');
-  const name = inp.value.trim();
-  if (!name) { toast('请输入库名'); return; }
-  if (name.length > 50) { toast('库名最多 50 个字符'); inp.focus(); return; }
+  const name = (await uiPrompt('新建文献库', {placeholder: '库名（最多 50 字）', okText: '创建'}))?.trim();
+  if (!name) return;
+  if (name.length > 50) { toast('库名最多 50 个字符'); return; }
   try {
     await api('/api/collections', {method: 'POST', body: JSON.stringify({name})});
-    inp.value = '';
     toast('已创建'); await refreshLib();
   } catch (e) { toast(friendlyError(e, '创建失败，请重试')); }
 };
@@ -5761,7 +6362,7 @@ const renderBlockBody = b => {
     if (fig && fig.caption) caps.push(fig.caption);
     (subCaps || []).forEach(c => c && caps.push(c));
     return `<figure class="inline-fig ${ub ? 'fig-crop' : ''}" ${ub ? `data-page="${b.page_index}" data-ub='${JSON.stringify(ub)}'` : ''}>
-      <div class="fig-holder">${fb.map(n => `<img loading="lazy" src="/api/papers/${pid}/images/${n}">`).join('')}</div>
+      <div class="fig-holder">${fb.map((n, i) => `<img loading="lazy" src="/api/papers/${pid}/images/${n}"${i === 0 && caps.length ? ` alt="${esc(caps.join(' ｜ ').slice(0, 120))}"` : ' alt=""'}>`).join('')}</div>
       ${caps.length ? `<figcaption class="muted" style="font-size:var(--fs-xs);line-height:1.5">${esc(caps.join(' ｜ ').slice(0, 300))}</figcaption>` : ''}
     </figure>`;
   }
@@ -6013,7 +6614,8 @@ window.figCropPass = async () => {
         rx * scale, ry * scale, rw * scale, rh * scale,
         0, 0, out.width, out.height);
       const url = out.toDataURL('image/png');
-      holder.innerHTML = `<img src="${url}" ondblclick="lightbox(this.src, '')">`;
+      const alt = esc((fig.querySelector('figcaption')?.textContent || '').slice(0, 120));
+      holder.innerHTML = `<img src="${url}" alt="${alt}" ondblclick="lightbox(this.src, '')">`;
       fig.classList.add('from-pdf');
     } catch (e) { /* 保留 MinerU 兜底图 */ }
   }
@@ -6146,7 +6748,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   let closed = false;
-  for (const sel of ['#acc-pop', '#filter-pop', '#upload-pop', '#download-pop',
+  for (const sel of ['#acc-pop', '#filter-pop', '#download-pop',
                      '#discover-pop', '#col-new-form', '#health-pop']) {
     const el = document.querySelector(sel);
     if (el && !el.hidden) { el.hidden = true; closed = true; }
@@ -6260,10 +6862,11 @@ function libLevel1Html(d) {
     return `<div class="lib-card-l1 ${isChild ? 'child' : ''}" onclick="libOpenLib('${c.id}')">
       <div class="lc1-icon">${icon('folder')}</div>
       <div class="lc1-main">
-        <div class="lc1-name">${esc(c.name)}</div>
+        <div class="lc1-name" title="${esc(c.name)}">${esc(c.name)}</div>
         <div class="lc1-meta">${papers} 篇${kids.length ? ` · ${kids.length} 个子库` : ''}${doneTr ? ` · 已译 ${doneTr}` : ''}</div>
-        ${kids.length ? `<div class="lc1-subs">${kids.map(k =>
-          `<span class="lc1-sub" onclick="event.stopPropagation();libOpenLib('${k.id}')">${icon('folder')} ${esc(k.name)} <b>${k.papers ?? 0}</b></span>`).join('')}</div>` : ''}
+        ${kids.length ? `<div class="lc1-subs">${kids.slice(0, 2).map(k =>
+          `<span class="lc1-sub" onclick="event.stopPropagation();libOpenLib('${k.id}')">${icon('folder')} ${esc(k.name)} <b>${k.papers ?? 0}</b></span>`).join('')
+        }${kids.length > 2 ? `<span class="lc1-sub" onclick="event.stopPropagation();libOpenLib('${c.id}')" title="展开查看全部子库">+${kids.length - 2}</span>` : ''}</div>` : ''}
       </div>
       <div class="lc1-ops" onclick="event.stopPropagation()">
         <button class="btn small" onclick="libUpload('${c.id}')" title="上传到此库">${icon('upload')}</button>
@@ -6287,7 +6890,7 @@ function libLevel1Html(d) {
       ? `<div class="lib-cards">${cards || `<div class="empty-state">
           <p class="t">还没有文献库</p>
           <p style="margin-bottom:12px">用文献库把论文按主题分组（可建子库，最多三级）</p>
-          <button class="btn primary" onclick="document.querySelector('#newlib-name')?.focus()">${icon('plus')} 新建文献库</button>
+          <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 新建文献库</button>
         </div>`}</div>`
       : `<table class="list" style="margin-top:4px">
           <tr><th>库名</th><th>论文</th><th>子库</th><th></th></tr>
@@ -6300,7 +6903,7 @@ function libLevel1Html(d) {
             const walk = cid => { for (const k of kidsOf(cid)) { ordered.push(k); walk(k.id); } };
             walk('root');
             if (!ordered.length) return `<tr><td colspan="4" class="muted" style="text-align:center;padding:24px">
-              还没有文献库 —— <button class="btn small primary" onclick="document.querySelector('#newlib-name')?.focus()">${icon('plus')} 新建文献库</button></td></tr>`;
+              还没有文献库 —— <button class="btn small primary" onclick="createLibFromPage()">${icon('plus')} 新建文献库</button></td></tr>`;
             return ordered.map(c => `<tr class="lib-row" onclick="libOpenLib('${c.id}')">
               <td>${'　'.repeat(treeDepth(c.id))}${icon('folder')} ${esc(c.name)}</td>
               <td>${c.papers ?? 0}</td><td>${(children[c.id] || []).length}</td>
@@ -6582,8 +7185,9 @@ async function loadAnnotations() {
 
   $('#discuss-send')?.addEventListener('click', doSend);
   // Enter 发送（此前 onkeydown 调用的 sendDiscuss() 不存在——Enter 发送是死的）
+  // isComposing：中文输入法选词回车不发送（web-quality-report D1）
   $('#discuss-input')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); doSend(); }
   });
 })();
 /* ===== 13-cmd.js —— 命令面板与快捷键 =====
@@ -6598,7 +7202,7 @@ const CMD_PAGES = [
   {label: '表格工作台', hint: '页面', kw: 'tables 表格 收割 整理 导出 xlsx', run: () => switchPage('tables')},
   {label: '管理后台', hint: '页面 · admin', kw: 'admin 管理 成员 限额 邮件', run: () => switchPage('admin')},
   {label: '新建追踪订阅', hint: '动作', kw: 'tracker 订阅 subscribe 关键词 巡逻 新建', run: () => { switchPage('tracker'); setTimeout(() => window.trackerNew?.(), 200); }},
-  {label: '表格收表', hint: '动作', kw: 'tables 收表 harvest 收割', run: () => { switchPage('tables'); setTimeout(() => window.tbHarvestOpen?.(), 200); }},
+  {label: '表格批量收集', hint: '动作', kw: 'tables 收表 收集 harvest', run: () => { switchPage('tables'); setTimeout(() => window.tbHarvestOpen?.(), 200); }},
   {label: '上传 PDF（表格链）', hint: '动作', kw: 'tables upload 上传 解析 收表', run: () => { switchPage('tables'); setTimeout(() => window.tbUploadOpen?.(), 200); }},
   {label: '打开论文讨论区', hint: '动作', kw: 'discuss 讨论 评论 留言', run: () => { switchPage('reader'); setTimeout(() => { if (window.__state?.current?.id) document.querySelector('#discuss-open')?.click(); else toast('先在左侧打开一篇论文'); }, 300); }},
   {label: '回收站', hint: '页面', kw: 'trash 回收 删除', run: () => switchPage('trash')},
@@ -6606,13 +7210,9 @@ const CMD_PAGES = [
   {label: '我的用量', hint: '页面', kw: 'usage 用量 配额 磁盘 token', run: () => { switchPage('settings'); setTimeout(() => renderSettings('usage'), 120); }},
 ];
 const CMD_ACTIONS = [
-  {label: '上传文献', hint: '动作', kw: 'upload 上传 pdf', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); }},
-  {label: '粘贴 DOI / arXiv / BibTeX 导入', hint: '动作', kw: 'doi arxiv bibtex 导入 identifier', run: () => { switchPage('reader'); $('#upload-arrow')?.click(); setTimeout(() => $('#ident-input')?.focus(), 200); }},
-  {label: '目录批量导入', hint: '动作', kw: '目录 导入 inbox dir', run: () => {
-    switchPage('reader');
-    $('#upload-arrow')?.click();
-    setTimeout(() => $('#dir-select')?.focus(), 250);   // 此前与「上传文献」完全同动作——伪入口
-  }},
+  {label: '导入文献（文件 / DOI / 目录）', hint: '动作', kw: 'upload import 上传 导入 文献 pdf doi url', run: () => openImportPop('files')},
+  {label: '粘贴 DOI / arXiv / BibTeX 导入', hint: '动作', kw: 'doi arxiv bibtex 导入 identifier', run: () => openImportPop('ident')},
+  {label: '目录批量导入（服务器 inbox）', hint: '动作', kw: '目录 导入 inbox dir', run: () => openImportPop('dir')},
   {label: '新建专题跟踪', hint: '动作', kw: 'topic 专题 采集 关键词', run: () => { switchPage('collections'); setTimeout(() => { openCollectPanel(); newTopicDialog(); }, 250); }},
   {label: '快速采集文献（检索入库）', hint: '动作', kw: 'acquire 采集 检索 知网 chinaxiv', run: () => { switchPage('collections'); setTimeout(() => openAcquirePop(), 250); }},
   {label: '发起综述', hint: '动作', kw: 'synthesis 综述 survey 报告', run: () => { switchPage('collections'); setTimeout(() => runSynthesis(null), 250); }},
@@ -6713,6 +7313,12 @@ const SHORTCUTS = [
   ['↑ / ↓（输入框内）', '翻提问历史'],
   ['/（问答输入框）', '选参与问答的论文'],
   ['Esc', '关闭弹窗/弹层/选文面板'],
+  ['← / →（表格工作台）', '对照审阅翻表'],
+  ['X（表格工作台）', '剔除并下一张'],
+  ['J（表格工作台）', '标记保留'],
+  ['Enter / Shift+Enter（单元格）', '表格编辑下移 / 上移'],
+  ['Esc（单元格内）', '还原单元格编辑'],
+  ['右键（表格单元格）', '合并/插行列/移动/清空菜单（Ctrl+Z 撤销结构操作）'],
 ];
 function showShortcutHelp() {
   const backdrop = Object.assign(document.createElement('div'), {className: 'ui-backdrop'});
@@ -6923,7 +7529,7 @@ async function loadTracker() {
   try {
     const collP = api('/api/collections').then(d => {
       const opts = [{id: '', name: '默认文献库'},
-        ...(d.collections || []), ...(d.shared_libs || []).map(x => ({...x, name: x.name + '（共享）'}))];
+        ...(d.collections || []), ...(d.shared_libs || []).map(x => ({...x, name: `${x.name}（${x.owner || '他人'} 共享）`}))];
       state._trackerCollOpts = opts.map(o => `<option value="${o.id}" ${o.id === (state._trackerCollId || '') ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
     }).catch(() => {});
     [subs, inbox] = await Promise.all([
@@ -7359,7 +7965,7 @@ window.trackerToggleCat = (el, cat) => {
   if (el.classList.contains('on')) cats.add(cat); else cats.delete(cat);
   inp.value = [...cats].join(' ');
 };
-/* ===== 15-tables.js —— 表格工作台：收割 → LLM 整理 → 取舍 → xlsx =====
+/* ===== 15-tables.js —— 表格工作台：批量收集 → LLM 整理 → 取舍 → xlsx =====
    由 app/webui/src/ 拼接生成（见 scripts/build-webui.py）；
    请勿直接改 app/webui/viewer.js（构建产物）。
    双栏（同追踪页）：左栏按论文导航 + 右侧 KPI 统计带 + 按论文分组的卡片墙。 */
@@ -7369,6 +7975,9 @@ const _TB_ST = {
   done: ['已整理 ✓', 'ok'], mismatch: ['需复核', 'err'], failed: ['失败', 'err'],
 };
 
+/* 分页大小（设置弹层可调，纯前端记忆；默认 60） */
+const _tbPageSize = () => { const v = +(localStorage.getItem('ps-tbl-page') || 60); return [20, 40, 60, 100].includes(v) ? v : 60; };
+
 function tbStatusBadge(st) {
   const [label, cls] = _TB_ST[st] || [st, 'dim'];
   return `<span class="badge ${cls}">${label}</span>`;
@@ -7377,32 +7986,21 @@ function tbStatusBadge(st) {
 /* ---------- 页面骨架 ---------- */
 function renderTablesPage() {
   const el = $('#page-tables');
+  // 侧栏合并（v1.12）：不再自带 rail——直接复用全局文库侧栏（库树/论文/搜索只存在一份），
+  // 侧栏点击在本页上下文里分派为筛选（02-library.js 按 state._page 分派）。
+  // 表格特有维度全部进主区：批次/审阅状态收进漏斗弹层，批量收集/上传解析在工具条右侧。
   el.innerHTML = `
-  <h2 class="page-h" style="margin:0 0 12px">${icon('stack')} 表格工作台</h2>
-  <div class="tk-wrap">
-    <div class="tk-rail">
-      <div class="tk-rail-head"><b>论文</b>
-        <button class="btn small primary" onclick="tbHarvestOpen()" title="从已解析论文收割表格">${icon('plus')}</button></div>
-      <input id="tb-rail-q" placeholder="搜索论文…" value="${esc(state._tbRailQ || '')}" style="margin:0 8px 6px" oninput="tbRailFilter(this.value)">
-      <div id="tb-rail-list"></div>
-      <div class="tk-rail-flex"></div>
-      <div class="tk-rail-foot" id="tb-rail-foot"></div>
-    </div>
-    <div class="tk-main">
-      <div class="tk-kpis" id="tb-kpis"></div>
-      <div id="tb-toolbar"></div>
-      <div id="tb-stream"></div>
-    </div>
-  </div>`;
-  $('#tb-rail-list') && ($('#tb-rail-list').innerHTML = '<div class="muted" style="padding:8px"><span class="spin"></span> 加载中…</div>');
+  <div class="tk-kpis" id="tb-kpis"></div>
+  <div id="tb-toolbar"></div>
+  <div id="tb-stream"></div>`;
   $('#tb-stream') && ($('#tb-stream').innerHTML = '<div class="muted" style="padding:20px 0"><span class="spin"></span> 加载表格…</div>');
   loadTables();
 }
 window.renderTablesPage = renderTablesPage;
 
 async function loadTables() {
-  const rail = $('#tb-rail-list'), kpis = $('#tb-kpis'), toolbar = $('#tb-toolbar'), stream = $('#tb-stream');
-  if (!rail) return;
+  const kpis = $('#tb-kpis'), toolbar = $('#tb-toolbar'), stream = $('#tb-stream');
+  if (!kpis) return;
   const review = state._tbReview || 'active';
   const q = state._tbQ || '';
   const paperF = state._tbPaper || '';
@@ -7410,120 +8008,224 @@ async function loadTables() {
   let d;
   try {
     d = await api(`/api/tables/list?review=${review}&q=${encodeURIComponent(q)}&paper_id=${paperF}` +
-                 `&collection_id=${state._tbColl || ''}&batch=${encodeURIComponent(state._tbBatch || '')}&page=${page}&page_size=60`);
+                 `&collection_id=${state._tbColl || ''}&page=${page}&page_size=${_tbPageSize()}` +
+                 `&sort=${encodeURIComponent(state.sortBy || 'recent')}` +
+                 // 侧栏「解析状态/阅读范围」筛选跟随（filter-pop 改的 state.filter/scope）
+                 `&ps=${encodeURIComponent(state.filter || '')}&sc=${encodeURIComponent(state.scope || '')}` +
+                 (state._tbSt ? `&st=${encodeURIComponent(state._tbSt)}` : ''));
   } catch (e) {
-    rail.innerHTML = `<div class="empty-note" style="padding:8px">${esc(friendlyError(e))}</div>`;
+    $('#tb-stream').innerHTML = `<div class="empty-note" style="padding:8px">${esc(friendlyError(e))}</div>`;
     return;
   }
   state._tbData = d;
   if (!state._tbColls) {
     try {
       const c = await api('/api/collections');
-      state._tbColls = [...(c.collections || []), ...((c.shared_libs || []).map(x => ({...x, name: x.name + '（共享）'})))];
+      state._tbColls = [...(c.collections || []),
+        ...(c.shared_libs || []).map(x => ({...x, name: `${x.name}（${x.owner || '他人'} 共享）`})),
+        ...(c.group_libs || []).map(x => ({...x, name: `${x.name} · ${x.group_name}`}))];
     } catch { state._tbColls = []; }
   }
 
-  /* ---- 左栏：批次 + 论文导航 ---- */
-  const qLower = (state._tbRailQ || '').toLowerCase();
-  const papers = (d.by_paper || []).filter(p => !qLower || (p.title || '').toLowerCase().includes(qLower));
-  const railItem = (label, count, onclick, on, extra = '') => `
-    <div class="tk-rail-item ${on ? 'on' : ''}" onclick="${onclick}">
-      <span class="tk-rail-name">${esc(label)}</span>${extra}
-      ${count != null ? `<span class="tk-rail-badge ${on ? '' : 'dim'}">${count}</span>` : ''}</div>`;
-  const batches = (d.by_batch || []).slice(0, 8);
-  rail.innerHTML =
-    (batches.length ? `<div class="tb-rail-sec">批次</div>` +
-      batches.map(bt => `
-      <div class="tk-rail-item ${state._tbBatch === bt.batch ? 'on' : ''}" onclick="tbBatchF('${esc(bt.batch).replace(/'/g, '')}')" title="${esc(bt.batch)}">
-        <span class="tk-rail-name">${esc(bt.batch)}</span>
-        <span class="tb-rail-mini">${bt.done ? `✓${bt.done}` : ''}</span>
-        <span class="tk-rail-badge ${state._tbBatch === bt.batch ? '' : 'dim'}">${bt.n}</span></div>`).join('') : '') +
-    `<div class="tb-rail-sec">论文</div>` +
-    railItem(`全部表格`, d.counts.total, "tbPaperF('')", !paperF) +
-    papers.map(p => railItem(
-      p.title || '(无标题)', p.n, `tbPaperF('${p.paper_id}')`, paperF === p.paper_id,
-      `<span class="tb-rail-mini" title="已整理${p.done}·复核${p.mismatch}·剔除${p.deleted}">${p.done ? `✓${p.done}` : ''}${p.mismatch ? ` <b class="tb-mis">${p.mismatch}</b>` : ''}</span>`
-    )).join('') || '<div class="empty-note" style="padding:8px">无匹配论文</div>';
-  $('#tb-rail-foot').innerHTML = `<div class="muted">${d.counts.total} 张表 · ${d.by_paper.length} 篇论文</div>`;
+  /* ---- 导航全在全局侧栏（库树/论文点击经 02-library 分派到本页筛选）----
+     表格特有维度进工具条：批次下拉在 chips 行；生效筛选 chips 照旧。 */
+  const colls = d.by_collection || [];   // KPI 范围提示也用
+  syncSideSel();
 
-  /* ---- KPI 统计带 ---- */
+  /* ---- KPI 智能卡片：零值不占位（0 的卡是负信息量），有值才出现大字强调 ----
+     来源论文/表格总数恒显（范围锚点）；整理中/已整理/需复核/已剔除 >0 才出卡。
+     全站口径说明在筛选生效时置于卡上方（数字不随左栏筛选变）。 */
   const c = d.counts;
   const working = (c.queued || 0) + (c.running || 0);
-  kpis.innerHTML = [
-    {n: d.by_paper.length, t: '来源论文', cls: ''},
-    {n: c.total, t: '表格总数', cls: ''},
-    {n: working, t: '排队/整理中', cls: working ? 'hot' : ''},
-    {n: c.done, t: '已整理', cls: ''},
-    {n: c.mismatch, t: '需复核', cls: c.mismatch ? 'mis' : ''},
-    {n: c.deleted, t: '已剔除', cls: ''},
-  ].map(k => `<div class="tk-kpi ${k.cls}"><div class="n">${k.n}</div><div class="t">${k.t}</div></div>`).join('');
+  const scopeName = colls.find(x => x.collection_id === state._tbColl)?.name
+    || (state._tbColl && (state._tbColls || []).find(x => x.id === state._tbColl)?.name);
+  const scopeTip = state._tbColl
+    ? `<div class="tk-kpi-scope" title="以下为全站统计，不随筛选变化">全站口径${scopeName ? ` · 已选「${esc(scopeName)}」` : ''}</div>` : '';
+  kpis.innerHTML = scopeTip + [
+    {n: d.by_paper.length, t: '来源论文', show: true},
+    {n: c.total, t: '表格总数', show: true},
+    {n: working, t: '排队/整理中', cls: 'hot', show: working > 0},
+    {n: c.done, t: '已整理', show: c.done > 0},
+    {n: c.mismatch, t: '需复核', cls: 'mis', show: c.mismatch > 0, click: 'tbStF(\'mismatch\')', tip: '点此筛出需人工复核的表'},
+    {n: c.deleted, t: '已剔除', show: c.deleted > 0},
+  ].filter(k => k.show)
+   .map(k => `<div class="tk-kpi ${k.cls || ''}" ${k.click ? `onclick="${k.click}" style="cursor:pointer" title="${k.tip || ''}"` : ''}><div class="n">${k.n}</div><div class="t">${k.t}</div></div>`).join('');
 
-  /* ---- 工具栏：筛选 + 批量 ---- */
+  /* ---- 工具栏：状态 chips + 搜索 + 动作（单行）；生效筛选独立 chips 行 ---- */
   const chipsDesc = {active: '没被剔除的（待处理+已标记保留）', pending: '还没决定去留的',
                      kept: '明确标记要保留的', deleted: '已剔除（软删可恢复）', all: '包含已剔除'};
+  const chipIcon = {active: 'stack', pending: 'clock', kept: 'check', deleted: 'trash', all: 'doc'};
   const chips = [['active', '全部可用'], ['pending', '待处理'], ['kept', '已标记保留'], ['deleted', '已剔除'], ['all', '全部']]
-    .map(([v, l]) => `<button type="button" class="chip-btn ${review === v ? 'on' : ''}" onclick="tbReviewF('${v}')" title="${chipsDesc[v]}">${l}</button>`).join(' ');
+    .map(([v, l]) => `<div class="tp-item ${review === v ? 'on' : ''}" data-rv="${v}" title="${chipsDesc[v]}">${l}</div>`).join(' ');
+  // 生效筛选统一为可移除 chips（Linear/Notion 惯例）——此前批次/论文是两种样式的
+  // subtag、库藏在下拉里（与左栏重复且窄屏溢出），三处口径不一
+  const collName = colls.find(x => x.collection_id === state._tbColl)?.name
+    || (state._tbColls || []).find(x => x.id === state._tbColl)?.name || '所选库';
+  const af = [];
+  if (state._tbColl) af.push({x: "tbCollF('')", t: collName});
+  if (paperF) af.push({x: "tbPaperF('')", t: (d.by_paper.find(p => p.paper_id === paperF) || {}).title || '所选论文'});
+  if (state._tbSt) af.push({x: "tbStF('')", t: `整理状态：${({none: '待整理', done: '已整理', mismatch: '需复核', failed: '失败'})[state._tbSt] || state._tbSt}`});
+  if (q) af.push({x: "tbSearch('')", t: `搜索「${q}」`});
+  const filtRow = af.length ? `<div class="tb-filtrow"><span class="muted" style="font-size:var(--fs-xs)">筛选：</span>${
+    af.map(f => `<span class="tb-fchip">${esc((f.t || '').slice(0, 40))}<b class="tb-fchip-x" onclick="${f.x}" title="移除该筛选">✕</b></span>`).join('')
+  }<button class="btn small" style="padding:1px 8px" onclick="tbClearFilters()">清除全部</button></div>` : '';
   const selN = (state._tbSel || new Set()).size;
-  toolbar.innerHTML = `
+  const paperSelN = (state._tbPaperSel || new Set()).size;
+  // 工具条精简（v1.12）：状态 chips + 批次下拉收进漏斗弹层（文库页 filter-pop 同款），
+  // 常驻只留搜索框——激活筛选由上方 chips 行展示（含清除全部）
+  const filterOn = review !== 'active' || !!state._tbSt;
+    toolbar.innerHTML = `
+    ${filtRow}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-      ${paperF ? `<span class="tk-subtag">${icon('library')} ${esc((d.by_paper.find(p => p.paper_id === paperF) || {}).title || '…')}
-        <b class="muted" style="font-weight:400;cursor:pointer" onclick="tbPaperF('')" title="查看全部">✕</b></span>` : ''}
-      ${state._tbBatch ? `<span class="tk-subtag">${icon('stack')} ${esc(state._tbBatch)}
-        <b class="muted" style="font-weight:400;cursor:pointer" onclick="tbBatchClear()" title="查看全部">✕</b></span>` : ''}
-      ${chips}
-      <input id="tb-q" placeholder="搜表题/论文…" value="${esc(q)}" style="width:160px"
+      <span style="position:relative">
+        <button class="btn small ic-only tool-arrow ${filterOn ? 'has-val' : ''}" id="tb-filter-arrow"
+                title="筛选：审阅状态" aria-label="筛选">${icon('sliders')}</button>
+        <div class="tool-pop" id="tb-filter-pop" hidden>
+          <div class="tp-label">整理状态</div>
+          ${[['', '全部'], ['none', '待整理'], ['done', '已整理'], ['mismatch', '需复核'], ['failed', '失败']]
+            .map(([v, l]) => `<div class="tp-item ${state._tbSt === v ? 'on' : ''}" data-st="${v}">${l}</div>`).join('')}
+          <div class="tp-sep"></div>
+          <div class="tp-label">审阅状态</div>
+          ${chips}
+          
+        </div>
+      </span>
+      <input id="tb-q" placeholder="搜表题/论文…" value="${esc(q)}" style="flex:1;min-width:140px;max-width:420px"
              onkeydown="if(event.key==='Enter'){tbSearch(this.value)}">
-      <select onchange="tbCollF(this.value)" title="按文献库筛选" style="width:auto;max-width:170px">
-        <option value="">全部文献库</option>
-        ${(state._tbColls || []).map(c => `<option value="${c.id}" ${state._tbColl === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
-      </select>
       <span style="margin-left:auto"></span>
-      <button class="btn small" onclick="tbUploadOpen()">${icon('upload')} 上传解析</button>
-      <button class="btn small" onclick="tbHarvestOpen()">${icon('plus')} 收表</button>
+      <span class="tb-view-toggle" role="group" aria-label="显示模式">
+        <button type="button" class="chip-btn ${(state._tbView || 'card') === 'card' ? 'on' : ''}" onclick="tbViewF('card')">卡片</button>
+        <button type="button" class="chip-btn ${state._tbView === 'rows' ? 'on' : ''}" onclick="tbViewF('rows')">列表</button>
+      </span>
+      <button class="btn small" onclick="tbExportMain(this)" title="导出：有勾选=导出选中（论文含全部可用表）；无勾选=按当前筛选">${icon('download')} 导出</button>
+      <button class="btn small" onclick="tbCollectOpen()" title="从文库收集表格，或上传新文件自动收集">${icon('inbox')} 收集表格</button>
       <button class="btn small primary" onclick="tbTidyBatch(this, false)" title="把当前筛选里的待整理表批量入队（LLM 整理）">${icon('bolt')} 整理待办${working ? '（进行中…）' : ''}</button>
+      <button class="btn small ic-only" onclick="tbSettingsOpen(this)" title="表格整理设置（整理要求 / 容差 / 分页）" aria-label="表格整理设置">${icon('sliders')}</button>
     </div>
-    ${selN ? `<div class="lib-batch" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-      已选 ${selN} 张
+    ${(selN || paperSelN) ? `<div class="lib-batch" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      已选 ${selN} 张${paperSelN ? ` · ${paperSelN} 篇论文` : ''}
       <button class="btn small primary" onclick="tbTidySel(this)">整理选中</button>
       <button class="btn small" onclick="tbBatchReview(this,'kept')">标记保留</button>
       <button class="btn small danger" onclick="tbBatchReview(this,'deleted')">剔除</button>
-      <button class="btn small" onclick="tbExportSel(this)">导出选中</button>
+      ${selN >= 2 ? `<button class="btn small" onclick="tbMergeCreate([...(state._tbSel || new Set())])" title="把选中的表交给 AI 合成一张汇总表（可编辑/撤销/版本回看）">${icon('brain', 12)} AI 合并</button>` : ''}
+      <button class="btn small" onclick="tbExportMain(this)">导出选中</button>
       <button class="btn small" onclick="tbCkClear()">取消选择</button></div>` : ''}
     ${working ? `<div class="empty-note" style="margin-bottom:8px">${icon('clock')} 批量整理进行中（${working} 张在队列/处理）——完成会自动刷新；预算用尽时剩余保持待整理，可再点「整理待办」续跑</div>` : ''}
     ${c.mismatch ? `<div class="empty-note" style="margin-bottom:8px;color:var(--err)">${c.mismatch} 张需人工复核（模型输出与原表不一致）——点卡片「对照」人工修整后保存即转为已整理</div>` : ''}`;
+  // 筛选弹层交互（弹层元素随 toolbar 重建，箭头/弹层 onclick 每轮重绑；
+  // outside-close 用一次性 document 委托，避免 loadTables 循环累积监听器）
+  {
+    const pop = $('#tb-filter-pop'), arrow = $('#tb-filter-arrow');
+    if (pop && arrow) {
+      arrow.onclick = () => { pop.hidden = !pop.hidden; };
+      pop.onclick = e => {
+        const it = e.target.closest('.tp-item');
+        if (!it) return;
+        pop.hidden = true;
+        if (it.dataset.st !== undefined) window.tbStF(it.dataset.st);
+        else if (it.dataset.rv !== undefined) window.tbReviewF(it.dataset.rv);
+      };
+    }
+    if (!state._tbPopBound) {
+      state._tbPopBound = true;
+      document.addEventListener('click', e => {
+        const pop = $('#tb-filter-pop'), arrow = $('#tb-filter-arrow');
+        if (!pop || pop.hidden) return;
+        if (pop.contains(e.target) || arrow?.contains(e.target)) return;
+        pop.hidden = true;
+      });
+    }
+  }
 
-  /* ---- 卡片墙：按论文分组 ---- */
+  /* ---- 卡片墙：按论文分组，分组顺序 = 侧栏论文列表同款排序（state.sortBy：
+     created_at DESC / title / pages / size）——两侧同一系统顺序，不再是两套 ---- */
   const groups = [];
   {
-    let last = null, bucket = null;
-    for (const it of d.items) {
-      const key = it.paper_id;
-      if (key !== last) { bucket = {title: it.paper_title, pid: it.paper_id, items: []}; groups.push(bucket); last = key; }
-      bucket.items.push(it);
+    const railScoped = !!state._tbColl;
+    const byId = {};
+    for (const it of d.items) (byId[it.paper_id] ||= {title: it.paper_title, pid: it.paper_id, items: []}).items.push(it);
+    const src = (railScoped ? (d.by_paper_scoped || []) : (d.by_paper || []))
+      .filter(p => byId[p.paper_id]);   // 分页截断的论文以 items 实际出现的为准
+    const by = state.sortBy;
+    if (by === 'title') src.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'zh'));
+    else if (by === 'pages') src.sort((a, b) => (b.page_count || 0) - (a.page_count || 0));
+    else if (by === 'size') src.sort((a, b) => (b.file_size || 0) - (a.file_size || 0));
+    else src.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    for (const p of src) {
+      const g = byId[p.paper_id];
+      g.items.sort((a, b) => (a.page_index - b.page_index) || String(a.created_at).localeCompare(String(b.created_at)));
+      groups.push(g);
     }
   }
   const sel = state._tbSel || new Set();
-  stream.innerHTML = groups.map(g => `
-    <div class="tk-day"><span>${esc(g.title || '(无标题)')}</span><span class="tk-day-n">${g.items.length} 张</span><i></i></div>
-    <div class="tb-wall">${g.items.map(it => tbCardHtml(it, sel, review)).join('')}</div>`).join('')
-    + (d.total > page * 60 ? `<div style="text-align:center;padding:10px">
-      <button class="btn small" onclick="tbLoadMore()">加载更多（${d.total - page * 60} 张未显示）</button></div>` : '')
-    || `<div class="empty-state"><p class="t">还没有表格</p>
-       <p>点「收表」从已解析论文批量收割表格（一键全部已解析论文）；或先在文库上传并解析 PDF</p></div>`;
+  const rowsView = (state._tbView || 'card') === 'rows';
+  const totalPages = Math.max(1, Math.ceil(d.total / _tbPageSize()));
+  // 列表视图 = 审阅流，翻页（先自动保存未保存的内嵌编辑）；卡片视图 = 瀑布流，保留加载更多
+  const pager = rowsView ? `<div class="tb-pager" style="display:flex;gap:10px;align-items:center;justify-content:center;padding:10px">
+      <button class="btn small" onclick="tbPageTo(${page - 1})" ${page <= 1 ? 'disabled' : ''}>‹ 上一页</button>
+      <span class="muted" style="font-size:var(--fs-sm)">第 ${page} / ${totalPages} 页 · 共 ${d.total} 张</span>
+      <button class="btn small" onclick="tbPageTo(${page + 1})" ${page >= totalPages ? 'disabled' : ''}>下一页 ›</button>
+    </div>`
+    : (d.total > page * _tbPageSize() ? `<div style="text-align:center;padding:10px">
+      <button class="btn small" onclick="tbLoadMore()">加载更多（${d.total - page * _tbPageSize()} 张未显示）</button></div>` : '');
+  if (groups.length) {
+    // 视图切换（v1.12）：卡片=截图对照向，列表=批量审阅向（同一数据源、同一操作）
+    stream.innerHTML = groups.map(g => `
+    <div class="tk-day">
+      <input type="checkbox" class="tb-group-ck" data-pid="${g.pid}" data-ids="${g.items.map(i => i.id).join(',')}" onchange="tbGroupSel(this)" title="选中这篇论文（导出含其全部可用表，跨页全量）" aria-label="选中这篇论文">
+      <span>${esc(g.title || '(无标题)')}</span><span class="tk-day-n">${g.items.length} 张</span><i></i>
+      <button class="btn small hover-only" onclick="tbExportGroup('${g.pid}', this)" title="导出该论文的全部可用表格（跨页全量，AI 整理版优先）">${icon('download', 12)} 导出本组</button>
+    </div>
+    <div class="${rowsView ? 'tb-rows' : 'tb-wall'}">${g.items.map(it => rowsView ? tbRowHtml(it, sel, review) : tbCardHtml(it, sel, review)).join('')}</div>`).join('') + pager;
+    // 分组头复选状态（两级选中模型）：论文级勾选=checked；仅部分表勾（未勾论文）=indeterminate
+    const paperSel = state._tbPaperSel || new Set();
+    $$('#tb-stream .tb-group-ck').forEach(ck => {
+      const ids = ck.dataset.ids.split(',').filter(Boolean);
+      const n = ids.filter(id => sel.has(id)).length;
+      ck.checked = paperSel.has(ck.dataset.pid);
+      ck.indeterminate = !ck.checked && n > 0;
+    });
+  } else if (af.length || review !== 'active') {
+    // 筛选没命中（如选了 test 库又挂着别篇论文的筛选）——给逃生门，不再误显「还没有表格」
+    stream.innerHTML = `<div class="empty-state"><p class="t">当前筛选下没有表格</p>
+       <p>库/论文/关键词筛选取交集——可能组合后为空；左侧数字是该范围的总量</p>
+       <button class="btn small" onclick="tbClearFilters()">${icon('retry')} 清除全部筛选</button></div>`;
+  } else {
+    stream.innerHTML = `<div class="empty-state"><p class="t">还没有表格</p>
+       <p>点「批量收集」从已解析论文批量收集表格（可一键圈选全部已解析论文）；或先在文库上传并解析 PDF</p></div>`;
+  }
 }
+window.tbClearFilters = () => {
+  state._tbColl = ''; state._tbPaper = ''; state._tbQ = ''; state._tbSt = '';
+  state._tbPage = 1; state._tbSel = new Set();
+  loadTables();
+};
 window.tbReviewF = v => { state._tbReview = v; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
-window.tbPaperF = id => { state._tbPaper = id; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
-window.tbBatchF = b => { state._tbBatch = state._tbBatch === b ? '' : b; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
-window.tbCollF = id => { state._tbColl = id; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
-window.tbBatchClear = () => { state._tbBatch = ''; state._tbPage = 1; loadTables(); };
-window.tbRailFilter = debounce(v => { state._tbRailQ = v; loadTables(); }, 250);
-window.tbCkClear = () => { state._tbSel = new Set(); loadTables(); };
+/* 整理状态筛选（KPI「需复核」卡直达 + 漏斗弹层「整理状态」组）：与审阅状态正交维度 */
+window.tbStF = v => { state._tbSt = state._tbSt === v ? '' : v; state._tbPage = 1; loadTables(); };
+// 视图切换：卡片（截图对照向）/ 列表（批量审阅向）——持久化，与筛选无关不重拉数据
+window.tbViewF = v => {
+  state._tbView = v;
+  localStorage.setItem('ps-tb-view', v);
+  loadTables();
+};
+state._tbView = localStorage.getItem('ps-tb-view') || 'card';
+// 筛选入口：全局侧栏（tables 页上下文分派）+ 工具条（批次下拉/搜表题）。
+// syncSideSel 让侧栏高亮跟随表格筛选（选中/取消都即时反映）。
+function syncSideSel() {
+  $$('.sidebar .col-item').forEach(x => x.classList.toggle('on', x.dataset.id === (state._tbColl || '')));
+  $$('.sidebar .paper-item').forEach(x => x.classList.toggle('sel', x.dataset.id === state._tbPaper));
+}
+window.tbPaperF = id => { state._tbPaper = state._tbPaper === id ? '' : id; state._tbPage = 1; state._tbSel = new Set(); syncSideSel(); loadTables(); };   // 再点已选论文 = 取消筛选
+window.tbCollF = id => { state._tbColl = id; state._tbPage = 1; state._tbSel = new Set(); syncSideSel(); loadTables(); };
+
+window.tbCkClear = () => { state._tbSel = new Set(); state._tbPaperSel = new Set(); loadTables(); };
 
 /* ---------- 卡片 ---------- */
 function tbCardHtml(it, sel, review) {
   const st = _TB_ST[it.ai_status] || ['待整理', 'dim'];
   const img = it.asset_name
-    ? `<img src="/api/papers/${it.paper_id}/images/${esc(it.asset_name)}" loading="lazy"
+    ? `<img src="/api/papers/${it.paper_id}/images/${esc(it.asset_name)}" loading="lazy" alt="" aria-hidden="true"
            onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'tb-thumb-fallback',textContent:'（截图缺失）'}))">`
     : `<div class="tb-thumb-fallback">（无截图）</div>`;
   const checked = sel.has(it.id) ? 'checked' : '';
@@ -7555,11 +8257,42 @@ function tbCardHtml(it, sel, review) {
     </div>
   </div>`;
 }
+/* 列表行（v1.12 视图切换）：与卡片同一数据源，信息密度优先——批量审阅一屏几十张 */
+function tbRowHtml(it, sel, review) {
+  const img = it.asset_name
+    ? `<img class="tb-row-thumb" src="/api/papers/${it.paper_id}/images/${esc(it.asset_name)}" loading="lazy" alt="" aria-hidden="true" title="点击预览（对照工作台）"
+           onclick="tbCompare('${it.id}')" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'tb-thumb-fallback',textContent:'—'}))">`
+    : '<div class="tb-row-thumb tb-thumb-fallback" title="点击预览（对照工作台）" onclick="tbCompare(\'' + it.id + '\')">—</div>';
+  const checked = sel.has(it.id) ? 'checked' : '';
+  const del = it.review === 'deleted';
+  return `
+  <div class="tb-row ${del ? 'tb-del' : ''}" data-tid="${it.id}">
+    <input type="checkbox" class="tb-ck" data-tid="${it.id}" ${checked} onchange="tbCk(this)" aria-label="选中此表">
+    ${img}
+    <span class="tb-row-cap" title="${esc(it.caption)}">${esc(it.caption || '（无表题）')}</span>
+    <span class="muted tb-row-meta">第 ${it.page_index + 1} 页</span>
+    <span class="muted tb-row-meta">${it.n_rows}×${it.n_cols}</span>
+    <span class="tb-row-st">${tbStatusBadge(it.ai_status)}${it.review === 'kept' ? '<span class="badge ok">保留</span>' : ''}${del ? '<span class="badge dim">已剔除</span>' : ''}</span>
+    <span class="tb-row-ops">
+      <button class="btn small primary" onclick="tbCompare('${it.id}')">对照</button>
+      <button class="btn small hover-only" onclick="tbTidyOne('${it.id}', this)" title="LLM 整理此表" aria-label="AI 整理此表">${icon('bolt', 12)}</button>
+      ${del
+        ? `<button class="btn small hover-only" onclick="tbReview('${it.id}','pending',this)">恢复</button>
+           <button class="btn small danger hover-only" onclick="tbHardDel('${it.id}',this)" title="从工作台彻底删除">${icon('trash', 12)}</button>`
+        : `<button class="btn small danger hover-only" onclick="tbReview('${it.id}','deleted',this)">剔除</button>`}
+      <button class="btn small hover-only" onclick="tbExport(['${it.id}'], this)" title="下载此表 xlsx">${icon('download', 12)}</button>
+      <button class="btn small hover-only" onclick="tbLocate('${it.paper_id}', ${it.page_index})" title="打开原论文并跳到该页">${icon('library', 12)}</button>
+    </span>
+  </div>`;
+}
 
 /* ---------- 事件 ---------- */
 window.tbCk = async ck => {
   const s = state._tbSel || (state._tbSel = new Set());
   ck.checked ? s.add(ck.dataset.tid) : s.delete(ck.dataset.tid);
+  // 行级变化打破论文级选中（语义：动了其中一张 = 改为按表选；论文级导出要求整篇未动）
+  const it = (state._tbData?.items || []).find(x => x.id === ck.dataset.tid);
+  if (it && !ck.checked) state._tbPaperSel?.delete(it.paper_id);
   const pg = $('#page-tables');
   const st = pg.scrollTop;            // 首次勾选也渲染批量条；整页重渲保持滚动（与追踪页一致）
   await loadTables();
@@ -7573,43 +8306,66 @@ window.tbLocate = async (pid, page) => {
   toast(`已跳到第 ${page + 1} 页`, 2000);
 };
 
-/* ---------- 收表弹层 ---------- */
-let _tbHarvPop = null;
-window._tbHarvestClose = () => { _tbHarvPop?.close(); _tbHarvPop = null; };
-window.tbHarvestOpen = async () => {
-  _tbHarvPop?.close();
-  const {pop, close} = openPop('tb-harvest-pop');
-  _tbHarvPop = {pop, close};
-  pop.innerHTML = `<div class="ui-pop-title">${icon('plus')} 从文库收表
-    <button class="btn small" style="margin-left:auto" onclick="_tbHarvestClose()">${icon('close')}</button></div>
-    <div style="margin-top:10px"><span class="spin"></span> 加载可收割论文…</div>`;
+/* ---------- 批量收集弹层 ---------- */
+window._tbHarvestClose = () => { document.querySelectorAll('.ui-backdrop').forEach(x => x.remove()); _tbCollectPop = null; };
+/* 批量收集主弹层（合并原「上传解析」与「批量收集」两个入口）：
+   页签一「从文库收集」= 已解析论文勾选收割；页签二「上传新文件」= 上传→解析→自动收集一条链。 */
+let _tbCollectPop = null, _tbCollectTab = 'harvest';
+window.tbCollectOpen = (tab = 'harvest') => {
+  _tbCollectPop?.close();
+  const {pop, close} = openPop('tb-collect-pop');
+  _tbCollectPop = {pop, close};
+  _tbCollectTab = tab;
+  pop.innerHTML = `
+  <div class="ui-pop-title">${icon('inbox')} 收集表格
+    <button class="btn small ic-only" data-x aria-label="关闭">${icon('close')}</button></div>
+  <div class="tb-collect-tabs" style="display:flex;gap:6px;margin-top:8px">
+    <button type="button" class="chip-btn ${tab === 'harvest' ? 'on' : ''}" data-tab="harvest">${icon('doc', 12)} 从文库收集</button>
+    <button type="button" class="chip-btn ${tab === 'upload' ? 'on' : ''}" data-tab="upload">${icon('upload', 12)} 上传新文件</button>
+  </div>
+  <div id="tb-collect-body" style="margin-top:10px"></div>`;
+  pop.querySelector('[data-x]').onclick = () => { close(); _tbCollectPop = null; };
+  const render = t => {
+    _tbCollectTab = t;
+    pop.querySelectorAll('.tb-collect-tabs .chip-btn').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+    const body = $('#tb-collect-body');
+    body.innerHTML = '';
+    (t === 'harvest' ? _tbHarvestBody : _tbUploadBody)(body);
+  };
+  pop.querySelectorAll('.tb-collect-tabs .chip-btn').forEach(b => b.onclick = () => render(b.dataset.tab));
+  render(tab);
+};
+
+window.tbHarvestOpen = () => tbCollectOpen('harvest');   // 兼容旧入口（命令面板等）
+window._tbHarvestClose = () => { _tbCollectPop?.close(); _tbCollectPop = null; };
+
+async function _tbHarvestBody(box) {
+  box.innerHTML = `<div style="padding:8px 0"><span class="spin"></span> 加载可收集论文…</div>`;
   let d;
   try { d = await api('/api/tables/sources'); }
-  catch (e) { pop.querySelector('div:last-child').textContent = friendlyError(e); return; }
+  catch (e) { box.textContent = friendlyError(e); return; }
   const srcs = d.sources || [];
   window._tbSrcs = srcs;
-  pop.innerHTML = `
-  <div class="ui-pop-title">${icon('plus')} 从文库收表
-    <button class="btn small" style="margin-left:auto" onclick="_tbHarvestClose()">${icon('close')}</button></div>
-  <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+  box.innerHTML = `
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <input id="tb-src-q" placeholder="搜论文标题…" style="width:150px" oninput="tbSrcRender()">
     <select id="tb-src-lib" style="width:auto;max-width:150px" onchange="tbSrcRender()">
       <option value="">全部文献库</option>
       ${(d.libs || []).map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}
     </select>
-    <label class="tk-inline"><input type="checkbox" id="tb-src-new" checked onchange="tbSrcRender()"> 只看未收</label>
+    <label class="tk-inline"><input type="checkbox" id="tb-src-new" ${localStorage.getItem('ps-tbl-onlynew') !== '0' ? 'checked' : ''} onchange="localStorage.setItem('ps-tbl-onlynew', this.checked?'1':'0');tbSrcRender()"> 只看未收集</label>
     <span style="margin-left:auto"></span>
     <button class="btn small" onclick="tbHarvestCkAll(this)">全选可见</button>
-    <label class="tk-inline"><input type="checkbox" id="tb-auto" checked> 收完自动整理</label>
+    <label class="tk-inline"><input type="checkbox" id="tb-auto" ${localStorage.getItem('ps-tbl-autotidy') !== '0' ? 'checked' : ''} onchange="localStorage.setItem('ps-tbl-autotidy', this.checked?'1':'0')"> 收集后自动整理</label>
   </div>
-  <div class="tb-src-list" id="tb-src-list"></div>
+  <div class="tb-src-list" id="tb-src-list" style="max-height:46vh;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r-md);margin-top:8px"></div>
   <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-    <button class="btn primary" onclick="tbHarvestGo(this, false)">收割所选</button>
-    <button class="btn" onclick="tbHarvestGo(this, true)">收割全部未收</button>
+    <button class="btn primary" onclick="tbHarvestGo(this, false)">收集所选</button>
+    <button class="btn" onclick="tbHarvestGo(this, true)">收集全部剩余</button>
     <span class="muted" id="tb-src-stat" style="margin-left:auto;font-size:var(--fs-xs)"></span>
   </div>`;
   tbSrcRender();
-};
+}
 window.tbSrcRender = () => {
   const q = ($('#tb-src-q')?.value || '').toLowerCase();
   const lib = $('#tb-src-lib')?.value || '';
@@ -7627,16 +8383,47 @@ window.tbSrcRender = () => {
   }
   const box = $('#tb-src-list');
   if (!box) return;
+  // 行风格与文库侧栏统一（col-item：箭头 + 图标 + 右侧圆角计数）
   box.innerHTML = [...groups.entries()].map(([g, items]) => `
     <div class="tb-rail-sec">${esc(g)} <span class="muted">${items.length} 篇</span></div>
     ${items.map(s => `
-    <label class="tb-src-item"><input type="checkbox" class="tb-src-ck" value="${s.paper_id}" ${s.in_bench ? 'disabled' : ''}>
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.title)}">${esc(s.title)}</span>
-      ${s.in_bench ? `<span class="badge dim">已收 ${s.in_bench}</span>` : ''}
-      <span class="muted">${s.n_tables} 张</span></label>`).join('')}`).join('')
-    || '<div class="empty-note" style="padding:12px">没有匹配的论文（试试切换库或取消「只看未收」）</div>';
+    <div class="col-item">
+      <input type="checkbox" class="tb-src-ck" value="${s.paper_id}" ${s.in_bench ? 'disabled title="已收集过（不可重复勾选）"' : 'title="勾选收集"'}>
+      <span class="col-arrow" role="button" aria-expanded="false" title="展开该篇的表格清单"
+            onclick="tbSrcExpand('${s.paper_id}', this)">${icon('chevR')}</span>
+      <span class="col-name">${icon('doc')} ${esc(s.title)}${s.in_bench ? ` <span class="badge dim">已收集 ${s.in_bench}</span>` : ''}</span>
+      <span class="col-count" title="${s.n_tables} 张表格">${s.n_tables}</span>
+    </div>`).join('')}`).join('')
+    || '<div class="empty-note" style="padding:12px">没有匹配的论文（试试切换库或取消「只看未收集」）</div>';
   const visible = srcs.filter(s => !s.in_bench);
   $('#tb-src-stat').textContent = `可见 ${srcs.length} 篇（可收 ${visible.length}）`;
+};
+/* 收集弹层下钻：点 ▸ 展开该篇的表格清单（懒加载轻量列表）——收什么先看清楚 */
+window.tbSrcExpand = async (pid, tw) => {
+  const item = tw.closest('.col-item');
+  const open = tw.getAttribute('aria-expanded') === 'true';
+  item.nextElementSibling?.classList.contains('tb-src-detail') && item.nextElementSibling.remove();
+  if (open) { tw.setAttribute('aria-expanded', 'false'); tw.textContent = '▸'; return; }
+  tw.setAttribute('aria-expanded', 'true'); tw.textContent = '▾';
+  const det = document.createElement('div');
+  det.className = 'tb-src-detail';
+  det.innerHTML = '<div class="muted" style="padding:4px 10px;font-size:var(--fs-xs)"><span class="spin"></span> 加载…</div>';
+  item.after(det);
+  try {
+    const d = await api(`/api/tables/list?review=all&paper_id=${pid}&page_size=200`);
+    if (!det.isConnected) return;   // 弹层已关
+    det.innerHTML = (d.items || []).length
+      ? d.items.map(t => `
+      <div class="col-item" style="padding-left:30px">
+        <span class="col-arrow-none"></span>
+        <span class="col-name" style="font-size:var(--fs-xs)">${esc(t.caption || '（无表题）')}</span>
+        ${tbStatusBadge(t.ai_status)}
+        <span class="col-count" title="第 ${t.page_index + 1} 页">第 ${t.page_index + 1} 页 · ${t.n_rows}×${t.n_cols}</span>
+      </div>`).join('')
+      : '<div class="muted" style="padding:4px 10px;font-size:var(--fs-xs)">该论文没有检测到表格</div>';
+  } catch (e) {
+    if (det.isConnected) det.innerHTML = `<div class="muted" style="padding:4px 10px">${esc(friendlyError(e))}</div>`;
+  }
 };
 window.tbHarvestCkAll = btn => {
   const cks = [...document.querySelectorAll('.tb-src-ck:not(:disabled)')];
@@ -7646,33 +8433,96 @@ window.tbHarvestCkAll = btn => {
 window.tbHarvestGo = async (btn, all) => {
   await withBusy(btn, async () => {
     const ids = all ? [] : [...document.querySelectorAll('.tb-src-ck:checked')].map(c => c.value);
-    if (!all && !ids.length) { toast('先勾选论文（或点「收割全部未收」）'); return; }
+    if (!all && !ids.length) { toast('先勾选论文（或点「收集全部剩余」）'); return; }
     const r = await api('/api/tables/harvest', {method: 'POST',
       body: JSON.stringify(all ? {all: true, auto_tidy: $('#tb-auto')?.checked} : {paper_ids: ids, auto_tidy: $('#tb-auto')?.checked})});
-    toast(`收表完成：${r.papers} 篇 ${r.found} 张，新入库 ${r.inserted} 张（跳过 ${r.skipped}）${r.job_id ? '，整理已排队' : ''}`, 6000);
+    toast(`收集完成：${r.papers} 篇 ${r.found} 张，新入库 ${r.inserted} 张（跳过 ${r.skipped}）${r.job_id ? '，整理已排队' : ''}`, 8000);
     window._tbHarvestClose?.();
     state._tbReview = 'active';
     loadTables();
-  }, '收表失败');
+  }, '收集失败');
 };
 
 /* ---------- 批量整理 / 取舍 / 导出 ---------- */
 async function tbTidyBatch(btn, force) {
   await withBusy(btn, async () => {
-    const f = {review: state._tbReview || 'active', q: state._tbQ || '', paper_id: state._tbPaper || ''};
+    // 按所见圈表：批次/文献库筛选一并透传——此前只传 review/q/paper，入队范围比看到的大
+    const f = {review: state._tbReview || 'active', q: state._tbQ || '', paper_id: state._tbPaper || '',
+               collection_id: state._tbColl || ''};
     const r = await api('/api/tables/tidy-batch', {method: 'POST', body: JSON.stringify({filtered: f, force})});
     toast(`已入队 ${r.count} 张——整理进度见顶部统计，完成自动刷新`, 5000);
     loadTables();
   }, '入队失败');
 }
+
+/* ---------- 表格整理设置（per-user：整理要求模板 + mismatch 容差；分页纯前端） ---------- */
+let _tbSetPop = null;
+window._tbSettingsClose = () => { _tbSetPop?.close(); _tbSetPop = null; };
+window.tbSettingsOpen = async btn => {
+  _tbSetPop?.close();
+  const {pop, close} = openPop('tb-settings-pop');
+  _tbSetPop = {pop, close};
+  pop.innerHTML = `<div class="ui-pop-title">${icon('sliders')} 表格整理设置
+    <button class="btn small" style="margin-left:auto" onclick="_tbSettingsClose()">${icon('close')}</button></div>
+    <div style="margin-top:10px"><span class="spin"></span> 加载…</div>`;
+  let d;
+  try { d = await api('/api/settings/tables'); }
+  catch (e) { pop.querySelector('div:last-child').textContent = friendlyError(e); return; }
+  window._tbSetDefaults = d.defaults;
+  pop.innerHTML = `
+  <div class="ui-pop-title">${icon('sliders')} 表格整理设置
+    <button class="btn small" style="margin-left:auto" onclick="_tbSettingsClose()">${icon('close')}</button></div>
+  <div style="margin-top:10px">
+    <label class="tk-fld">整理要求（随每次 LLM 整理下发；留空 = 用默认）
+      <textarea id="tb-set-rules" rows="7" style="width:100%;font-family:inherit">${esc(d.rules)}</textarea>
+    </label>
+    <div class="muted" style="font-size:var(--fs-xs);margin-top:4px">仅影响「整理要求」段——行列数硬约束与输出 JSON 格式由系统固定拼接，不会因模板改坏而全量复核。</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+      <button class="btn small" onclick="tbSettingsResetRules(this)">恢复默认要求</button>
+      ${d.is_custom ? '<span class="badge run">已自定义</span>' : '<span class="badge dim">默认模板</span>'}
+    </div>
+    <label class="tk-fld" style="margin-top:12px">mismatch 行容差（表头合并允许的最大减行数，0-10；默认 2）
+      <input id="tb-set-tol" type="number" min="0" max="10" step="1" value="${d.row_tol}" style="width:80px"></label>
+    <div class="muted" style="font-size:var(--fs-xs);margin-top:4px">列数始终严格校验（数据完整性不受容差影响）；容差同时作用于提示词承诺与结果判定，两处联动。</div>
+    <label class="tk-fld" style="margin-top:12px">列表分页大小（每页卡片数）
+      <select id="tb-set-page" style="width:auto">
+        ${[20, 40, 60, 100].map(n => `<option value="${n}" ${_tbPageSize() === n ? 'selected' : ''}>${n} 张/页</option>`).join('')}
+      </select></label>
+    <div style="display:flex;gap:8px;margin-top:14px;align-items:center">
+      <button class="btn primary" onclick="tbSettingsSave(this)">${icon('check')} 保存</button>
+      <span class="muted" style="font-size:var(--fs-xs)">分页立即生效；模板/容差对下一次整理生效（已整理的不受影响）</span>
+    </div>
+  </div>`;
+};
+window.tbSettingsResetRules = btn => {
+  const ta = $('#tb-set-rules');
+  const def = window._tbSetDefaults?.rules || '';
+  if (ta) ta.value = def;
+  toast('已填回默认要求——点「保存」生效', 2500);
+};
+window.tbSettingsSave = async btn => {
+  const rules = ($('#tb-set-rules')?.value || '').trim();
+  const tol = Math.max(0, Math.min(10, +($('#tb-set-tol')?.value || 2)));
+  const pageSize = +($('#tb-set-page')?.value || 60);
+  if (rules.length > 2000) { toast('整理要求过长（≤2000 字）——请精简'); return; }
+  await withBusy(btn, async () => {
+    await api('/api/settings/tables', {method: 'PUT', body: JSON.stringify({rules, row_tol: tol})});
+    localStorage.setItem('ps-tbl-page', String(pageSize));
+    toast('表格设置已保存');
+    window._tbSettingsClose?.();
+    loadTables();
+  }, '保存失败');
+};
 window.tbTidyBatch = tbTidyBatch;
 window.tbTidySel = async btn => {
+  const pids = [...(state._tbPaperSel || new Set())];
   const ids = [...(state._tbSel || new Set())];
-  if (!ids.length) return;
+  if (!ids.length && !pids.length) return;
   await withBusy(btn, async () => {
-    const r = await api('/api/tables/tidy-batch', {method: 'POST', body: JSON.stringify({ids})});
-    toast(`已入队 ${r.count} 张`);
-    state._tbSel = new Set();
+    const r = await api('/api/tables/tidy-batch',
+      {method: 'POST', body: JSON.stringify({ids, paper_ids: pids})});
+    toast(`已入队 ${r.count} 张${pids.length ? `（含论文级 ${pids.length} 篇）` : ''}`);
+    state._tbSel = new Set(); state._tbPaperSel = new Set();
     loadTables();
   }, '入队失败');
 };
@@ -7686,15 +8536,24 @@ window.tbTidyOne = async (tid, btn) => {
 window.tbReview = async (tid, rv, btn) => {
   await withBusy(btn, async () => {
     await api(`/api/tables/${tid}/review`, {method: 'POST', body: JSON.stringify({review: rv})});
+    const undoRv = rv === 'deleted' ? 'pending' : 'pending';
+    toast(rv === 'deleted' ? '已剔除' : rv === 'kept' ? '已标记保留' : '已回待处理', 5000,
+      {label: '撤销', onClick: async () => {
+        try { await api(`/api/tables/${tid}/review`, {method: 'POST', body: JSON.stringify({review: undoRv})}); loadTables(); } catch {}
+      }});
   }, '操作失败');
 };
 window.tbBatchReview = async (btn, rv) => {
   const ids = [...(state._tbSel || new Set())];
-  if (!ids.length) return;
+  const pids = [...(state._tbPaperSel || new Set())];
+  if (!ids.length && !pids.length) return;
   const verb = rv === 'deleted' ? '剔除' : '标记保留';
-  if (!(await uiConfirm(`${verb}选中的 ${ids.length} 张表格？`, {title: verb, danger: rv === 'deleted'}))) return;
+  const parts = [];
+  if (pids.length) parts.push(`${pids.length} 篇论文（各含全部可用表）`);
+  if (ids.length) parts.push(`${ids.length} 张单选表`);
+  if (!(await uiConfirm(`${verb}选中：${parts.join(' + ')}？`, {title: verb, danger: rv === 'deleted'}))) return;
   await withBusy(btn, async () => {
-    await api('/api/tables/batch-review', {method: 'POST', body: JSON.stringify({ids, review: rv})});
+    await api('/api/tables/batch-review', {method: 'POST', body: JSON.stringify({ids, paper_ids: pids, review: rv})});
     state._tbSel = new Set();
     if (rv === 'deleted') {
       // 破坏性批量操作给撤销路（Eleken/PatternFly 惯例：确认+已删 N 条—撤销）
@@ -7732,28 +8591,168 @@ async function tbExport(ids, btn) {
 }
 window.tbExport = tbExport;
 window.tbExportSel = btn => tbExport([...(state._tbSel || new Set())], btn);   // 内联 onclick 取不到模块 state
+/* 导出主入口（工具条「导出」/ 批量条「导出选中」共用）：弹层式——
+   范围摘要 + 可选「AI 按指令加工」（批量入队，完成后 AI 整理版即加工版）+ 版本选择。
+   有选中 → 导出选中（论文级 _tbPaperSel + 表级 _tbSel 混合，论文=跨页全量）；
+   无选中 → 按当前筛选（filtered，与所见一致）。优先级：选中 > 筛选。 */
+let _tbExportPop = null;
+window.tbExportMain = async btn => {
+  _tbExportPop?.close();
+  const pids = [...(state._tbPaperSel || new Set())];
+  const tids = [...(state._tbSel || new Set())];
+  const d = state._tbData;
+  const fN = d?.total ?? 0;
+  const hasSel = pids.length || tids.length;
+  const scopeLine = hasSel
+    ? [pids.length ? `${pids.length} 篇论文（各含全部可用表）` : '', tids.length ? `${tids.length} 张单选表` : ''].filter(Boolean).join(' + ')
+    : `当前筛选 ${fN} 张`;
+  const {pop, close} = openPop('tb-export-pop tb-export-pop');
+  _tbExportPop = {pop, close};
+  pop.innerHTML = `
+  <div class="ui-pop-title">${icon('download')} 导出 xlsx
+    <button class="btn small ic-only" data-x title="关闭" aria-label="关闭">${icon('close')}</button></div>
+  <div class="muted" style="font-size:var(--fs-sm);margin-top:8px">范围：${esc(scopeLine)}${hasSel ? '' : '（可先勾选论文/表格缩小范围）'}</div>
+  <div class="tb-exp-sec">
+    <div class="tp-label">AI 加工（可选）</div>
+    <textarea id="tb-exp-instr" rows="3" placeholder="例：只保留 Method 列与 AUC 列；或：多级表头压成一行，空值填 —"></textarea>
+    <div class="muted" style="font-size:var(--fs-xs);margin-top:4px">留空 = 直接导出。填指令 = 每张表由 AI 按指令重生成（后台逐张处理，完成后此批即加工版，可在 AI 页签继续调整）</div>
+  </div>
+  <div class="tb-exp-sec">
+    <div class="tp-label">表内容版本</div>
+    <div class="tb-exp-ver">
+      <label><input type="radio" name="tb-exp-ver" value="ai" checked> AI 整理版优先（未整理自动用原始提取）</label>
+      <label><input type="radio" name="tb-exp-ver" value="orig"> 原始提取</label>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+    <button class="btn primary" id="tb-exp-go">${icon('download')} 导出</button>
+    <span class="muted" id="tb-exp-msg" style="font-size:var(--fs-xs)"></span>
+  </div>`;
+  pop.querySelector('[data-x]').onclick = close;
+  $('#tb-exp-go').onclick = async () => {
+    const instruction = ($('#tb-exp-instr')?.value || '').trim();
+    const version = pop.querySelector('input[name=tb-exp-ver]:checked')?.value || 'ai';
+    const msg = $('#tb-exp-msg'), go = $('#tb-exp-go');
+    const payloadBase = hasSel ? {paper_ids: pids, ids: tids}
+      : {filtered: {review: state._tbReview || 'active', q: state._tbQ || '', paper_id: state._tbPaper || '',
+                    collection_id: state._tbColl || '',
+                    ps: state.filter || '', sc: state.scope || ''}};
+    const fname = hasSel ? 'tables-selected.xlsx' : 'tables-filtered.xlsx';
+    go.disabled = true;
+    try {
+      if (instruction) {
+        // AI 加工：批量入队（job 逐表 regen 落库）——完成后 AI 整理版即加工版
+        const r = await api('/api/tables/regen-batch',
+          {method: 'POST', body: JSON.stringify({...payloadBase, instruction})});
+        close();
+        toast(`AI 加工已排队（${r.count} 张，逐张按指令重生成）——完成后表格自动刷新，再点「导出」即是加工版`, 8000);
+        return;
+      }
+      await downloadBlob('/api/tables/export', {...payloadBase, version}, fname, '已导出');
+      close();
+    } catch (e) {
+      msg.textContent = friendlyError(e, '操作失败');
+      go.disabled = false;
+    }
+  };
+};
+window.tbExportFiltered = window.tbExportMain;   // 旧入口别名
+/* 导出本组：分组头按钮——该论文在当前筛选下的全部可用表（跨页全量，不只本页可见的） */
+window.tbExportGroup = async (pid, btn) => {
+  const agg = (state._tbData?.by_paper_scoped || state._tbData?.by_paper || []).find(p => p.paper_id === pid);
+  const n = agg?.n ?? '?';
+  const title = (agg?.title || '').slice(0, 40);
+  if (!(await uiConfirm(`导出「${title}…」的全部可用表格（${n} 张，跨页全量，AI 整理版优先）？`, {title: '导出 xlsx'}))) return;
+  await withBusy(btn, () => downloadBlob('/api/tables/export',
+    {filtered: {review: state._tbReview || 'active', q: state._tbQ || '', paper_id: pid,
+                collection_id: state._tbColl || '',
+                ps: state.filter || '', sc: state.scope || ''}},
+    'tables-group.xlsx', `已导出 ${n} 张`), '导出失败');
+};
+/* 分组头全选/取消（当前页内该论文的表） */
+window.tbGroupSel = ck => {
+  // 论文级复选：勾 = 该论文进 _tbPaperSel（导出跨页全量）+ 组内本页表进 _tbSel（行框视觉同步）
+  const pid = ck.dataset.pid;
+  const s = state._tbSel || (state._tbSel = new Set());
+  const ps = state._tbPaperSel || (state._tbPaperSel = new Set());
+  if (ck.checked) {
+    ck.dataset.ids.split(',').filter(Boolean).forEach(id => s.add(id));
+    ps.add(pid);
+  } else {
+    ck.dataset.ids.split(',').filter(Boolean).forEach(id => s.delete(id));
+    ps.delete(pid);
+  }
+  loadTables();
+};
 window.tbLoadMore = () => { state._tbPage = (state._tbPage || 1) + 1; loadTables(); };
+/* 列表视图翻页：先保存未保存的内嵌编辑（dirty）再翻，翻后回顶 */
+window.tbPageTo = async p => {
+  for (const [tid, st] of Object.entries(window._tbInline || {})) {
+    if (st.dirty) await tbInlineSave(tid);
+  }
+  state._tbPage = Math.max(1, p);
+  loadTables();
+  document.querySelector('#page-tables')?.scrollTo?.({ top: 0 });
+  window.scrollTo({ top: 0 });
+};
 window.tbSearch = v => { state._tbQ = v; state._tbPage = 1; state._tbSel = new Set(); loadTables(); };
 
 /* ---------- 全屏对照审阅工作台（连续翻页核验：←→ 翻表 / X 剔除并下一张） ---------- */
 let _tbCompareTab = 'ai';
 let _tbCmpPop = null;
-const _tbCmp = {idx: 0, dirty: false, layout: 'both', tid: null, items: []};
+const _tbCmp = {idx: 0, dirty: false, layout: null, tid: null, items: []};
+const _TB_LAYOUTS = ['both', 'img', 'grid'];
 
-window.tbCompareClose = () => {
+function _tbLayoutInit() {
+  if (!_tbCmp.layout) {
+    const saved = localStorage.getItem('ps-tbl-layout');
+    _tbCmp.layout = _TB_LAYOUTS.includes(saved) ? saved : 'both';
+  }
+  return _tbCmp.layout;
+}
+function _tbSplitRead() { return localStorage.getItem('ps-tbl-split') || '42%'; }
+/* 分栏拖拽（复用阅读页 vsplit 交互惯例：拖动改比例、双击复位 50/50 处的等价物） */
+window.tbSplitStart = e => {
+  e.preventDefault();
+  const body = document.querySelector('.tbws-body.tbws-both');
+  if (!body) return;
+  const rect = body.getBoundingClientRect();
+  const move = ev => {
+    const pct = Math.max(20, Math.min(80, ((ev.clientX - rect.left) / rect.width) * 100));
+    body.style.setProperty('--tb-split', pct.toFixed(1) + '%');
+  };
+  const up = () => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    const v = body.style.getPropertyValue('--tb-split') || '42%';
+    localStorage.setItem('ps-tbl-split', v);
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+};
+window.tbSplitReset = () => {
+  document.querySelector('.tbws-body.tbws-both')?.style.setProperty('--tb-split', '42%');
+  localStorage.setItem('ps-tbl-split', '42%');
+};
+
+function _tbCmpCleanup() {
   if (_tbCmp.dirty) tbCmpAutoSave();          // 离开自动保存——编辑永不丢
   _tbCmp.keyHandler && document.removeEventListener('keydown', _tbCmp.keyHandler);
   _tbCmp.keyHandler = null;
-  _tbCmpPop?.close();
+  _tbCellPopClose();
   _tbCmpPop = null;
   loadTables();                               // 审阅后的状态/统计刷新
-};
+}
+/* 关闭统一收口：按钮 / Esc / 点遮罩全走 openPop 的 close（beforeClose 保证未保存
+   编辑不丢——此前 Esc 与遮罩直通 remove()，绕过本函数丢编辑） */
+window.tbCompareClose = () => { _tbCmpPop?.close(); };
 
 function _tbItems() { return state._tbData?.items || []; }
 
 window.tbCompare = async tid => {
   _tbCmpPop?.close();
-  const {pop, close} = openPop('tb-compare-pop');
+  _tbLayoutInit();
+  const {pop, close} = openPop('tb-compare-pop', {beforeClose: () => { _tbCmpCleanup(); return true; }});
   _tbCmpPop = {pop, close};
   _tbCmp.items = _tbItems();
   _tbCmp.idx = Math.max(0, _tbCmp.items.findIndex(x => x.id === tid));
@@ -7770,7 +8769,9 @@ window.tbCompare = async tid => {
       if (e.key === 'ArrowRight') { e.preventDefault(); tbCmpNav(1); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); tbCmpNav(-1); }
       else if (e.key === 'x' || e.key === 'X') { e.preventDefault(); tbCmpReview('deleted'); }
-      else if (e.key === 'j' || e.key === 'J') { e.preventDefault(); tbCmpReview('pending'); }
+      else if (e.key === 'j' || e.key === 'J') { e.preventDefault(); tbCmpReview('kept'); }
+      else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? tbGridRedo() : tbGridUndo(); }
+      else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); tbGridRedo(); }
     };
     document.addEventListener('keydown', _tbCmp.keyHandler);
   }
@@ -7779,6 +8780,7 @@ window.tbCompare = async tid => {
 };
 
 async function tbCmpRender() {
+  _tbCellPopClose();                          // 翻表/重渲关掉残留的右键菜单
   const it = _tbCmp.items[_tbCmp.idx];
   if (!it) { window.tbCompareClose(); return; }
   const pop = _tbCmpPop?.pop;
@@ -7786,13 +8788,17 @@ async function tbCmpRender() {
   let d;
   try { d = await api(`/api/tables/${it.id}`); }
   catch (e) { pop.innerHTML = `<div style="padding:40px">${esc(friendlyError(e))}</div>`; return; }
-  if (_tbCmp.tid !== d.id) { _tbCompareTab = d.ai_cells ? 'ai' : 'orig'; }   // 换表重置页签
+  if (_tbCmp.tid !== d.id) { _tbCompareTab = d.ai_cells ? 'ai' : 'orig'; _tbUndo = []; _tbRedo = []; }   // 换表重置页签与撤销/重做栈
   _tbCmp.tid = d.id;
+  _tbCmp.detail = d;   // 自动保存后同步 ai_cells 标记（页签「未整理」角标随下次渲染消失）
   _tbCmp.dirty = false;
   const gridOf = tab => {
     if (tab === 'ai' && d.ai_cells) { try { return JSON.parse(d.ai_cells); } catch { /* 落回原始 */ } }
+    if (tab === 'ai') return [];   // 未整理：AI 页签空态（不预览原始数据，指令框生成）——底稿歧义已由问答框替代
     return JSON.parse(d.cells || '[]');
   };
+  const aiTab = _tbCompareTab === 'ai';
+  const aiEmpty = aiTab && !d.ai_cells;
   window._tbGrid = gridOf(_tbCompareTab);
   const st = _TB_ST[it.ai_status] || ['', 'dim'];
   pop.innerHTML = `
@@ -7800,8 +8806,8 @@ async function tbCmpRender() {
     <div class="tbws-head">
       <div style="flex:1;min-width:0">
         <b style="font-size:var(--fs-md)">${esc((d.caption || '（无表题）').slice(0, 90))}</b>
-        <div class="muted" style="font-size:var(--fs-xs)">${esc(d.paper_title)} · 第 ${d.page_index + 1} 页 · ${window._tbGrid.length}×${window._tbGrid[0]?.length || 0}
-          ${tbStatusBadge(it.ai_status)}${it.review === 'kept' ? '<span class="badge ok">保留</span>' : ''}${it.review === 'deleted' ? '<span class="badge dim">已剔除</span>' : ''}</div>
+        <div class="muted" style="font-size:var(--fs-xs)">${esc(d.paper_title)} · 第 ${d.page_index + 1} 页 · <span id="tb-dim">${window._tbGrid.length}×${window._tbGrid[0]?.length || 0}</span>
+          <span id="tb-badge">${tbStatusBadge(it.ai_status)}${it.review === 'kept' ? '<span class="badge ok">保留</span>' : ''}${it.review === 'deleted' ? '<span class="badge dim">已剔除</span>' : ''}</span></div>
       </div>
       <span class="tbws-count">${_tbCmp.idx + 1} / ${_tbCmp.items.length}</span>
       <button type="button" class="chip-btn ${_tbCmp.layout === 'both' ? 'on' : ''}" onclick="tbCmpLayout('both')">并排</button>
@@ -7810,24 +8816,41 @@ async function tbCmpRender() {
       <button class="btn small" onclick="tbCompareClose()" title="关闭（Esc）">${icon('close')}</button>
     </div>
     ${d.ai_status === 'mismatch' ? `<div class="tb-mis-bar">${icon('warn')} ${esc(d.ai_note || '模型输出与原表不一致')}——人工修整后保存即转为已整理</div>` : ''}
-    <div class="tbws-body tbws-${_tbCmp.layout}">
+    <div class="tbws-body tbws-${_tbCmp.layout}" style="--tb-split:${esc(_tbSplitRead())}">
       <div class="tbws-img">
         <div class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">原始截图（点击放大）</div>
         ${d.img_url ? `<img src="${d.img_url}" onclick="tbCmpZoom('${d.img_url}')" title="点击放大">
           <div class="muted" style="font-size:var(--fs-xs);margin-top:4px">MinerU 裁剪 · ${esc(d.asset_name || '')}</div>`
           : '<div class="tb-thumb-fallback" style="padding:40px 0">无截图（以原始提取网格为准）</div>'}
       </div>
+      ${_tbCmp.layout === 'both' ? `<div class="tb-v-handle" role="separator" aria-orientation="vertical"
+        title="拖动调整比例（20%–80%）· 双击复位" onmousedown="tbSplitStart(event)" ondblclick="tbSplitReset()"></div>` : ''}
       <div class="tbws-grid">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <button type="button" class="chip-btn ${_tbCompareTab === 'ai' ? 'on' : ''}" onclick="tbCmpTab('ai')">AI 整理${d.ai_cells ? '' : '（未整理）'}</button>
           <button type="button" class="chip-btn ${_tbCompareTab === 'orig' ? 'on' : ''}" onclick="tbCmpTab('orig')">原始提取</button>
           <span style="flex:1"></span>
+          ${aiEmpty ? '' : `
           <button class="btn small" onclick="tbGridAddRow()">+行</button>
           <button class="btn small" onclick="tbGridAddCol()">+列</button>
-          <button class="btn small primary" onclick="tbGridSave('${d.id}', this)">${icon('check')} 保存</button>
+          <button class="btn small" onclick="tbGridUndo()" title="撤销（Ctrl+Z）——含结构操作与 AI 重生成">↶ 撤销</button>
+          <button class="btn small" onclick="tbGridRedo()" title="重做（Ctrl+Y）">↷ 重做</button>
+          <button class="btn small" onclick="tbCellMenuAtBtn(this)" title="单元格操作菜单（右键单元格同款）" aria-label="单元格操作菜单">${icon('sliders', 12)}</button>
+          <button class="btn small primary" onclick="tbGridSave('${d.id}', this)">${icon('check')} 保存</button>`}
         </div>
+        ${aiTab ? `
+        <div class="tb-ai-ask">
+          <input id="tb-ai-ask-inp" placeholder="${aiEmpty
+            ? '告诉 AI 怎么整理这张表，如：合并多级表头为一行；数值列只保留最大值行…'
+            : '继续调整：如转置表格 / 只保留前两列 / 按avg列降序排序…'}" aria-label="表格整理指令"
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)tbAiAsk()">
+          <button class="btn small primary" id="tb-ai-ask-go" onclick="tbAiAsk()">${icon('bolt', 12)} 生成</button>
+          ${aiEmpty ? '' : `<button class="btn small" onclick="tbResetOrig()" title="工作副本重置为 AI 处理前的原始提取（可撤销）">⟲ 还原原始</button>`}
+        </div>
+        <div id="tb-ai-note" class="muted" style="font-size:var(--fs-xs);margin-bottom:4px">${aiEmpty ? '尚未整理——此页签不预览原始数据（见「原始提取」页签）。输入指令让 AI 生成整理版，生成即自动保存。' : ''}</div>` : ''}
+        ${aiEmpty ? '' : `
         <div class="tb-grid-wrap"><table class="tbl-md tb-edit-grid" id="tb-edit-grid" contenteditable="true"></table></div>
-        <div class="muted" style="font-size:var(--fs-xs);margin-top:4px">点击单元格直接改；行首/表头 ✕ 删行删列；翻页/关闭自动保存修改</div>
+        <div class="muted" style="font-size:var(--fs-xs);margin-top:4px">点击单元格直接改；右键单元格：合并/插行列/移动/清空（Excel 式）；悬停行首/表头出 ✕ 删行删列；翻页/关闭自动保存</div>`}
       </div>
     </div>
     <div class="tbws-foot">
@@ -7846,25 +8869,39 @@ async function tbCmpRender() {
   // 网格任何编辑 → dirty（翻页/关闭时自动保存）
   const grid = $('#tb-edit-grid');
   grid?.addEventListener('input', () => { _tbCmp.dirty = true; });
-  // 键盘惯例（Excel/Airtable）：Enter=提交并下移 / Shift+Enter=上移 / Esc=还原进入编辑前的值
+  // 键盘惯例（Excel/Airtable）：Enter=提交并下移 / Shift+Enter=上移 / Esc=还原进入编辑前的值。
+  // 整表 contenteditable 下点击单元格焦点常落在 <table>（嵌套编辑宿主）——target 不是
+  // td[data-r]，用 selection 锚点兜底定位真实单元格
   grid?.addEventListener('keydown', e => {
-    const td = e.target.closest?.('[contenteditable="true"][data-r]');
+    let td = e.target.closest?.('[contenteditable="true"][data-r]');
+    if (!td && e.target === grid) {
+      td = document.getSelection()?.anchorNode?.parentElement
+        ?.closest?.('[contenteditable="true"][data-r]');
+    }
     if (!td) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       td.textContent = _tbCellBefore(td) ?? td.textContent;   // 还原进入编辑时快照
-      td.blur(); _tbCmp.dirty = true;
-    } else if (e.key === 'Enter' && !e.shiftKey) {
+      document.activeElement?.blur();   // blur 编辑宿主（table/td）——下一次 Esc 才关工作台
+      _tbCmp.dirty = true;
+    } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {   // isComposing：中文选词回车不下移
       e.preventDefault();
       focusCell(+td.dataset.r + 1, +td.dataset.c);           // 提交（contenteditable 已实时）并下移
-    } else if (e.key === 'Enter' && e.shiftKey) {
+    } else if (e.key === 'Enter' && e.shiftKey && !e.isComposing) {
       e.preventDefault();
       focusCell(+td.dataset.r - 1, +td.dataset.c);
     }
   });
+  // （右键监听在模块级 document 捕获段——见 _tbDocContextmenu）
   grid?.addEventListener('focusin', e => {                   // 进入编辑快照（Esc 还原用）
-    const td = e.target.closest?.('[contenteditable="true"][data-r]');
-    if (td) td._before = td.textContent;
+    // 点击设焦点的时序：focusin 可能先于 selection 更新——当场定位不到就
+    // 下一拍重试（否则 _before 没存上，Esc 还原退化为无操作）
+    const find = () => e.target.closest?.('[contenteditable="true"][data-r]') ||
+      document.getSelection()?.anchorNode?.parentElement
+        ?.closest?.('[contenteditable="true"][data-r]');
+    const td = find();
+    if (td) { td._before = td.textContent; _tbLastCell = [+td.dataset.r, +td.dataset.c]; }
+    else setTimeout(() => { const t = find(); if (t) { t._before = t.textContent; _tbLastCell = [+t.dataset.r, +t.dataset.c]; } }, 0);
   });
   function _tbCellBefore(td) { return td._before; }
   function focusCell(r, c) {
@@ -7872,12 +8909,43 @@ async function tbCmpRender() {
     if (next) next.focus();
   }
 }
-window.tbCmpLayout = mode => { _tbCmp.layout = mode; tbCmpRender(); };
-window.tbCmpTab = tab => { if (_tbCmp.dirty) tbCmpAutoSave(); _tbCompareTab = tab; tbCmpRender(); };
+window.tbCmpLayout = async mode => {
+  await tbCmpAutoSave();          // 切布局重拉重渲——先保住未保存编辑（此前直接丢）
+  _tbCmp.layout = mode;
+  localStorage.setItem('ps-tbl-layout', mode);
+  tbCmpRender();
+};
+window.tbCmpTab = async tab => { await tbCmpAutoSave(); _tbCompareTab = tab; tbCmpRender(); };
+/* AI 页签问答框：按用户指令对当前表格内容 LLM 再生成（regen 端点直接落 ai_cells+done）。
+   已整理表的底稿用 DOM 实时网格（未保存编辑也纳入）；未整理表由后端取原始提取。 */
+window.tbAiAsk = async () => {
+  const inp = $('#tb-ai-ask-inp');
+  const instruction = (inp?.value || '').trim();
+  if (!instruction) { toast('先输入整理指令'); inp?.focus(); return; }
+  const btn = $('#tb-ai-ask-go'), note = $('#tb-ai-note');
+  btn.disabled = true;
+  if (note) note.textContent = '生成中…（几秒到几十秒，取决于表格大小）';
+  try {
+    const base = (window._tbGrid || []).length ? _tbCollectGrid() : undefined;
+    if (base) _tbSnap();   // 重生成前的版本入撤销栈（↶ 可回到生成前；空态不入栈——底稿为空）
+    const r = await api(`/api/tables/${_tbCmp.tid}/regen`,
+      {method: 'POST', body: JSON.stringify({instruction, base_cells: base})});
+    if (_tbCmp.detail?.id === _tbCmp.tid) {
+      _tbCmp.detail.ai_cells = JSON.stringify(r.rows);   // 本地同步：页签角标/空态随重渲染消失
+      _tbCmp.detail.ai_status = 'done';
+    }
+    toast((r.note ? r.note + ' · ' : '') + '已生成并保存', 3200);
+    await tbCmpRender();
+  } catch (e) {
+    if (note) note.textContent = friendlyError(e, '生成失败');
+    toast(friendlyError(e, '生成失败'));
+  } finally { btn.disabled = false; }
+};
 window.tbCmpZoom = url => {
   const {pop, close} = openPop('tb-zoom-pop');
+  window._tbZoomClose = () => { close(); window._tbZoomClose = null; };
   pop.innerHTML = `<img src="${url}" style="max-width:92vw;max-height:86vh;display:block;cursor:zoom-out"
-    onclick="this.closest('.ui-backdrop').remove()">`;
+    onclick="_tbZoomClose()">`;
 };
 async function tbCmpAutoSave() {
   if (!_tbCmp.dirty || !_tbCmp.tid) return;
@@ -7885,6 +8953,7 @@ async function tbCmpAutoSave() {
   const grid = _tbCollectGrid();
   try {
     await api(`/api/tables/${_tbCmp.tid}`, {method: 'PATCH', body: JSON.stringify({cells: grid})});
+    if (_tbCmp.detail?.id === _tbCmp.tid) _tbCmp.detail.ai_cells = JSON.stringify(grid);   // 保存即整理：本地同步，「未整理」角标下次渲染消失
     toast('修改已自动保存', 2000);
   } catch (e) { toast(friendlyError(e, '自动保存失败——修改未保存')); _tbCmp.dirty = true; }
 }
@@ -7902,7 +8971,11 @@ window.tbCmpReview = async rv => {
   try {
     await api(`/api/tables/${it.id}/review`, {method: 'POST', body: JSON.stringify({review: rv})});
     it.review = rv;                            // 本地同步（KPI 在关闭时刷新）
-    toast(rv === 'deleted' ? '已剔除' : '已标记保留', 1800);
+    const undoRv = rv === 'deleted' ? 'pending' : rv === 'kept' ? 'pending' : 'kept';
+    toast(rv === 'deleted' ? '已剔除' : rv === 'kept' ? '已标记保留' : '已回待处理', 5000,
+      {label: '撤销', onClick: async () => {
+        try { await api(`/api/tables/${it.id}/review`, {method: 'POST', body: JSON.stringify({review: undoRv})}); it.review = undoRv; loadTables(); } catch {}
+      }});
     if (rv === 'deleted' && _tbCmp.idx < _tbCmp.items.length - 1) await tbCmpNav(1);
     else await tbCmpRender();
   } catch (e) { toast(friendlyError(e, '操作失败')); }
@@ -7911,11 +8984,14 @@ window.tbCmpReview = async rv => {
 function tbRenderGrid(grid) {
   const t = $('#tb-edit-grid');
   if (!t) return;
-  t.innerHTML = grid.map((row, r) => `
-    <tr>${r === 0 ? `<th class="tb-rowop" contenteditable="false" title="删除此行" onclick="tbGridDelRow(${r})">✕</th>` : `<td class="tb-rowop" contenteditable="false" title="删除此行" onclick="tbGridDelRow(${r})">✕</td>`}
+  // 首行（多级表头合并后的表头行）进 thead → 启用 .tbl-md 的表头吸顶（长表滚动时
+  // 列名常驻）；✕ 删除列随之吸顶/吸附——删除按钮常驻可视是合理副产物
+  const rowHtml = (row, r) => `
+    <tr>${r === 0 ? `<th class="tb-rowop" data-r="${r}" contenteditable="false" title="删除此行（右键本行任意处可插入/移动）" onclick="tbGridDelRow(${r})">✕</th>` : `<td class="tb-rowop" data-r="${r}" contenteditable="false" title="删除此行（右键本行任意处可插入/移动）" onclick="tbGridDelRow(${r})">✕</td>`}
     ${row.map((v, c) => r === 0
-      ? `<th class="tb-cel"><span contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</span><b class="tb-col-x" title="删除此列" onclick="event.stopPropagation();tbGridDelCol(${c})">✕</b></th>`
-      : `<td contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</td>`).join('')}</tr>`).join('');
+      ? `<th class="tb-cel" data-r="${r}" data-c="${c}"><span contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</span><b class="tb-col-x" title="删除此列（右键本列任意处可插入/移动/合并）" onclick="event.stopPropagation();tbGridDelCol(${c})">✕</b></th>`
+      : `<td contenteditable="true" data-r="${r}" data-c="${c}">${esc(v ?? '')}</td>`).join('')}</tr>`;
+  t.innerHTML = `<thead>${rowHtml(grid[0], 0)}</thead><tbody>${grid.slice(1).map((row, i) => rowHtml(row, i + 1)).join('')}</tbody>`;
 }
 function _tbCollectGrid() {
   // 从 DOM 读回（contenteditable 的实时文本；✕ 在 span 外不会混入）
@@ -7925,9 +9001,59 @@ function _tbCollectGrid() {
   });
   return grid;
 }
+/* ---- 结构操作统一走：回读 DOM 编辑 → 快照入撤销栈 → 改网格 → 重渲 ----
+   数据模型是纯二维数组（无 colspan/rowspan），「合并」= 内容并入相邻格 + 本格
+   置空——与 xlsx 导出、LLM 行列数校验完全兼容，不动 schema。 */
+/* 撤销/重做双栈（覆盖整个工作台内容面：结构操作 + AI 问答重生成 + 还原原始提取；
+   单元格逐键编辑不进栈——实时文本本身可改，退一步即整版回退）。切换表格时双栈清零。 */
+let _tbUndo = [], _tbRedo = [];
+function _tbSnap() {
+  _tbUndo.push(JSON.stringify(window._tbGrid));
+  _tbRedo = [];   // 新动作截断重做分支（标准 undo 语义）
+  if (_tbUndo.length > 50) _tbUndo.shift();
+}
+async function _tbApplyRows(rows, msg) {
+  window._tbGrid = rows;
+  _tbCmp.dirty = true;
+  tbRenderGrid(rows);
+  await tbCmpAutoSave();   // 撤销/重做同样落库——翻页/重开不丢
+  tbCmpRefreshHead();      // 表头尺寸/状态徽章跟随网格刷新（此前只刷网格——来回切换时表头陈旧）
+  toast(msg, 1600);
+}
+function tbCmpRefreshHead() {
+  const dim = $('#tb-dim');
+  if (dim) dim.textContent = `${window._tbGrid.length}×${window._tbGrid[0]?.length || 0}`;
+  const bd = $('#tb-badge');
+  const it = _tbCmp.items[_tbCmp.idx] || {};
+  const aiSt = _tbCmp.detail?.ai_status ?? it.ai_status;
+  if (bd) bd.innerHTML = tbStatusBadge(aiSt)
+    + (it.review === 'kept' ? '<span class="badge ok">保留</span>' : '')
+    + (it.review === 'deleted' ? '<span class="badge dim">已剔除</span>' : '');
+}
+window.tbGridUndo = () => {
+  if (!_tbUndo.length) { toast('没有可撤销的操作'); return; }
+  const rows = JSON.parse(_tbUndo.at(-1));
+  if (!rows.length) { toast('已是最早状态'); _tbUndo = []; return; }
+  _tbRedo.push(JSON.stringify(window._tbGrid));
+  void _tbApplyRows(JSON.parse(_tbUndo.pop()), '已撤销');
+};
+window.tbGridRedo = () => {
+  if (!_tbRedo.length) { toast('没有可重做的操作'); return; }
+  _tbUndo.push(JSON.stringify(window._tbGrid));
+  void _tbApplyRows(JSON.parse(_tbRedo.pop()), '已重做');
+};
+/* 一键还原原始提取：工作副本重置为 cells（AI 处理前的原表），可再撤销 */
+window.tbResetOrig = async () => {
+  const orig = (() => { try { return JSON.parse(_tbCmp.detail?.cells || '[]'); } catch { return []; } })();
+  if (!orig.length) { toast('原始提取为空'); return; }
+  _tbSnap();
+  await _tbApplyRows(orig, '已还原为原始提取（可再编辑或重新生成）');
+};
+
 window.tbGridDelRow = r => {
   window._tbGrid = _tbCollectGrid();
   if (window._tbGrid.length <= 1) { toast('至少保留一行'); return; }
+  _tbSnap();
   window._tbGrid.splice(r, 1);
   _tbCmp.dirty = true;
   tbRenderGrid(window._tbGrid);
@@ -7935,12 +9061,14 @@ window.tbGridDelRow = r => {
 window.tbGridDelCol = c => {
   window._tbGrid = _tbCollectGrid();
   if ((window._tbGrid[0] || []).length <= 1) { toast('至少保留一列'); return; }
+  _tbSnap();
   window._tbGrid.forEach(row => row.splice(c, 1));
   _tbCmp.dirty = true;
   tbRenderGrid(window._tbGrid);
 };
 window.tbGridAddRow = () => {
   window._tbGrid = _tbCollectGrid();
+  _tbSnap();
   const w = (window._tbGrid[0] || []).length;
   window._tbGrid.push(Array(w).fill(null));
   _tbCmp.dirty = true;
@@ -7948,9 +9076,140 @@ window.tbGridAddRow = () => {
 };
 window.tbGridAddCol = () => {
   window._tbGrid = _tbCollectGrid();
+  _tbSnap();
   window._tbGrid.forEach(row => row.push(null));
   _tbCmp.dirty = true;
   tbRenderGrid(window._tbGrid);
+};
+
+/* ---- 右键菜单新增操作：指定位置插入 / 移动 / 合并内容 / 填充 / 清空 ---- */
+window.tbInsRow = (r, above) => {
+  window._tbGrid = _tbCollectGrid();
+  _tbSnap();
+  const w = (window._tbGrid[0] || []).length;
+  window._tbGrid.splice(above ? r : r + 1, 0, Array(w).fill(null));
+  _tbCmp.dirty = true;
+  tbRenderGrid(window._tbGrid);
+};
+window.tbInsCol = (c, left) => {
+  window._tbGrid = _tbCollectGrid();
+  _tbSnap();
+  window._tbGrid.forEach(row => row.splice(left ? c : c + 1, 0, null));
+  _tbCmp.dirty = true;
+  tbRenderGrid(window._tbGrid);
+};
+window.tbMoveRow = (r, d) => {
+  const j = r + d;
+  if (r === 0 || j < 1 || j >= window._tbGrid.length) return;   // 表头行不参与移动
+  window._tbGrid = _tbCollectGrid();
+  _tbSnap();
+  [window._tbGrid[r], window._tbGrid[j]] = [window._tbGrid[j], window._tbGrid[r]];
+  _tbCmp.dirty = true;
+  tbRenderGrid(window._tbGrid);
+};
+window.tbMoveCol = (c, d) => {
+  const j = c + d;
+  if (j < 0 || j >= (window._tbGrid[0] || []).length) return;
+  window._tbGrid = _tbCollectGrid();
+  _tbSnap();
+  window._tbGrid.forEach(row => { [row[c], row[j]] = [row[j], row[c]]; });
+  _tbCmp.dirty = true;
+  tbRenderGrid(window._tbGrid);
+};
+const _joinCell = (a, b) =>
+  [a, b].map(v => (v ?? '').toString().trim()).filter(Boolean).join(' ') || null;
+window.tbMergeLeft = (r, c) => {
+  if (c === 0) return;
+  window._tbGrid = _tbCollectGrid();
+  _tbSnap();
+  const g = window._tbGrid;
+  g[r][c - 1] = _joinCell(g[r][c - 1], g[r][c]);
+  g[r][c] = null;
+  _tbCmp.dirty = true;
+  tbRenderGrid(g);
+};
+window.tbMergeUp = (r, c) => {
+  if (r === 0) return;
+  window._tbGrid = _tbCollectGrid();
+  _tbSnap();
+  const g = window._tbGrid;
+  g[r - 1][c] = _joinCell(g[r - 1][c], g[r][c]);
+  g[r][c] = null;
+  _tbCmp.dirty = true;
+  tbRenderGrid(g);
+};
+window.tbFillAbove = (r, c) => {
+  if (r === 0) return;
+  window._tbGrid = _tbCollectGrid();
+  _tbSnap();
+  window._tbGrid[r][c] = window._tbGrid[r - 1][c];
+  _tbCmp.dirty = true;
+  tbRenderGrid(window._tbGrid);
+};
+window.tbClearCell = (r, c) => {
+  window._tbGrid = _tbCollectGrid();
+  _tbSnap();
+  window._tbGrid[r][c] = null;
+  _tbCmp.dirty = true;
+  tbRenderGrid(window._tbGrid);
+};
+
+/* ---- 单元格右键菜单（Excel/Notion 惯例）：合并/插入/移动/清空 ----
+   监听挂 document 捕获级（注册一次，不随工作台重渲反复挂）：捕获相位先于一切
+   内层处理，任何 stopPropagation/焦点时序都抢不走；未命中网格区域则放行原生菜单。
+   另有工具栏 ⚙ 备用入口（_tbLastCell）——不依赖右键，浏览器差异/扩展拦截时可用。 */
+let _tbCellPop = null;
+let _tbLastCell = [0, 0];
+const _tbDocContextmenu = e => {
+  if (!_tbCmpPop?.pop?.isConnected) return;
+  const grid = document.querySelector('#tb-edit-grid');
+  if (!grid || !grid.contains(e.target)) return;
+  const td = e.target.closest?.('[data-r]') || e.target.querySelector?.('[data-r]') ||
+    document.getSelection()?.anchorNode?.parentElement?.closest?.('[data-r]');
+  if (td) { e.preventDefault(); e.stopPropagation(); tbCellMenu(e, +td.dataset.r, +(td.dataset.c ?? 0)); }
+};
+document.addEventListener('contextmenu', _tbDocContextmenu, true);
+function _tbCellPopClose() { _tbCellPop?.remove(); _tbCellPop = null; }
+window._tbCellPopClose = _tbCellPopClose;   // 右键菜单条目内联 onclick 引用（模块作用域）
+window.tbCellMenuAtBtn = btn => {           // 右键失效时的保底入口：对最后所在格弹同款菜单
+  const [r, c] = _tbLastCell || [0, 0];
+  const rect = btn.getBoundingClientRect();
+  tbCellMenu({preventDefault(){}, stopPropagation(){}, clientX: rect.left, clientY: rect.top - 8}, r, c);
+};
+window.tbCellMenu = (ev, r, c) => {
+  ev.preventDefault();
+  ev.stopPropagation();
+  _tbCellPopClose();
+  const pop = Object.assign(document.createElement('div'), {className: 'tool-pop tb-cellmenu'});
+  const item = (label, fn, dis) => dis ? '' :
+    `<div class="tp-item" onclick="${fn};_tbCellPopClose()">${label}</div>`;
+  const cols = (window._tbGrid[0] || []).length;
+  pop.innerHTML = [
+    item('合并到左侧', `tbMergeLeft(${r},${c})`, c === 0),
+    item('合并到上方', `tbMergeUp(${r},${c})`, r === 0),
+    item('填入上格值', `tbFillAbove(${r},${c})`, r === 0),
+    item('清空本格', `tbClearCell(${r},${c})`),
+    '<div class="tp-sep"></div>',
+    item('上方插入行', `tbInsRow(${r},true)`),
+    item('下方插入行', `tbInsRow(${r},false)`),
+    item('删除本行', `tbGridDelRow(${r})`, window._tbGrid.length <= 1),
+    item('本行上移', `tbMoveRow(${r},-1)`, r === 0),
+    item('本行下移', `tbMoveRow(${r},1)`, r === 0 || r >= window._tbGrid.length - 1),
+    '<div class="tp-sep"></div>',
+    item('左侧插入列', `tbInsCol(${c},true)`),
+    item('右侧插入列', `tbInsCol(${c},false)`),
+    item('删除本列', `tbGridDelCol(${c})`, cols <= 1),
+    item('本列左移', `tbMoveCol(${c},-1)`, c === 0),
+    item('本列右移', `tbMoveCol(${c},1)`, c >= cols - 1),
+  ].join('');
+  document.body.appendChild(pop);
+  const rect = pop.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(ev.clientX, innerWidth - rect.width - 8)) + 'px';
+  pop.style.top = Math.max(8, Math.min(ev.clientY, innerHeight - rect.height - 8)) + 'px';
+  _tbCellPop = pop;
+  document.addEventListener('mousedown', e => {
+    if (!pop.contains(e.target)) _tbCellPopClose();
+  }, {once: true});
 };
 window.tbGridSave = async (tid, btn) => {
   const grid = _tbCollectGrid();
@@ -7961,42 +9220,37 @@ window.tbGridSave = async (tid, btn) => {
   }, '保存失败');
 };
 
-/* ---------- 上传解析 → 自动收表 → 自动整理（一条链） ---------- */
-let _tbUpPop = null;
-window._tbUpClose = () => { _tbUpPop?.close(); _tbUpPop = null; };
-window.tbUploadOpen = async () => {
-  _tbUpPop?.close();
-  const {pop, close} = openPop('tb-upload-pop');
-  _tbUpPop = {pop, close};
-  // 目标库选项（与追踪页「收进目标库」同源：默认 + 本人各库 + 共享库）
-  let collOpts = '<option value="">默认文献库</option>';
-  try {
-    const d = await api('/api/collections');
-    const opts = [...(d.collections || []), ...((d.shared_libs || []).map(x => ({...x, name: x.name + '（共享）'})))];
-    collOpts = `<option value="">默认文献库</option>` + opts.map(o =>
-      `<option value="${o.id}" ${o.id === (state._tbUpColl || '') ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
-  } catch { /* 下拉退化默认 */ }
-  pop.innerHTML = `
-  <div class="ui-pop-title">${icon('upload')} 上传 PDF → 解析 → 自动收表
-    <button class="btn small" style="margin-left:auto" onclick="_tbUpClose()">${icon('close')}</button></div>
-  <div style="margin-top:10px" class="tb-up-body">
-    <div class="tk-grid2">
-      <label class="tk-fld">放入文献库
-        <select id="tb-up-coll" onchange="state._tbUpColl=this.value">${collOpts}</select></label>
-      <label class="tk-fld">选择文件（可多选 PDF/图片/Office）
-        <input id="tb-up-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx"></label>
-    </div>
-    <label class="tk-inline" style="margin-top:8px">
-      <input type="checkbox" id="tb-up-tidy" checked> 解析完成后自动收表并 AI 整理（走月预算闸）</label>
-    <div id="tb-up-status" style="margin-top:10px;font-size:var(--fs-sm)"></div>
-    <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn primary" onclick="tbUploadGo(this)">上传并跟踪</button>
-    </div>
-    <div class="muted" style="font-size:var(--fs-xs);margin-top:8px">
-      上传 → MinerU 解析（1-3 分钟/篇，页数多更久）→ 自动收割此批论文的表格 → 勾选整理则批量过 LLM。
-      也可以随时关掉此窗口——解析完不会自动收表，稍后用「收表」手动圈这批论文即可。</div>
+/* ---------- 上传解析 → 自动收集 → 自动整理（一条链） ---------- */
+window._tbUpClose = () => { document.querySelectorAll('.ui-backdrop').forEach(x => x.remove()); _tbCollectPop = null; };
+window.tbUploadOpen = () => tbCollectOpen('upload');   // 兼容旧入口
+window._tbUpClose = () => { _tbCollectPop?.close(); _tbCollectPop = null; };
+
+function _tbUploadBody(box) {
+  // 目标库选项（与追踪页「收进目标库」同源）：先渲染骨架，库名列表异步填充
+  box.innerHTML = `
+  <div class="tk-grid2">
+    <label class="tk-fld">放入文献库
+      <select id="tb-up-coll"><option value="">默认文献库</option></select></label>
+    <label class="tk-fld">选择文件（可多选 PDF/图片/Office）
+      <input id="tb-up-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx"></label>
+  </div>
+  <label class="tk-inline" style="margin-top:8px">
+    <input type="checkbox" id="tb-up-tidy" ${localStorage.getItem('ps-tbl-uptidy') !== '0' ? 'checked' : ''} onchange="localStorage.setItem('ps-tbl-uptidy', this.checked?'1':'0')"> 解析完成后自动收集并 AI 整理（走月预算闸）</label>
+  <div id="tb-up-status" style="margin-top:10px;font-size:var(--fs-sm)"></div>
+  <div style="display:flex;gap:8px;margin-top:10px">
+    <button class="btn primary" onclick="tbUploadGo(this)">上传并跟踪</button>
   </div>`;
-};
+  fetch('/api/collections').then(r => r.json()).then(d => {
+    const opts = [...(d.collections || []),
+      ...((d.shared_libs || []).map(x => ({...x, name: `${x.name}（${x.owner || '他人'} 共享）`}))),
+      ...((d.group_libs || []).map(x => ({...x, name: `${x.name} · ${x.group_name}`})))];
+    const sel = box.querySelector('#tb-up-coll');
+    if (!sel) return;
+    sel.innerHTML = `<option value="">默认文献库</option>` + opts.map(o =>
+      `<option value="${o.id}" ${o.id === (state._tbUpColl || '') ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+  }).catch(() => {});
+}
+
 
 window.tbUploadGo = async btn => {
   const files = [...($('#tb-up-files')?.files || [])];
@@ -8035,11 +9289,18 @@ async function tbTrackParse(ids, autoTidy) {
       const rows = ids.map(pid => {
         const x = ss[pid] || {};
         const ps = x.parse_status || 'pending';
-        return {pid, ps, label: {pending: '排队中', parsing: '解析中', parsed: '✓ 完成', failed: '✗ 失败', skipped: '跳过'}[ps] || ps};
+        // P7：statuses 的 parse_job 已带 done/total——解析中显示真实 x/y（此前只显示状态字）
+        const pj = x.parse_job || {};
+        return {pid, ps,
+                label: {pending: '排队中…', parsing: `解析中${pj.total > 1 ? ` ${pj.done}/${pj.total}` : '…'}`,
+                        parsed: '✓ 完成', failed: '✗ 失败', skipped: '跳过'}[ps] || ps,
+                bar: ps === 'parsing' ? (pj.total > 1
+                  ? progressBar(Math.round(100 * (pj.done || 0) / pj.total), false, 'up-bar parse')
+                  : progressIndet('up-bar indet parse')) : ''};
       });
       const done = rows.filter(r => ['parsed', 'failed', 'skipped'].includes(r.ps));
       st.innerHTML = `等待解析（${done.length}/${ids.length}）——完成后自动收表${autoTidy ? '并整理' : ''}<div class="tb-up-list">${
-        rows.map(r => `<div class="${r.ps === 'parsed' ? 'ok' : r.ps === 'failed' ? 'err' : 'muted'}">${r.label} · ${esc(names[r.pid] || r.pid.slice(0, 10))}</div>`).join('')}</div>`;
+        rows.map(r => `<div class="${r.ps === 'parsed' ? 'ok' : r.ps === 'failed' ? 'err' : 'muted'}">${esc(r.label)} · ${esc(names[r.pid] || r.pid.slice(0, 10))}${r.bar}</div>`).join('')}</div>`;
       if (done.length === ids.length) break;
     } catch { /* 网络抖动下轮再试 */ }
     await new Promise(r => setTimeout(r, 4000));
@@ -8049,12 +9310,348 @@ async function tbTrackParse(ids, autoTidy) {
   try {
     const h = await api('/api/tables/harvest', {method: 'POST', body: JSON.stringify({paper_ids: okIds, auto_tidy: !!autoTidy, from_upload: true})});
     st.insertAdjacentHTML('beforeend',
-      `<div style="margin-top:6px;color:var(--primary)">收表完成：${h.found} 张（新收 ${h.inserted}）${h.job_id ? '，整理已排队' : ''}</div>`);
+      `<div style="margin-top:6px;color:var(--primary)">收集完成：${h.found} 张（新收 ${h.inserted}）${h.job_id ? '，整理已排队' : ''}</div>`);
     const collName = $('#tb-up-coll')?.selectedOptions?.[0]?.text || '默认文献库';
     toast(`新一批「${h.batch || '批次'}」就绪：论文已入「${collName}」，收进 ${h.inserted} 张表${autoTidy ? '，AI 整理进行中' : ''}`, 6000);
-    state._tbBatch = h.batch || '';      // 视图切到该批次——所见即所收
+
     setTimeout(() => { window._tbUpClose?.(); loadTables(); }, 1200);
   } catch (e) {
-    st.insertAdjacentHTML('beforeend', `<div style="color:var(--err)">收表失败：${esc(friendlyError(e))}——稍后用「收表」手动圈这批论文</div>`);
+    st.insertAdjacentHTML('beforeend', `<div style="color:var(--err)">收集失败：${esc(friendlyError(e))}——稍后用「收表」手动圈这批论文</div>`);
   }
 }
+/* ===== 16-merge.js —— AI 合并表：跨表合成 + 合并工作台（编辑/撤销重做/版本回看/导出） =====
+/* 依赖 15-tables 的 tbStatusBadge/tbCollectGrid 等（同模块拼接，跨分片直引） */
+/* ---------- AI 合并表（跨表合成 → 独立工作台：编辑/撤销重做/版本回看/导出） ---------- */
+let _tbMergePop = null, _tbMergeStack = tbGridKernel.stack();
+
+window.tbMergeCreate = async (ids, btn) => {
+  const instruction = await new Promise(res => {
+    const {pop, close} = openPop('tb-merge-ask-pop');
+    pop.innerHTML = `
+    <div class="ui-pop-title">${icon('brain')} AI 合并所选表格
+      <button class="btn small ic-only" data-x aria-label="关闭">${icon('close')}</button></div>
+    <div class="muted" style="font-size:var(--fs-sm);margin-top:6px">已选 ${ids.length} 张表——AI 把它们合成一张汇总表（相同主题对齐合并、重复去重/并列标注来源）。之后可在工作台继续编辑、撤销、换指令重新合成。</div>
+    <textarea id="tb-merge-instr" rows="3" style="width:100%;margin-top:8px;font-size:var(--fs-sm)"
+      placeholder="例：按数据集对齐各方法的 PSNR/SSIM 列，来源论文用列尾标注；或：合并所有 ablation 表，只保留与 Ours 相关的行"></textarea>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <button class="btn primary" id="tb-merge-go">${icon('brain')} 开始合成</button>
+      <span class="muted" style="font-size:var(--fs-xs)">一次最多 10 张源表；约 10–40 秒</span>
+    </div>`;
+    pop.querySelector('[data-x]').onclick = () => { close(); res(null); };
+    $('#tb-merge-go').onclick = async () => {
+      const instr = ($('#tb-merge-instr')?.value || '').trim();
+      if (!instr) { toast('先输入合成指令'); return; }
+      const go = $('#tb-merge-go');
+      go.disabled = true; go.textContent = '合成中…（10–40 秒）';
+      try {
+        const r = await api('/api/tables/ai-merge', {method: 'POST', body: JSON.stringify({ids, instruction: instr})});
+        close(); res(r.merge);
+      } catch (e) {
+        toast(friendlyError(e, '合成失败'));
+        go.disabled = false;
+      }
+    };
+  });
+  if (instruction) { state._tbSel = new Set(); await loadTables(); tbMergeWorkspace(instruction.merge); }
+};
+
+function tbMergeRenderGrid(grid) {
+  const t = $('#tb-merge-grid');
+  if (!t) return;
+  tbGridKernel.render(t, grid);
+}
+
+function tbMergeSnap() { _tbMergeStack.snap(window._tbMergeGrid); }
+async function tbMergeApply(rows, msg) {
+  window._tbMergeGrid = rows;
+  tbMergeRenderGrid(rows);
+  tbMergeSave();
+  toast(msg, 1600);
+}
+window.tbMergeSave = async () => {
+  const grid = tbGridKernel.collect($('#tb-merge-grid'));
+  try { await api(`/api/tables/ai-merges/${_tbMerge.mid}`, {method: 'PATCH', body: JSON.stringify({grid})}); }
+  catch (e) { toast(friendlyError(e, '保存失败')); }
+};
+window.tbMergeUndo = () => {
+  const rows = _tbMergeStack.undo(window._tbMergeGrid);
+  if (rows === null) { toast('没有可撤销的操作'); return; }
+  window._tbMergeGrid = rows;
+  tbMergeRenderGrid(rows);
+  tbMergeSave();
+};
+window.tbMergeRedo = () => {
+  const rows = _tbMergeStack.redo(window._tbMergeGrid);
+  if (rows === null) { toast('没有可重做的操作'); return; }
+  window._tbMergeGrid = rows;
+  tbMergeRenderGrid(rows);
+  tbMergeSave();
+};
+
+window.tbMergeWorkspace = m => {
+  _tbMergePop?.close();
+  // kernel 栈随工作台会话保持（换表清旧引用改为重置实例）
+  _tbMergeStack = tbGridKernel.stack();
+  window._tbMerge = m;
+  window._tbMergeGrid = m.grid;
+  const {pop, close} = openPop('tb-merge-ws');
+  _tbMergePop = {pop, close};
+  const ver = (m.versions || []).find(x => x.v === m.cur_ver) || {};
+  pop.innerHTML = `
+  <div class="ui-pop-title">${icon('brain')} AI 合并表：${esc((m.title || '').slice(0, 40))}
+    <span class="muted" style="font-size:var(--fs-xs);margin-left:8px" id="tb-merge-ver">v${m.cur_ver}/${m.versions?.length || 1}</span>
+    <button class="btn small ic-only" data-x aria-label="关闭">${icon('close')}</button></div>
+  <div class="muted" style="font-size:var(--fs-xs);margin-top:6px">${esc(ver.note || m.note || '')} · 指令：${esc(m.instruction.slice(0, 60))}</div>
+  <div style="display:flex;gap:6px;align-items:center;margin:8px 0;flex-wrap:wrap">
+    <button class="btn small" onclick="tbMergeVer(-1)" title="上一个版本">‹ 上一版</button>
+    <button class="btn small" onclick="tbMergeVer(1)" title="下一个版本">下一版 ›</button>
+    <span style="width:1px;height:18px;background:var(--border)"></span>
+    <button class="btn small" onclick="tbMergeUndo()" title="撤销（Ctrl+Z）">↶ 撤销</button>
+    <button class="btn small" onclick="tbMergeRedo()" title="重做（Ctrl+Y）">↷ 重做</button>
+    <span style="flex:1"></span>
+    <button class="btn small primary" onclick="tbMergeSave()">${icon('check')} 保存编辑</button>
+  </div>
+  <div class="tb-grid-wrap" style="max-height:50vh"><table class="tbl-md" id="tb-merge-grid" contenteditable="true"></table></div>
+  <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+    <input id="tb-merge-reinstr" placeholder="改指令重新合成（基于源表，追加新版本）…" style="flex:1;min-width:180px;font-size:var(--fs-sm)"
+      onkeydown="if(event.key==='Enter'&&!event.isComposing)tbMergeReinstr()">
+    <button class="btn small" onclick="tbMergeReinstr()">${icon('bolt', 12)} 重新合成</button>
+    <span style="flex:1"></span>
+    <button class="btn small" onclick="tbMergeExport(this)" title="导出本合并表 xlsx（单 sheet）">${icon('download', 12)} 导出</button>
+    <button class="btn small danger" onclick="tbMergeDelete(this)">${icon('trash', 12)} 删除</button>
+  </div>
+  <div class="muted" style="font-size:var(--fs-xs);margin-top:6px">来源表：${(m.source_ids || []).length} 张（${esc((m.source_ids || []).map(sid => (state._tbData?.items || []).find(x => x.id === sid)?.caption || sid).join('；').slice(0, 120))}…）</div>
+  <div class="muted" style="font-size:var(--fs-xs);margin-top:2px">单元格直接编辑；撤销/重做与版本回看互不影响；编辑后保存即持久化</div>`;
+  tbMergeRenderGrid(m.grid);
+  pop.querySelector('[data-x]').onclick = () => { close(); _tbMergePop = null; };
+  // 网格编辑入撤销栈（input 防抖快照：首击入栈，连续输入不刷栈）
+  let snapTimer = null;
+  $('#tb-merge-grid').addEventListener('input', () => {
+    if (snapTimer) return;
+    snapTimer = setTimeout(() => { snapTimer = null; tbMergeSnap(); }, 800);
+  });
+  pop.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? tbMergeRedo() : tbMergeUndo(); }
+    else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); tbMergeRedo(); }
+  });
+};
+
+window.tbMergeVer = async dir => {
+  const m = window._tbMerge;
+  const versions = m.versions || [];
+  const cur = versions.findIndex(x => x.v === m.cur_ver);
+  const next = versions[cur + dir];
+  if (!next) { toast(dir > 0 ? '已是最新版本' : '已是最早版本'); return; }
+  const r = await api(`/api/tables/ai-merges/${m.id}/revert`, {method: 'POST', body: JSON.stringify({ver: next.v})});
+  window._tbMerge = r.merge;
+  window._tbMergeGrid = r.merge.grid;
+  $('#tb-merge-ver').textContent = `v${r.merge.cur_ver}/${r.merge.versions.length}`;
+  tbMergeRenderGrid(r.merge.grid);
+  toast(`已切到 v${next.v}（${next.note || ''}）`, 2500);
+};
+
+window.tbMergeReinstr = async () => {
+  const inp = $('#tb-merge-reinstr');
+  const instruction = (inp?.value || '').trim();
+  if (!instruction) { toast('先输入新的合成指令'); return; }
+  const go = document.querySelector('.tb-merge-ws button[onclick="tbMergeReinstr()"]');
+  go && (go.disabled = true);
+  try {
+    const r = await api(`/api/tables/ai-merges/${_tbMerge.mid}/regen`, {method: 'POST', body: JSON.stringify({instruction})});
+    window._tbMerge = r.merge;
+    window._tbMergeGrid = r.merge.grid;
+    $('#tb-merge-ver').textContent = `v${r.merge.cur_ver}/${r.merge.versions.length}`;
+    tbMergeRenderGrid(r.merge.grid);
+    toast(`已合成 v${r.merge.cur_ver}——历史版本可「上一版/下一版」回看`, 3200);
+  } catch (e) { toast(friendlyError(e, '重新合成失败')); }
+  finally { go && (go.disabled = false); }
+};
+
+window.tbMergeExport = async btn => {
+  await withBusy(btn, () => downloadBlob(`/api/tables/ai-merges/${_tbMerge.mid}/export`, {}, 'merge.xlsx', '已导出'), '导出失败');
+};
+window.tbMergeDelete = async btn => {
+  if (!(await uiConfirm('删除这张合并表？（源表不受影响）', {title: '删除'}))) return;
+  await api(`/api/tables/ai-merges/${_tbMerge.mid}`, {method: 'DELETE'});
+  _tbMergePop?.close(); _tbMergePop = null;
+  toast('已删除');
+};
+/* ===== 17-inline.js —— 阅读页「表格」页签：内嵌编辑器（与图表/公式同布局流） =====
+   每表卡片 = 网格（contenteditable）+ AI 指令框 + 撤销重做 + 自动保存；
+   状态 _tbInline[tid].stack 用 tbGridKernel；完整对照仍走 tbCompare 弹层。 */
+window._tbInline = {};
+
+window.tbInlineEditor = (t, idx = 0) => `
+  <div class="tb-inline" id="tb-inline-${t.id}" data-tid="${t.id}">
+    <div class="tb-inline-head">
+      <span class="tb-inline-cap" title="${esc(t.caption)} · 点击跳到 PDF 该页表格" onclick="tbInlineJump(${t.page_index}, ${idx})" style="cursor:pointer;color:var(--primary)">${esc(t.caption || '（无表题）')}</span>
+      ${tbStatusBadge(t.ai_status)}
+      <span class="muted" style="font-size:var(--fs-xs);flex:none">${t.n_rows}×${t.n_cols}</span>
+      <span style="flex:1"></span>
+      <button class="btn small ic-only" onclick="tbInlineAIBox('${t.id}')" title="AI 按指令加工此表" aria-label="AI 加工">${icon('brain', 12)}</button>
+      <button class="btn small ic-only" onclick="tbCompare('${t.id}')" title="完整对照工作台（原图并排）" aria-label="对照">${icon('stack', 12)}</button>
+    </div>
+    <div class="tb-inline-ai" hidden>
+      <input placeholder="按指令加工此表，如：多级表头压成一行；只保留 Ours 相关行…" aria-label="AI 加工指令"
+        onkeydown="if(event.key==='Enter'&&!event.isComposing)tbInlineAI('${t.id}')">
+      <button class="btn small primary" onclick="tbInlineAI('${t.id}')">${icon('bolt', 12)} 加工</button>
+    </div>
+    <div class="tb-inline-tools">
+      <button class="btn small" onclick="tbInlineAdd('${t.id}', 'row')" title="加一行">+行</button>
+      <button class="btn small" onclick="tbInlineAdd('${t.id}', 'col')" title="加一列">+列</button>
+      <button class="btn small" onclick="tbInlineUndo('${t.id}')" title="撤销（Ctrl+Z）">↶</button>
+      <button class="btn small" onclick="tbInlineRedo('${t.id}')" title="重做（Ctrl+Y）">↷</button>
+      <button class="btn small" onclick="tbExport(['${t.id}'], this)" title="下载此表 xlsx">${icon('download', 12)}</button>
+      <span class="muted tb-inline-dirty" hidden>未保存</span>
+      <span style="flex:1"></span>
+      <button class="btn small primary" onclick="tbInlineSave('${t.id}')">${icon('check', 12)} 保存</button>
+    </div>
+    <div class="tb-inline-grid"><table class="tbl-md" contenteditable="true" id="tb-mgrid-${t.id}"></table></div>
+  </div>`;
+
+window.tbInlineBind = t => {
+  const box = $(`#tb-inline-${t.id}`);
+  if (!box) return;
+  window._tbInline[t.id] = {stack: tbGridKernel.stack(), timer: null, dirty: false};
+  // 初始网格：AI 整理版优先（ai_cells），未整理落回原始提取——与对照工作台同口径
+  const initGrid = (() => {
+    if (t.ai_cells) { try { const g = JSON.parse(t.ai_cells); if (g.length) return g; } catch {} }
+    try { return JSON.parse(t.cells || '[]'); } catch { return []; }
+  })();
+  tbInlineRenderGrid(t.id, initGrid);
+  // 编辑快照（防抖入撤销栈）+ 自动保存（1.5s 静默后 PATCH）
+  box.querySelector('table').addEventListener('input', () => {
+    const st = window._tbInline[t.id];
+    if (!st.timer) { tbInlineSnap(t.id); }
+    clearTimeout(st.timer);
+    st.timer = setTimeout(() => { st.timer = null; tbInlineSave(t.id); }, 1500);
+    const dirty = box.querySelector('.tb-inline-dirty');
+    if (dirty) dirty.hidden = false;
+  });
+  box.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.target.closest('[contenteditable]')) { e.preventDefault(); tbInlineUndo(t.id); }
+  });
+};
+
+window.tbInlineRenderGrid = (tid, grid) => {
+  const t = $(`#tb-mgrid-${tid}`);
+  if (!t) return;
+  tbGridKernel.render(t, grid);
+};
+
+const tbInlineCollect = tid => tbGridKernel.collect($(`#tb-mgrid-${tid}`));
+
+window.tbInlineSnap = tid => {
+  const st = window._tbInline[tid];
+  st.stack.snap(tbInlineCollect(tid));
+  st.redo = [];
+  if (st.undo.length > 50) st.undo.shift();
+};
+
+window.tbInlineSave = async tid => {
+  const st = window._tbInline[tid];
+  const grid = tbInlineCollect(tid);
+  try {
+    await api(`/api/tables/${tid}`, {method: 'PATCH', body: JSON.stringify({cells: grid})});
+    const dirty = $(`#tb-inline-${tid} .tb-inline-dirty`);
+    if (dirty) dirty.hidden = true;
+    if (st) st.dirty = false;
+    const btn = $(`#tb-inline-${tid} .tb-inline-tools .btn.primary`);
+    if (btn) { btn.textContent = '✓ 已保存'; setTimeout(() => { btn.innerHTML = `${icon('check', 12)} 保存`; }, 1200); }
+  } catch (e) { toast(friendlyError(e, '保存失败')); }
+};
+
+window.tbInlineUndo = tid => {
+  const st = window._tbInline[tid];
+  if (!st) return;
+  const rows = st.stack.undo(tbInlineCollect(tid));
+  if (rows === null) { toast('没有可撤销的操作'); return; }
+  tbInlineRenderGrid(tid, rows);
+  tbInlineSave(tid);
+};
+window.tbInlineRedo = tid => {
+  const st = window._tbInline[tid];
+  if (!st) return;
+  const rows = st.stack.redo(tbInlineCollect(tid));
+  if (rows === null) { toast('没有可重做的操作'); return; }
+  tbInlineRenderGrid(tid, rows);
+  tbInlineSave(tid);
+};
+
+window.tbInlineAdd = (tid, kind) => {
+  const st = window._tbInline[tid];
+  tbInlineSnap(tid);
+  const grid = tbInlineCollect(tid);
+  if (kind === 'row') grid.push(new Array(grid[0]?.length || 1).fill(''));
+  else grid.forEach(r => r.push(''));
+  window._tbInline[tid] = st;
+  tbInlineRenderGrid(tid, grid);
+  tbInlineSave(tid);
+};
+
+// 版面序块匹配：MinerU 裁剪名 page_N_table_M 的 M = 该页第 M 个表块（按 bbox 纵向排序）
+// ——同页多表各自精确跳转的关键；图表 image_N、公式同理。
+// 逐项跳转（通用）：kind=块类型；idx1 从 1 计。name 优先解析序号（image_M/table_M），
+// 传不了序号的（公式）退化为页内第 idx+1 个同类型块，仍无块则纯跳页。
+window.tbJumpFlashItem = (page, kind, name, idx = 0) => {
+  const m = String(name || '').match(new RegExp(kind + '_(\\d+)\\.'));
+  if (m) return tbJumpFlash(page, kind, +m[1]);
+  tbJumpFlash(page, kind, idx + 1);
+};
+const _bboxY = b => { const bb = typeof b.bbox === 'string' ? JSON.parse(b.bbox) : (b.bbox || [9, 9]); const f = Array.isArray(bb[0]) ? bb[0] : bb; return f[1]; };
+// 文档级同类块序（MinerU asset 名 page_N_table_M 的 M = 全文档累积序）：按页码 + 页内 y 排序取第 idx1-1 个
+window.tbBlockDocOrder = (kind, idx1) => {
+  const sorted = (window.__state.blocks || [])
+    .filter(b => b.type === kind)
+    .sort((a, b2) => (a.page_index - b2.page_index) || (_bboxY(a) - _bboxY(b2)));
+  return sorted[idx1 - 1] || null;
+};
+window.tbBlockOnPage = (page, kind, idx1) => {
+  const sorted = (window.__state.blocks || [])
+    .filter(b => b.type === kind && b.page_index === page)
+    .sort((a, b2) => _bboxY(a) - _bboxY(b2));
+  return sorted[idx1 - 1] || null;
+};
+window.tbJumpFlash = async (page, kind, idx1) => {
+  // idx1 从 1 计（文件名约定）。blocks 懒加载：缺块时循环补拉（有界）再匹配。
+  let b = window.tbBlockDocOrder(kind, idx1);
+  let guard = 0;
+  while (!b && guard < 30 && window.__state._blkOffset < (window.__state._blkTotal || 0)) {
+    await window.loadMoreBlocks();
+    b = window.tbBlockDocOrder(kind, idx1);
+    guard++;
+    if (window.__state._blkLoading) break;   // 已有加载在跑：本轮结束后再试一轮
+  }
+  if (b) { window.pdfFlashBlock(b); return; }
+  window.jumpEvidence(b?.page_index ?? page);   // 兜底：至少跳到该页
+};
+window.tbInlineJump = async (page, idxInPage = 0) => {
+  // 同页第 idxInPage+1 张表 ↔ 该页表块按 bbox 纵向序的第 idxInPage+1 个
+  // （收割按 MinerU 块序产生，页内顺序一致）——同页多表各自精确跳转。
+  await tbJumpFlash(page, 'table', idxInPage + 1);
+};
+window.tbInlineAIBox = tid => {
+  const box = $(`#tb-inline-${tid} .tb-inline-ai`);
+  if (box) box.hidden = !box.hidden;
+};
+
+window.tbInlineAI = async tid => {
+  const box = $(`#tb-inline-${tid}`);
+  const inp = box.querySelector('.tb-inline-ai input');
+  const instruction = (inp?.value || '').trim();
+  if (!instruction) { toast('先输入加工指令'); return; }
+  const go = box.querySelector('.tb-inline-ai .btn');
+  go.disabled = true;
+  try {
+    tbInlineSnap(tid);   // 加工前快照 → 可撤销回到加工前
+    const r = await api(`/api/tables/${tid}/regen`,
+      {method: 'POST', body: JSON.stringify({instruction, base_cells: tbInlineCollect(tid)})});
+    window._tbInline[tid].gridLen = r.rows.length;
+    tbInlineRenderGrid(tid, r.rows);
+    toast((r.note ? r.note + ' · ' : '') + '已生成并保存', 3200);
+    // 同步状态徽章
+    const badge = box.querySelector('.tb-inline-head .badge');
+    if (badge) { badge.className = 'badge ok'; badge.textContent = '已整理 ✓'; }
+  } catch (e) { toast(friendlyError(e, '加工失败')); }
+  finally { go.disabled = false; }
+};

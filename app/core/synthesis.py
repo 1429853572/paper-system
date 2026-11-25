@@ -245,6 +245,11 @@ def run(user: dict, synthesis_id: str, job_update=None, topic: str = "",
         cluster_jsons: list[dict] = []
 
         # ---- 阶段三：组内精读比对（每组 1 次调用，顺带产出组名；rewrite 复用缓存） ----
+        # stage 显式推进：前端按 cluster/group/final 映射阶段文案，缺这行中段一直显示「聚类分组」
+        if not cached_clusters:
+            with db.write() as c:
+                c.execute("UPDATE syntheses SET stage='group', updated_at=datetime('now') WHERE id=?",
+                          (synthesis_id,))
         for gi, gids in (enumerate(clusters_ids) if not cached_clusters else []):
             g_digests = [by_id[i] for i in gids if i in by_id]
             if not g_digests:

@@ -48,10 +48,42 @@ async function openPaper(id) {
   $('#page-title').textContent = d.paper.title || d.paper.id;
   // PDF
   try {
-    state.pdfDoc = await pdfjsLib.getDocument(`/api/papers/${id}/pdf`).promise;
-    state.pageNum = 1; state.fitWidth = true; _pdfBuilt = null;
-    $('#pdf-toolbar').hidden = false;
-    renderPage();
+    ensurePdfViewerCss();   // pdf_viewer.css（100KB）按需注入——不进全局 <head>（专项轮 R5）
+    // 加载进度条（工具条下细条）：下载阶段按字节百分比，下载完转「渲染中」不确定动画，
+    // 首屏 canvas 出现后收起——大 PDF 的灰色空窗不再是无反馈的等待。
+    // epoch 守卫：换论文重入后旧闭包（迟到的 onProgress/收起定时器）不得触碰新状态；
+    // done 标记：pdf.js 的 Range 续传（206 分段）在 promise resolve 后仍会反复触发
+    // onProgress——没有 done 的话，收起的条会被迟到的进度更新重新拉出来。
+    _loadbarEpoch++;
+    const epoch = _loadbarEpoch;
+    const loadbar = $('#pdf-loadbar'), bar = loadbar?.querySelector('i');
+    let done = false;
+    const showBar = pct => { if (!loadbar || done || epoch !== _loadbarEpoch) return; loadbar.hidden = false;
+      loadbar.classList.toggle('indet', pct == null);
+      if (pct != null) bar.style.width = Math.round(pct * 100) + '%'; };
+    const hideBar = () => { if (!loadbar || done || epoch !== _loadbarEpoch) return;
+      done = true;
+      bar.style.width = '100%'; setTimeout(() => {
+        if (epoch !== _loadbarEpoch) return;   // 定时器触发前已换论文：不收新条
+        loadbar.hidden = true; bar.style.width = '0'; }, 250); };
+    try {
+      showBar(0);
+      const task = pdfjsLib.getDocument(`/api/papers/${id}/pdf`);
+      task.onProgress = ({loaded, total}) => showBar(total ? loaded / total : null);
+      state.pdfDoc = await task.promise;
+      if (state.current?.id !== id) return;   // 迟到的 PDF：已切别的论文，丢弃（防旧 doc 覆盖新骨架——assets 拉取同款守卫）
+      showBar(null);            // 下载完 → 渲染阶段不确定动画（首屏 canvas 出现前）
+      state.pageNum = 1; state.fitWidth = true; _pdfBuilt = null;
+      $('#pdf-toolbar').hidden = false;
+      renderPage();             // 渲染在后台进行；收条以首屏 canvas 出现为准（MutationObserver），
+      await new Promise(res => {   // 不依赖 renderPage 的 promise 链——快速换论文的交错路径不会卡条
+        if ($('#pdf-host canvas')) return res();
+        const mo = new MutationObserver(() => {
+          if ($('#pdf-host canvas')) { mo.disconnect(); res(); }
+        });
+        mo.observe($('#pdf-host'), {childList: true, subtree: true});
+      });
+    } finally { hideBar(); }
     applyVsplit();   // 按当前分栏宽度自适应首帧
     figCropPass();   // PDF 就绪，补跑原图裁剪
   } catch (e) {
@@ -120,30 +152,40 @@ async function pdfEnsureAll() {
     host.appendChild(w);
     wraps.set(i - 1, w);
   }
-  // 预计算各页高度（按第一页比例），占位防跳动
+  // 预计算各页几何（按第一页比例），占位防跳动；pgW/pgRatio 留给缩放做纯算术（R3）：
+  // 此前每次缩放对全部页串行 getPage+getViewport（O(N)），叠加全文档重排造成缩放冻结
+  // ——实测（web-quality-report §1.2）6 步缩放 14 个长任务、最重 600ms。
   const p1 = await state.pdfDoc.getPage(1);
   const v1 = p1.getViewport({scale: state.scale});
   state.pdfDoc.pgHeights = [];
+  state.pdfDoc.pgW = [];       // scale=1 基准宽（页间尺寸可不同）
+  state.pdfDoc.pgRatio = [];   // 高/宽比
   for (let i = 1; i <= state.pdfDoc.numPages; i++) {
     const pg = await state.pdfDoc.getPage(i);
     const vp = pg.getViewport({scale: state.scale});
     state.pdfDoc.pgHeights[i-1] = vp.height;
+    state.pdfDoc.pgW[i-1] = vp.width / state.scale;
+    state.pdfDoc.pgRatio[i-1] = vp.height / vp.width;
     const w = wraps.get(i - 1);
     if (!w) continue;   // 换文档竞态（切论文时 numPages 变化）→ 该页骨架已不存在，跳过
     const ph = w.querySelector('.pdf-ph');
     if (ph) ph.style.height = Math.round(vp.height) + 'px';
-    state.pdfDoc[`pgvp_${i}`] = vp;
   }
-  // 懒渲染观察器：进入视口即渲染该页（画布+文字层+覆盖层）
+  // 懒渲染观察器：进入视口即渲染该页（画布+文字层+覆盖层）；出离视口即释放位图（D4：
+  // 此前永不卸载，翻完一篇 15 页全部 canvas 驻留——量变风险见 docs/web-quality-report.md B3）。
+  // rootMargin 600px ≈ 视口前后各留 ~1 页缓冲，翻回时观察器自动重渲染。
   if (state._pdfObs) state._pdfObs.disconnect();
   state._pdfObs = new IntersectionObserver(async entries => {
     for (const en of entries) {
-      if (!en.isIntersecting) continue;
       const wrap = en.target;
-      // 倍率变了也要重绘（否则旧尺寸画布留在页面上）
-      if (!wrap.dataset.rendered || wrap._scale !== state.scale) {
-        wrap.dataset.rendered = '1';
-        await renderOneWrap(wrap);
+      if (en.isIntersecting) {
+        // 倍率变了也要重绘（否则旧尺寸画布留在页面上）
+        if (!wrap.dataset.rendered || wrap._scale !== state.scale) {
+          wrap.dataset.rendered = '1';
+          await renderOneWrap(wrap);
+        }
+      } else {
+        releasePdfWrap(wrap);
       }
     }
   }, { root: $('#pdf-host'), rootMargin: '600px 0px' });
@@ -167,6 +209,19 @@ async function pdfEnsureAll() {
 }
 /* 倍率变化：只更新占位高度 + 重绘当前可见页（DOM 骨架不动，滚动位置保持） */
 let _pdfFitBusy = false, _pdfFitPending = false;
+let _pdfCssInjected = false;
+let _loadbarEpoch = 0;   // PDF 加载进度条代数：openPaper 每次递增，旧闭包（迟到 onProgress/收起定时器）失效
+function ensurePdfViewerCss() {
+  /* pdf_viewer.css 只提供 .textLayer 样式（阅读页专用）——首开论文时注入一次。
+     在 getDocument 之前调用：本地 100KB 常趁 PDF 拉取完成前就绪，无样式闪跳。 */
+  if (_pdfCssInjected || document.querySelector('link[data-pdf-viewer-css]')) return;
+  _pdfCssInjected = true;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/static/vendor/pdfjs/pdf_viewer.css';
+  link.dataset.pdfViewerCss = '1';
+  document.head.appendChild(link);
+}
 async function _pdfRescale() {
   if (_pdfFitBusy) { _pdfFitPending = true; return; }   // 拖拽时可能重入：合并到下一次
   _pdfFitBusy = true;
@@ -175,14 +230,17 @@ async function _pdfRescale() {
     const host = $('#pdf-host');
     const cur = b.wraps.get(state.pageNum - 1);
     const oldTop = cur?.offsetTop ?? 0, oldScroll = host.scrollTop;
+    const prevScale = b.scale;
     b.scale = state.scale;
+    // 占位几何纯算术（R3）：基准宽 × 新倍率 + 高宽比——消除串行 getPage O(N)；
+    // 剩余的缩放成本是占位高度变化引发的全文档重排（结构性，见报告 §1.2 分解）
     for (let i = 1; i <= state.pdfDoc.numPages; i++) {
-      const pg = await state.pdfDoc.getPage(i);
-      const vp = pg.getViewport({scale: state.scale});
-      state.pdfDoc.pgHeights[i-1] = vp.height;
-      state.pdfDoc[`pgvp_${i}`] = vp;
+      const w0 = state.pdfDoc.pgW?.[i-1];
+      const ratio = state.pdfDoc.pgRatio?.[i-1];
+      const h = (w0 && ratio) ? w0 * state.scale * ratio : (state.pdfDoc.pgHeights[i-1] || 1000) * (state.scale / prevScale);
+      state.pdfDoc.pgHeights[i-1] = h;
       const ph = b.wraps.get(i - 1)?.querySelector('.pdf-ph');
-      if (ph) ph.style.height = Math.round(vp.height) + 'px';
+      if (ph) ph.style.height = Math.round(h) + 'px';
     }
     // 视口内的页立即按新倍率重绘；视口外的页滚进来时由观察器重绘
     const hr = host.getBoundingClientRect();
@@ -206,6 +264,12 @@ function updateZoomLabel() {
 }
 async function renderOneWrap(wrap) {
   if (!wrap) return;
+  wrap._rendering = true;   // 渲染中标记：释放逻辑跳过在渲染的页（竞态防护）
+  try {
+    await _renderOneWrapInner(wrap);
+  } finally { wrap._rendering = false; }
+}
+async function _renderOneWrapInner(wrap) {
   const idx = +wrap.dataset.page;
   const page = await state.pdfDoc.getPage(idx + 1);
   const vp = page.getViewport({scale: state.scale});           // CSS 尺寸：覆盖层/文字层/点击命中都用它
@@ -228,6 +292,17 @@ async function renderOneWrap(wrap) {
     await new pdfjsLib.TextLayer({textContentSource: tc, container: tl, viewport: vp}).render();
   } catch (e) {}
   drawOverlays(wrap);
+}
+/* 远页释放（D4）：出离视口 600px 外的已渲染页退回等高占位——位图（HiDPI 下每页可达
+   数十 MB RGBA）不再永久驻留；翻回时观察器按 data-rendered 空自动重渲染。
+   _rendering 防卸载正在渲染的页；占位用 pgHeights 等高 → 释放/重渲染均零布局跳动。 */
+function releasePdfWrap(wrap) {
+  if (!wrap || wrap._rendering || !wrap.dataset.rendered) return;
+  wrap._pageObj?.cleanup?.();   // pdf.js 页对象释放（重取 getPage 会拿新代理，官方安全）
+  const h = Math.round(state.pdfDoc.pgHeights?.[+wrap.dataset.page] || 1000);
+  wrap.innerHTML = `<div class="pdf-ph" style="height:${h}px"></div>`;
+  delete wrap.dataset.rendered;
+  wrap._vp = null; wrap._pageObj = null; wrap._scale = null;
 }
 function drawOverlays(wrap) {
   if (!wrap || !wrap._vp) return;

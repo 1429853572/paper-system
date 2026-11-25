@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -17,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from core import auth, ingest, qa, retrieval, summarizer, synthesis, tables as tables_mod, tracker_mail
-from core.config import (DATA_DIR, MINERU_BASE_URL, OLLAMA_BASE_URL,
+from core.config import (DATA_DIR, MINERU_BASE_URL, EMBED_BASE_URL,
                            PAPERSYS_API_TOKEN, config)
 from core.db import db
 from core.jobs import bus, scheduler
@@ -54,6 +55,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse({"detail": "服务器内部错误"}, status_code=500)
 
 
+_IMMUTABLE_IMG_RE = re.compile(r"^/api/papers/[^/]+/images/[^/]+$")
+
+
 @app.middleware("http")
 async def _cache_policy(request: Request, call_next):
     """缓存策略：vendor 库（版本锁定、不变）长缓存 immutable；
@@ -62,9 +66,23 @@ async def _cache_policy(request: Request, call_next):
     p = request.url.path
     if p.startswith("/static/vendor/"):
         resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
+    elif p.startswith("/api") and _IMMUTABLE_IMG_RE.match(p):
+        # 解析产物图片（内容寻址于 parse/<hash>/images/）：改 private+no-cache（每次 ETag 校验）。
+        # 全量 quality-audit 实测：no-store 下同一图片跨视图/重开重复下载 2-4 次；
+        # no-cache = 浏览器可存但每次校验，重解析后同名图片内容变了也能拿到新版本，零陈旧风险。
+        # 不带 If-None-Match 的首次请求照常 200；命中 ETag 由中间件回 304 空体（FileResponse 自带
+        # etag 头但不处理条件请求，Starlette 0.50 确认）。
+        resp.headers["Cache-Control"] = "private, no-cache"
+        inm = request.headers.get("if-none-match", "")
+        etag = resp.headers.get("etag")
+        if resp.status_code == 200 and etag and inm and (etag in inm or inm.strip() == "*"):
+            headers = {"Cache-Control": "private, no-cache", "ETag": etag,
+                       "X-Content-Type-Options": "nosniff"}
+            return Response(status_code=304, headers=headers)
     elif p.startswith("/api"):
         # 动态数据一律禁缓存——浏览器启发式缓存曾让用户看到旧数据
-        # （删了的论文还在、改了的数字不动，实测于多对多/n.d. 验证期）
+        # （删了的论文还在、改了的数字不动，实测于多对多/n.d. 验证期）。
+        # /pdf 也保持 no-store：一次会话只拉一次（实测无浪费），Range+304 语义对 pdf.js 有险。
         resp.headers["Cache-Control"] = "no-store"
     elif p.startswith("/static") or p in ("/", "/login"):
         resp.headers["Cache-Control"] = "no-cache"
@@ -200,7 +218,7 @@ def health():
     models: list[str] = []
     try:
         import httpx
-        base = (os.environ.get("EMBED_BASE_URL") or OLLAMA_BASE_URL).rstrip("/")
+        base = EMBED_BASE_URL.rstrip("/")
         r = httpx.get(f"{base}/v1/models", timeout=5)
         if r.status_code == 200:
             models = [m.get("id", "") for m in r.json().get("data", [])]
@@ -504,7 +522,12 @@ async def upload_papers(request: Request, files: list[UploadFile]):
             continue
         data = await f.read()
         try:
-            pages, _kind = ingest.preflight_doc(data, fname, is_admin=is_admin, overrides=overrides)
+            # offload（评审 P1-5）：pypdf 逐文件解析页数是 CPU 密集同步活，
+            # 多文件上传时逐个在事件循环上跑会拖住全站请求
+            import anyio
+            import functools
+            pages, _kind = await anyio.to_thread.run_sync(functools.partial(
+                ingest.preflight_doc, data, fname, is_admin=is_admin, overrides=overrides))
         except ingest.PreflightError as e:
             results.append({"name": fname, "status": "rejected", "reason": str(e)})
             continue
@@ -591,6 +614,31 @@ async def set_parse_filter(request: Request):
         c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                   (f"parse_filter:{u['id']}", json.dumps(d)))
+    return {"ok": True, **d}
+
+
+@app.get("/api/settings/tables")
+def get_table_settings(u: dict = Depends(require)):
+    """表格整理设置（per-user）：整理要求模板 + mismatch 行容差。硬约束与输出格式
+    固定在后端拼接，用户模板只覆盖「整理要求」段——防止改坏导致全量 mismatch。"""
+    from core.tables import _ROW_TOL_DEFAULT, _TIDY_RULES_DEFAULT, tidy_settings
+    st = tidy_settings(u["id"])
+    return {**st, "is_custom": st["rules"] != _TIDY_RULES_DEFAULT or st["row_tol"] != _ROW_TOL_DEFAULT,
+            "defaults": {"rules": _TIDY_RULES_DEFAULT, "row_tol": _ROW_TOL_DEFAULT}}
+
+
+@app.put("/api/settings/tables")
+async def set_table_settings(request: Request):
+    u = require(request)
+    body = await request.json()
+    d = {"rules": str(body.get("rules") or "").strip()[:2000],
+         "row_tol": max(0, min(10, int(body.get("row_tol", 2))))}
+    if not d["rules"]:
+        d["rules"] = ""   # 空串 = 回落默认（GET 端 tidy_settings 同样口径）
+    with db.write() as c:
+        c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (f"tbl_tidy:{u['id']}", json.dumps(d)))
     return {"ok": True, **d}
 
 
@@ -681,21 +729,26 @@ def list_papers(q: str = "", status: str = "", trash: int = 0,
     vis = "" if is_admin else " AND (visibility='shared' OR owner_id=?)"
     args: list[Any] = [] if is_admin else [u["id"]]
     if q:
-        vis += " AND (title LIKE ? OR authors LIKE ?)"
-        args.extend([f"%{q}%", f"%{q}%"])
         # 全文回退：方法名/正文词不在 title/authors——此前文库管理搜索框搜「方法名」必败
         # （侧栏 q≥2 字符走 FTS，此处永不走——同一系统两套语义）。FTS 命中 → id 并入。
+        fts_ids: list[str] = []
         try:
             from core.db import fts_query
             fts_ids = [r["paper_id"] for r in db.all(
                 "SELECT paper_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 50",
                 (fts_query(q),))]
-            if fts_ids:
-                ph = ",".join("?" * len(fts_ids))
-                vis += f" OR p.id IN ({ph})"
-                args.extend(fts_ids)
         except Exception:  # noqa: BLE001 —— FTS 异常退回标题/作者 LIKE
             pass
+        # 搜索命中（LIKE ∪ FTS）必须整体括成一个 AND 项：若把 OR p.id IN 拼在 vis 末尾，
+        # AND 优先级更高会让 FTS 命中绕过 visibility/deleted_at——他人私有/回收站论文
+        # 的标题作者泄漏给任何登录用户（多视角评审 P0-1，2026-11 修复）
+        if fts_ids:
+            ph = ",".join("?" * len(fts_ids))
+            vis += f" AND ((title LIKE ? OR authors LIKE ?) OR p.id IN ({ph}))"
+            args.extend([f"%{q}%", f"%{q}%", *fts_ids])
+        else:
+            vis += " AND (title LIKE ? OR authors LIKE ?)"
+            args.extend([f"%{q}%", f"%{q}%"])
     if status:
         vis += " AND parse_status=?"
         args.append(status)
@@ -1277,8 +1330,40 @@ def jobs_count(u: dict = Depends(require)):
     return {"active": n, "mcp_pending": pend}
 
 
+# ---------------- SSE 连接上限（多视角评审 P1-2） ----------------
+# 每条 SSE/流式连接常驻占 1 个 anyio 线程池 token——50 用户×2 标签页即可打满
+# 线程池（整站假死，含健康检查→容器重启风暴）。per-user + 全站双闸，超限 429。
+_sse_conns: dict[int, int] = {}
+_sse_total = 0
+_sse_guard = threading.Lock()
+
+
+def _sse_acquire(u: dict) -> None:
+    global _sse_total
+    per_user = int(config.get("limits", "sse_per_user") or 4)
+    total = int(config.get("limits", "sse_total") or 200)
+    with _sse_guard:
+        n = _sse_conns.get(u["id"], 0)
+        if n >= per_user or _sse_total >= total:
+            raise HTTPException(429, "流式连接过多——请关闭其他标签页后重试")
+        _sse_conns[u["id"]] = n + 1
+        _sse_total += 1
+
+
+def _sse_release(u_id: int) -> None:
+    global _sse_total
+    with _sse_guard:
+        n = _sse_conns.get(u_id, 0) - 1
+        if n <= 0:
+            _sse_conns.pop(u_id, None)
+        else:
+            _sse_conns[u_id] = n
+        _sse_total = max(0, _sse_total - 1)
+
+
 @app.get("/api/jobs/stream")
 def jobs_stream(u: dict = Depends(require)):
+    _sse_acquire(u)
     is_admin = u["role"] == "admin"
 
     def gen(q: "queue.Queue") -> Iterator[str]:
@@ -1286,7 +1371,9 @@ def jobs_stream(u: dict = Depends(require)):
         try:
             while True:
                 try:
-                    ev = q.get(timeout=15)
+                    # timeout=10：keepalive 周期，也是客户端断开后 worker 线程被
+                    # 关闭（SSE 计数释放）的最长延迟窗口（评审 P1-2）
+                    ev = q.get(timeout=10)
                 except _q.Empty:
                     yield ": keepalive\n\n"
                     continue
@@ -1297,8 +1384,14 @@ def jobs_stream(u: dict = Depends(require)):
         finally:
             bus.unsubscribe(q)
 
+    def gen_with_limit() -> Iterator[str]:
+        try:
+            yield from gen(q)
+        finally:
+            _sse_release(u["id"])
+
     q = bus.subscribe()
-    return StreamingResponse(gen(q), media_type="text/event-stream",
+    return StreamingResponse(gen_with_limit(), media_type="text/event-stream",
                              headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
 
 
@@ -1547,6 +1640,152 @@ def get_or_create_default_collection(user_id: int) -> str:
     return cid
 
 
+# ---------------- 协作群组（Zotero 式：群组库成员共享读写） ----------------
+
+def _group_role(gid: str, uid: int) -> str | None:
+    """我在该群组的角色（owner/member），非成员 → None。"""
+    r = db.one("SELECT role FROM lib_group_members WHERE group_id=? AND user_id=?", (gid, uid))
+    return r["role"] if r else None
+
+
+def _group_lib_ids(uid: int) -> list[str]:
+    """我参与的群组的根库 id 列表（每个群组一个根库）。"""
+    return [r["id"] for r in db.all(
+        "SELECT c.id FROM collections c JOIN lib_group_members m ON m.group_id=c.group_id "
+        "WHERE m.user_id=?", (uid,))]
+
+
+def _is_group_lib_member(u: dict, cid: str) -> bool:
+    """cid（或其祖先）是群组库且我是成员 → 可写。"""
+    cur = db.one("SELECT id, group_id, parent_id FROM collections WHERE id=?", (cid,))
+    hops = 0
+    while cur is not None and hops < 5:
+        if cur["group_id"] and _group_role(cur["group_id"], u["id"]):
+            return True
+        if not cur["parent_id"]:
+            return False
+        cur = db.one("SELECT id, group_id, parent_id FROM collections WHERE id=?", (cur["parent_id"],))
+        hops += 1
+    return False
+
+
+@app.post("/api/groups")
+async def create_group(request: Request):
+    """创建协作群组：群组 + 同名根库（owner=创建者）+ owner 成员记录。"""
+    u = require(request)
+    b = await request.json()
+    name = (b.get("name") or "").strip()
+    if not (1 <= len(name) <= 50):
+        raise HTTPException(400, "群组名 1-50 字符")
+    gid = "g" + secrets.token_hex(6)
+    cid = "c" + secrets.token_hex(6)
+    with db.write() as c:
+        c.execute("INSERT INTO lib_groups(id,name,owner_id) VALUES(?,?,?)", (gid, name, u["id"]))
+        c.execute("INSERT INTO lib_group_members(group_id,user_id,role) VALUES(?,?,'owner')", (gid, u["id"]))
+        c.execute("INSERT INTO collections(id,name,owner_id,group_id) VALUES(?,?,?,?)",
+                  (cid, name, u["id"], gid))
+    return {"ok": True, "id": gid, "root_collection": cid}
+
+
+@app.get("/api/groups")
+def list_groups(request: Request):
+    """我参与的群组：群组信息 + 成员数 + 根库 id + 根库论文数。"""
+    u = require(request)
+    rows = db.all(
+        "SELECT g.id, g.name, g.owner_id, u.username AS owner, m.role, "
+        "(SELECT COUNT(*) FROM lib_group_members m2 WHERE m2.group_id=g.id) members_n, "
+        "(SELECT c.id FROM collections c WHERE c.group_id=g.id LIMIT 1) root_cid, "
+        "(SELECT COUNT(DISTINCT p.id) FROM paper_collections pc "
+        " JOIN papers p ON p.id=pc.paper_id "
+        " JOIN collections c2 ON c2.id=pc.collection_id "
+        " WHERE c2.group_id=g.id AND p.deleted_at IS NULL "
+        " AND (p.visibility='shared' OR p.owner_id=?)) papers "
+        "FROM lib_groups g JOIN lib_group_members m ON m.group_id=g.id AND m.user_id=? "
+        "JOIN users u ON u.id=g.owner_id ORDER BY g.created_at",
+        (u["id"], u["id"]))
+    return {"groups": [dict(r) for r in rows]}
+
+
+@app.post("/api/groups/join")
+async def group_join(request: Request):
+    """凭群组 ID 自助加入（邀请链接/手动输入群组 ID 两条路径共用）。
+    gid 本身即加入凭证（12 位随机 hex）；已是成员 → 400 幂等提示。"""
+    u = require(request)
+    b = await request.json()
+    gid = (b.get("gid") or "").strip()
+    g = db.one("SELECT id, name FROM lib_groups WHERE id=?", (gid,))
+    if g is None:
+        raise HTTPException(404, "群组不存在（检查 ID 是否输对）")
+    if _group_role(gid, u["id"]):
+        raise HTTPException(400, "你已是该群组成员")
+    with db.write() as c:
+        c.execute("INSERT INTO lib_group_members(group_id,user_id,role) VALUES(?,?,'member')",
+                  (gid, u["id"]))
+    return {"ok": True, "name": g["name"]}
+
+
+
+@app.post("/api/groups/{gid}/members")
+async def group_add_member(gid: str, request: Request):
+    u = require(request)
+    if _group_role(gid, u["id"]) != "owner":
+        raise HTTPException(403, "仅群主可邀请成员")
+    b = await request.json()
+    uname = (b.get("username") or "").strip()
+    target = db.one("SELECT id, username FROM users WHERE username=? AND disabled=0", (uname,))
+    if target is None:
+        raise HTTPException(400, "用户不存在")
+    if target["id"] == u["id"]:
+        raise HTTPException(400, "已是群主")
+    if _group_role(gid, target["id"]):
+        raise HTTPException(400, "已是成员")
+    with db.write() as c:
+        c.execute("INSERT INTO lib_group_members(group_id,user_id,role) VALUES(?,?,'member')",
+                  (gid, target["id"]))
+    return {"ok": True, "user": {"id": target["id"], "username": target["username"]}}
+
+
+@app.delete("/api/groups/{gid}/members/{uid}")
+async def group_remove_member(gid: str, uid: int, request: Request):
+    u = require(request)
+    if _group_role(gid, u["id"]) != "owner":
+        raise HTTPException(403, "仅群主可移除成员")
+    if uid == u["id"]:
+        raise HTTPException(400, "不能移除群主自己")
+    with db.write() as c:
+        c.execute("DELETE FROM lib_group_members WHERE group_id=? AND user_id=? AND role!='owner'",
+                  (gid, uid))
+    return {"ok": True}
+
+
+@app.get("/api/groups/{gid}/members")
+def group_members(gid: str, request: Request):
+    u = require(request)
+    if _group_role(gid, u["id"]) is None:
+        raise HTTPException(403, "仅成员可见")
+    rows = db.all(
+        "SELECT m.user_id, u.username, m.role FROM lib_group_members m "
+        "JOIN users u ON u.id=m.user_id WHERE m.group_id=? ORDER BY m.role, u.username", (gid,))
+    return {"members": [dict(r) for r in rows], "iAmOwner": _group_role(gid, u["id"]) == "owner"}
+
+
+@app.delete("/api/groups/{gid}")
+async def delete_group(gid: str, request: Request):
+    """解散群组：仅群主；群组库树连根删除（论文不删，只摘链）。"""
+    u = require(request)
+    if _group_role(gid, u["id"]) != "owner":
+        raise HTTPException(403, "仅群主可解散群组")
+    ids = [gid]
+    with db.write() as c:
+        c.execute("DELETE FROM paper_collections WHERE collection_id IN "
+                  "(SELECT id FROM collections WHERE group_id=?)", (gid,))   # 先摘链（论文不删）
+        c.execute("DELETE FROM collections WHERE group_id=?", (gid,))       # 群组库树
+        c.execute("DELETE FROM lib_group_members WHERE group_id=?", (gid,))  # 成员
+        c.execute("DELETE FROM lib_groups WHERE id=?", (gid,))              # 群组（最后）
+    emit_data("collections")
+    return {"ok": True}
+
+
 @app.get("/api/collections")
 def list_collections(u: dict = Depends(require)):
     vis = "" if u["role"] == "admin" else " AND (p.visibility='shared' OR p.owner_id=?)"
@@ -1568,14 +1807,34 @@ def list_collections(u: dict = Depends(require)):
         f"AND NOT EXISTS(SELECT 1 FROM paper_collections pc WHERE pc.paper_id=p.id){vis}",
         args)["n"]
     # 他人库中的共享论文（我的库列表不含他人库 → 同样会造成数字差额）
+    # owner=归属用户名：每个用户的默认库都叫「默认文献库」，不带归属人的
+    # 「（共享）」后缀在多用户下无法区分是谁的（截图反馈实测困惑）
     shared_rows = db.all(
-        "SELECT c.id, c.name, c.owner_id, COUNT(DISTINCT p.id) AS n FROM papers p "
+        "SELECT c.id, c.name, c.owner_id, u.username AS owner, COUNT(DISTINCT p.id) AS n "
+        "FROM papers p "
         "JOIN paper_collections pc ON pc.paper_id=p.id "
         "JOIN collections c ON c.id = pc.collection_id "
+        "JOIN users u ON u.id = c.owner_id "
         "WHERE p.deleted_at IS NULL AND c.owner_id<>? AND (p.visibility='shared' OR p.owner_id=?) "
         "GROUP BY c.id", (u["id"], u["id"]))
-    shared_libs = [{"id": r["id"], "name": r["name"], "owner_id": r["owner_id"], "papers": r["n"],
-                    "shared": True} for r in shared_rows]
+    shared_libs = [{"id": r["id"], "name": r["name"], "owner_id": r["owner_id"],
+                    "owner": r["owner"], "papers": r["n"], "shared": True} for r in shared_rows]
+    # 协作群组（Zotero 式）：我参与的群组 + 群组根库（成员共享读写）
+    groups = [dict(r) for r in db.all(
+        "SELECT g.id, g.name, g.owner_id, u.username AS owner, m.role, "
+        "(SELECT c.id FROM collections c WHERE c.group_id=g.id LIMIT 1) AS root_cid, "
+        "(SELECT COUNT(*) FROM lib_group_members m2 WHERE m2.group_id=g.id) AS members_n "
+        "FROM lib_groups g JOIN lib_group_members m ON m.group_id=g.id AND m.user_id=? "
+        "JOIN users u ON u.id=g.owner_id ORDER BY g.created_at", (u["id"],))]
+
+    # 我参与的群组的全部库（根+子库平铺，标群组名）——上传/收集「放入文献库」下拉用
+    group_libs = [dict(r) for r in db.all(
+        "SELECT c.id, c.name, c.parent_id, g.name AS group_name, "
+        "(SELECT COUNT(*) FROM paper_collections pc JOIN papers p ON p.id=pc.paper_id "
+        " WHERE pc.collection_id=c.id AND p.deleted_at IS NULL) AS papers "
+        "FROM collections c JOIN lib_groups g ON g.id=c.group_id "
+        "JOIN lib_group_members m ON m.group_id=g.id AND m.user_id=? "
+        "ORDER BY g.created_at, c.created_at", (u["id"],))]
     # 汇总：父库计数含全部子孙；子树 DISTINCT 去重——同一篇挂父库+子库只计一次
     children = {}
     for n in nodes:
@@ -1599,7 +1858,21 @@ def list_collections(u: dict = Depends(require)):
     for n in nodes:
         n["papers_total"] = distinct_count([n["id"]] + subtree_ids(n["id"]))
     return {"total": total, "collections": nodes,
-            "unassigned": unassigned, "shared_libs": shared_libs}
+            "unassigned": unassigned, "shared_libs": shared_libs, "groups": groups,
+            "group_libs": group_libs}
+
+
+def _assert_unique_sibling_name(owner_id: int, parent: str | None, name: str,
+                                exclude_cid: str = "") -> None:
+    """同级重名拦截（应用层软约束）：同一父库下不允许同名库——侧栏两个「test」
+    无法区分。不加 DB 唯一索引：存量可能已有重名，拦新增/改名即可；比较用
+    lower() 防大小写变体（Test/test）。"""
+    row = db.one(
+        "SELECT id FROM collections WHERE owner_id=? AND parent_id IS ? "
+        "AND lower(name)=? AND id<>?",
+        (owner_id, parent, name.lower(), exclude_cid))
+    if row:
+        raise HTTPException(400, "同级已有同名库——换个名字，或先把旧的改名")
 
 
 @app.post("/api/collections")
@@ -1610,20 +1883,30 @@ async def create_collection(request: Request):
     if not (1 <= len(name) <= 50):
         raise HTTPException(400, "库名 1-50 字符")
     parent = body.get("parent_id") or None
+    group_id = None
     if parent:
-        prow = db.one("SELECT id, parent_id FROM collections WHERE id=? AND owner_id=?", (parent, u["id"]))
-        if prow is None:
-            raise HTTPException(400, "父库不存在")
+        prow = db.one("SELECT id, parent_id, owner_id, group_id FROM collections WHERE id=?", (parent,))
+        is_member_lib = prow and _is_group_lib_member(u, parent)
+        if prow is None or (prow["owner_id"] != u["id"] and not is_member_lib):
+            raise HTTPException(400, "父库不存在或无权限")
+        group_id = prow["group_id"]
         depth, cur = 1, prow
         while cur and cur["parent_id"]:
             cur = db.one("SELECT id, parent_id FROM collections WHERE id=?", (cur["parent_id"],))
             depth += 1
         if depth >= 3:
             raise HTTPException(400, "最多三级目录")
+    if group_id:   # 群组库建子库：重名按群组域查（owner 仍是群主，成员可建）
+        dup = db.one("SELECT id FROM collections WHERE group_id=? AND parent_id IS ? "
+                     "AND lower(name)=lower(?)", (group_id, parent, name))
+        if dup:
+            raise HTTPException(400, "同级已有同名库")
+    else:
+        _assert_unique_sibling_name(u["id"], parent, name)
     cid = "c" + secrets.token_hex(6)
     with db.write() as c:
-        c.execute("INSERT INTO collections(id,name,owner_id,parent_id) VALUES(?,?,?,?)",
-                  (cid, name, u["id"], parent))
+        c.execute("INSERT INTO collections(id,name,owner_id,parent_id,group_id) VALUES(?,?,?,?,?)",
+                  (cid, name, u["id"], parent, group_id))
     emit_data("collections")
     return {"id": cid, "name": name, "parent_id": parent}
 
@@ -1635,9 +1918,10 @@ async def rename_collection(cid: str, request: Request):
     name = (body.get("name") or "").strip()
     if not (1 <= len(name) <= 50):
         raise HTTPException(400, "库名 1-50 字符")
-    row = db.one("SELECT owner_id FROM collections WHERE id=?", (cid,))
+    row = db.one("SELECT owner_id, parent_id FROM collections WHERE id=?", (cid,))
     if row is None or (row["owner_id"] != u["id"] and u["role"] != "admin"):
         raise HTTPException(404, "文献库不存在")
+    _assert_unique_sibling_name(row["owner_id"], row["parent_id"], name, exclude_cid=cid)
     with db.write() as c:
         c.execute("UPDATE collections SET name=? WHERE id=?", (name, cid))
     emit_data("collections")
@@ -1703,7 +1987,7 @@ def _link_change(u: dict, paper_ids: list[str], cid: str, link: bool) -> dict:
     """加入/移出分库的公共实现。校验：论文可见 + 目标库归属（_safe_collection）。"""
     if db.one("SELECT id FROM collections WHERE id=?", (cid,)) is None:
         raise HTTPException(400, "目标文献库不存在")
-    _safe_collection(u, cid)
+    _safe_collection(u, cid)   # 群组库：成员放行（_safe_collection 内部）
     changed = 0
     for pid in paper_ids:
         p = db.one("SELECT id, owner_id FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
@@ -2130,12 +2414,15 @@ def _safe_import_dir(rel: str) -> Path:
 
 # ---------------- 专题采集任务（可中断可恢复的科研采集流程） ----------------
 def _safe_collection(u: dict, cid: str | None) -> str:
-    """目标文献库归属校验（不能把论文塞进他人库）；未指定 → 默认库。"""
+    """目标文献库归属校验（不能把论文塞进他人库）；未指定 → 默认库。
+    群组库放行：我是该库所属群组的成员即可写（协作语义，Zotero group 同）。"""
     if not cid:
         return get_or_create_default_collection(u["id"])
     row = db.one("SELECT id, owner_id FROM collections WHERE id=?", (cid,))
     if row is None:
         raise HTTPException(400, "目标文献库不存在")
+    if _is_group_lib_member(u, cid):
+        return cid
     if row["owner_id"] != u["id"] and u["role"] != "admin":
         raise HTTPException(403, "无权写入他人文献库")
     return cid
@@ -2675,6 +2962,7 @@ def papers_statuses(paper_ids: str = "", limit: int = 0, u: dict = Depends(requi
             "parse_status": p["parse_status"],
             "parsing": bool(pj and pj["status"] in ("queued", "pending_gate", "running")),
             "parse_job": {"id": pj["id"], "status": pj["status"],
+                          "done": pj["progress_done"], "total": pj["progress_total"],
                           "error": pj["error"]} if pj else None,
             "translating": bool(tj and tj["status"] in ("queued", "pending_gate", "running")),
             "translate_job": {"id": tj["id"], "status": tj["status"],
@@ -3025,13 +3313,15 @@ def paper_discover(paper_id: str, mode: str = "rec", limit: int = 20, u: dict = 
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"Semantic Scholar 不可达: {e}")
     out = []
+    _vis = " AND (visibility='shared' OR owner_id=?)"
     for it in items:
         dup = None
         if it["doi"]:
-            dup = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL", (it["doi"],))
+            dup = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL" + _vis,
+                         (it["doi"], u["id"]))
         if dup is None and it["title"]:
-            dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL",
-                         (it["title"].lower(),))
+            dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL" + _vis,
+                         (it["title"].lower(), u["id"]))
         out.append({**it, "in_library": dup["id"] if dup else None})
     return {"items": out, "mode": mode}
 
@@ -3060,7 +3350,11 @@ async def import_identifier(request: Request):
         raise HTTPException(400, f"单次最多导入 50 条标识符（本次 {_ident_n} 条）")
     for ident in idents:
         try:
-            meta = resolve_identifier(ident["kind"], ident["value"])
+            # offload（评审 P1-5）：同步 httpx 逐源打 S2/CrossRef/arXiv，别占事件循环
+            import anyio
+            import functools
+            meta = await anyio.to_thread.run_sync(
+                functools.partial(resolve_identifier, ident["kind"], ident["value"]))
         except ValueError as e:
             out.append({"ident": ident, "status": "not_found", "message": str(e)})
             continue
@@ -3068,13 +3362,16 @@ async def import_identifier(request: Request):
             out.append({"ident": ident, "status": "error", "message": str(e)[:150]})
             continue
         title = meta.get("title") or ""
-        # 查重（DOI / 标题）
+        # 查重（DOI / 标题）——与可见性绑定：他人 private 论文不参与去重
+        # （否则幽灵挂库：挂进我的库却不可见，还泄漏「别人传过这篇」）
+        _vis = " AND (visibility='shared' OR owner_id=?)"
         dup = None
         if meta.get("doi"):
-            dup = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL", (meta["doi"],))
+            dup = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL" + _vis,
+                         (meta["doi"], u["id"]))
         if dup is None and title:
-            dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL",
-                         (title.lower(),))
+            dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL" + _vis,
+                         (title.lower(), u["id"]))
         if dup:
             # 与 upload 口径一致：内容已在库（别的库）→ 挂进目标库并提示
             from core.ingest import attach_to_collection
@@ -3148,11 +3445,17 @@ async def translate_selection(request: Request):
     client = LLMClient(cfg, user_id=u["id"], paper_id=body.get("paper_id"))
     zh = bool(re.search(r"[一-鿿]", text))
     direction = "译成英文，保留术语与公式" if zh else "翻译成中文，术语首次出现保留英文原文"
-    out = client.complete([
-        {"role": "system", "content":
-            f"你是学术翻译。{direction}。只输出译文，不要解释。"},
-        {"role": "user", "content": text},
-    ], max_tokens=3000)
+    # offload（评审 P1-5）：同步 complete 最坏 4 次尝试×300s——直接在事件循环上跑，
+    # 一次调用即可冻结全站请求处理（含健康检查）
+    import anyio
+    import functools
+    out = await anyio.to_thread.run_sync(functools.partial(
+        client.complete,
+        [
+            {"role": "system", "content":
+                f"你是学术翻译。{direction}。只输出译文，不要解释。"},
+            {"role": "user", "content": text},
+        ], max_tokens=3000))
     return {"translation": out.strip()}
 
 
@@ -3178,11 +3481,13 @@ async def discover_import(request: Request):
         if not title:
             continue
         dup = None
+        _vis = " AND (visibility='shared' OR owner_id=?)"
         if it.get("doi"):
-            dup = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL", (it["doi"],))
+            dup = db.one("SELECT id FROM papers WHERE doi=? AND deleted_at IS NULL" + _vis,
+                         (it["doi"], u["id"]))
         if dup is None:
-            dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL",
-                         (title.lower(),))
+            dup = db.one("SELECT id FROM papers WHERE lower(title)=? AND deleted_at IS NULL" + _vis,
+                         (title.lower(), u["id"]))
         if dup:
             from core.ingest import attach_to_collection
             linked = attach_to_collection(dup["id"], cid)
@@ -3667,22 +3972,44 @@ def _own_table(u: dict, tid: str, full: bool = False):
         raise HTTPException(403, "不是你的表格")
     return te
 
-@app.get("/api/tables/list")
-def tables_list(request: Request, review: str = "active", q: str = "", paper_id: str = "",
-                collection_id: str = "", batch: str = "", page: int = 1, page_size: int = 60):
-    """卡片列表（轻量：不带网格）+ 全量统计 + 按论文/批次聚合。review: active=未剔除。"""
-    u = require(request)
+# 论文级排序键（与文库侧栏 sortPapers 同语义；ORDER BY 注入白名单，勿拼用户输入）
+_PAPER_SORT_SQL = {
+    "recent": "p.created_at DESC",
+    "title": "p.title",
+    "pages": "p.page_count DESC",
+    "size": "p.file_size DESC",
+}
+
+
+def _tables_where(u: dict, review: str = "active", q: str = "", paper_id: str = "",
+                  collection_id: str = "", ps: str = "", sc: str = "", st: str = ""):
+    """表格筛选的单一来源（list / export 共用）：库=整棵子树、批次、侧栏解析状态/
+    阅读范围跟随、审阅状态、论文、关键词。别名固定 table_extracts t JOIN papers p。"""
     if review not in _TABLE_REVIEW:
         review = "active"
-    page = max(1, page)
-    page_size = max(1, min(200, page_size))
+    coll_ids = _subtree_ids(collection_id) if collection_id else []
     where, args = ["t.user_id=?"], [u["id"]]
-    if collection_id:
-        where.append("t.paper_id IN (SELECT paper_id FROM paper_collections WHERE collection_id=?)")
-        args.append(collection_id)
-    if batch:
-        where.append("t.batch=?")
-        args.append(batch)
+    if coll_ids:
+        ph = ",".join("?" * len(coll_ids))
+        where.append(f"t.paper_id IN (SELECT paper_id FROM paper_collections WHERE collection_id IN ({ph}))")
+        args.extend(coll_ids)
+    # 侧栏解析状态/阅读范围跟随（白名单映射，与 /api/papers 同语义）
+    if ps in ("parsed", "parsing", "failed", "skipped"):
+        where.append("p.parse_status=?")
+        args.append(ps)
+    if st in ("none", "queued", "running", "done", "failed", "mismatch"):
+        where.append("t.ai_status=?")
+        args.append(st)
+    if sc == "private":
+        where.append("p.visibility='private' AND p.owner_id=?")
+        args.append(u["id"])
+    elif sc == "unread":
+        where.append("(SELECT status FROM paper_reads pr WHERE pr.user_id=? AND pr.paper_id=p.id) IS NULL")
+        args.append(u["id"])
+    elif sc == "untranslated":
+        # 最新一次翻译 job 非 done（含没跑过）——与侧栏 statuses 前端过滤同语义
+        where.append("COALESCE((SELECT status FROM jobs tj WHERE tj.job_type='translate' "
+                     "AND tj.paper_id=p.id ORDER BY tj.id DESC LIMIT 1), '') != 'done'")
     if review == "active":
         where.append("t.review IN ('pending','kept')")
     elif review != "all":
@@ -3694,22 +4021,49 @@ def tables_list(request: Request, review: str = "active", q: str = "", paper_id:
     if q.strip():
         where.append("(t.caption LIKE ? OR p.title LIKE ?)")
         args += [f"%{q.strip()}%"] * 2
-    wsql = " AND ".join(where)
+    return " AND ".join(where), tuple(args), coll_ids
+
+
+@app.get("/api/tables/list")
+def tables_list(request: Request, review: str = "active", q: str = "", paper_id: str = "",
+                collection_id: str = "", page: int = 1, page_size: int = 60,
+                sort: str = "recent", ps: str = "", sc: str = "", with_cells: int = 0,
+                st: str = ""):
+    """卡片列表（轻量：不带网格）+ 全量统计 + 按论文/批次聚合。review: active=未剔除。
+    ps/sc = 文库侧栏「解析状态/阅读范围」筛选的跟随（v1.12 侧栏合并后右侧随左侧收窄）。
+    sort 与文库侧栏论文列表同键（recent/title/pages/size）——分页边界两侧顺序一致，
+    否则侧栏第一篇的表可能整组落在后页（v1.12 侧栏合并后两套系统的错位教训）。"""
+    u = require(request)
+    page = max(1, page)
+    page_size = max(1, min(200, page_size))
+    wsql, args, coll_ids = _tables_where(u, review, q, paper_id, collection_id, ps, sc, st)
     total = db.one(f"SELECT COUNT(*) n FROM table_extracts t JOIN papers p ON p.id=t.paper_id "
-                   f"WHERE {wsql}", tuple(args))["n"]
+                   f"WHERE {wsql}", args)["n"]
     rows = db.all(
+        # ai_cells 仅在 with_cells=1 时随行返回（阅读页内嵌编辑器需要，~2KB/表）；
+        # 工作台列表/卡片不需要（编辑走 detail 端点）——省 400KB/页流量
         f"SELECT t.id, t.paper_id, t.page_index, t.caption, t.review, t.ai_status, t.ai_note, "
         f"t.asset_name, t.created_at, p.title paper_title, "
-        f"json_array_length(t.cells) n_rows, json_array_length(t.cells, '$[0]') n_cols "
+        + ("t.ai_cells, " if with_cells else "")
+        + f"json_array_length(t.cells) n_rows, json_array_length(t.cells, '$[0]') n_cols "
         f"FROM table_extracts t JOIN papers p ON p.id=t.paper_id WHERE {wsql} "
-        f"ORDER BY p.title, t.page_index, t.created_at LIMIT ? OFFSET ?",
+        f"ORDER BY {_PAPER_SORT_SQL.get(sort, _PAPER_SORT_SQL['recent'])}, t.page_index, t.created_at "
+        f"LIMIT ? OFFSET ?",
         (*args, page_size, (page - 1) * page_size))
+    # 库/批次筛选下的论文聚合——左栏「论文」组随之收窄（含子树：选父库 = 整棵子树）
+    scope_where, scope_args = "", []
+    if coll_ids:
+        ph = ",".join("?" * len(coll_ids))
+        scope_where += f"AND te.paper_id IN (SELECT paper_id FROM paper_collections WHERE collection_id IN ({ph})) "
+        scope_args.extend(coll_ids)
+
     return {"items": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size,
-            **tables_mod.stats(u["id"])}
+            **tables_mod.stats(u["id"]),
+            "by_paper_scoped": tables_mod.by_paper_stats(u["id"], scope_where, tuple(scope_args))}
 
 @app.get("/api/tables/sources")
 def tables_sources(request: Request):
-    """可收割论文清单（已解析 + 各篇表块数）——收表弹层数据。"""
+    """可收割论文清单（已解析 + 各篇表块数）——收集弹层数据。"""
     u = require(request)
     # 只列本人可见论文（shared 或本人的 private；admin 全见——与列表口径一致）
     vis = "" if u["role"] == "admin" else "AND (p.visibility='shared' OR p.owner_id=?)"
@@ -3753,7 +4107,7 @@ async def tables_harvest(request: Request):
     b = await request.json()
     ids = b.get("paper_ids") or []
     label = (b.get("batch") or "").strip()[:80] or (
-        f"{'上传' if b.get('from_upload') else '收表'}批次 · {time.strftime('%m-%d %H:%M')}")
+        f"{'上传' if b.get('from_upload') else '收集'}批次 · {time.strftime('%m-%d %H:%M')}")
     r = tables_mod.harvest(u["id"], ids or None, is_admin=u["role"] == "admin", batch=label)
     job_id = None
     if b.get("auto_tidy") and r["inserted_ids"]:
@@ -3763,34 +4117,27 @@ async def tables_harvest(request: Request):
     return {**{k: v for k, v in r.items() if k != "inserted_ids"}, "job_id": job_id,
             "batch": label if r["inserted"] else None}
 
-def _table_filter_ids(u: dict, review: str, q: str, paper_id: str) -> list[str]:
-    where, args = ["t.user_id=?"], [u["id"]]
-    if review == "active":
-        where.append("t.review IN ('pending','kept')")
-    elif review != "all":
-        where.append("t.review=?")
-        args.append(review)
-    if paper_id:
-        where.append("t.paper_id=?")
-        args.append(paper_id)
-    if q.strip():
-        where.append("(t.caption LIKE ? OR p.title LIKE ?)")
-        args += [f"%{q.strip()}%"] * 2
-    return [r["id"] for r in db.all(
-        f"SELECT t.id FROM table_extracts t JOIN papers p ON p.id=t.paper_id WHERE "
-        f"{' AND '.join(where)}", tuple(args))]
-
 @app.post("/api/tables/tidy-batch")
 async def tables_tidy_batch(request: Request):
     """批量整理入队：显式 ids 或按当前筛选圈表（跳过已剔除/进行中；force=重整理已完成的）。"""
     u = require(request)
     b = await request.json()
-    ids = b.get("ids")
+    ids = b.get("ids") or []
+    for pid in (b.get("paper_ids") or [])[:100]:   # 论文级：该论文全部可用表展开
+        rows = db.all("SELECT t.id FROM table_extracts t JOIN papers p ON p.id=t.paper_id "
+                      "WHERE t.user_id=? AND t.paper_id=? AND t.review != 'deleted'",
+                      (u["id"], pid))
+        ids += [r["id"] for r in rows]
+    ids = list(dict.fromkeys(ids))   # 去重保序（ids 与 paper_ids 可能重叠）
     if not ids:
         f = b.get("filtered") or {}
-        ids = _table_filter_ids(u, f.get("review") or "active", f.get("q") or "", f.get("paper_id") or "")
+        wsql2, args2, _ = _tables_where(u, f.get("review") or "active", f.get("q") or "",
+                                        f.get("paper_id") or "", f.get("collection_id") or "",
+                                        f.get("ps") or "", f.get("sc") or "")
+        ids = [r["id"] for r in db.all(
+            f"SELECT t.id FROM table_extracts t JOIN papers p ON p.id=t.paper_id WHERE {wsql2}", args2)]
     if not ids:
-        raise HTTPException(400, "没有可整理的表格（先收表或调整筛选）")
+        raise HTTPException(400, "没有可整理的表格（先批量收集或调整筛选）")
     force = bool(b.get("force"))
     if ids:
         picked: list[str] = []
@@ -3803,8 +4150,11 @@ async def tables_tidy_batch(request: Request):
         ids = picked
     if not ids:
         raise HTTPException(400, "所选表格都已完成整理（勾选「重新整理」可强制重跑）")
-    job_id = scheduler.enqueue(u["id"], "table_tidy", None, {"ids": ids},
-                               batch_id=new_batch_id(), progress_total=len(ids))
+    # batch_id 走 payload（enqueue 设计：payload.batch_id 同步落 jobs.batch_id 列）——
+    # 此前误作关键字参数传 enqueue()，端点自批次功能上线起即 500（存量，今实测暴露）
+    job_id = scheduler.enqueue(u["id"], "table_tidy", None,
+                               {"ids": ids, "batch_id": new_batch_id()},
+                               progress_total=len(ids))
     emit_data("tables")
     return {"ok": True, "job_id": job_id, "count": len(ids)}
 
@@ -3832,6 +4182,42 @@ async def tables_edit(tid: str, request: Request):
     emit_data("tables")
     return {"ok": True, "rows": len(norm), "cols": len(norm[0]) if norm else 0}
 
+
+@app.post("/api/tables/{tid}/regen")
+async def tables_regen(tid: str, request: Request):
+    """指令式重整（工作台 AI 页签问答框）：按用户指令对表格内容做 LLM 再生成并直接落
+    ai_cells（ai_status → done）。与 tidy-batch 的固定规则/行列守恒不同——转置/删列等
+    指令合法，只要求矩形网格。同步 LLM 调用 offload 线程池（translate-selection 同款，
+    不阻塞事件循环）。base_cells 传入时以它为底稿（已整理表的继续调整含未保存编辑）。"""
+    from core import tables as tables_mod
+    u = require(request)
+    te = _own_table(u, tid)
+    if te["ai_status"] in ("queued", "running"):
+        raise HTTPException(409, "此表正在批量整理——稍等完成后再操作")
+    b = await request.json()
+    instruction = (b.get("instruction") or "").strip()[:2000]
+    if not instruction:
+        raise HTTPException(400, "instruction 必填")
+    base = b.get("base_cells")
+    grid = base if (isinstance(base, list) and base) else json.loads(te["cells"] or "[]")
+    if not (isinstance(grid, list) and grid):
+        raise HTTPException(400, "原始提取为空，无法生成")
+    try:
+        import functools
+        import anyio
+        r = await anyio.to_thread.run_sync(
+            functools.partial(tables_mod.regen_one, u["id"], te, grid, instruction))
+    except NoKeyError as e:
+        raise HTTPException(400, str(e))
+    if r.get("error"):
+        raise HTTPException(502, r["error"])
+    with db.write() as c:
+        c.execute("UPDATE table_extracts SET ai_cells=?, ai_note=?, ai_status='done', "
+                  "updated_at=datetime('now') WHERE id=?",
+                  (json.dumps(r["rows"], ensure_ascii=False), r["note"], tid))
+    emit_data("tables")
+    return {"ok": True, "rows": r["rows"], "note": r["note"]}
+
 @app.post("/api/tables/{tid}/review")
 async def tables_review(tid: str, request: Request):
     u = require(request)
@@ -3850,15 +4236,29 @@ async def tables_batch_review(request: Request):
     u = require(request)
     b = await request.json()
     ids, rv = b.get("ids") or [], b.get("review")
-    if not ids or rv not in ("pending", "kept", "deleted"):
-        raise HTTPException(400, "ids 与 review(pending/kept/deleted) 必填")
+    pids = b.get("paper_ids") or []
+    if not ids and not pids:
+        raise HTTPException(400, "ids / paper_ids 与 review 必填")
+    if rv not in ("pending", "kept", "deleted"):
+        raise HTTPException(400, "review 取值非法")
+    # 论文级：该论文的全部可用表（跨页全量；仅本人论文或已 shared 可操作）
+    for pid in pids[:100]:
+        p = db.one("SELECT owner_id, visibility FROM papers WHERE id=? AND deleted_at IS NULL", (pid,))
+        if p is None or (u["role"] != "admin" and p["owner_id"] != u["id"] and p["visibility"] != "shared"):
+            continue
+        with db.write() as c:
+            c.execute("UPDATE table_extracts SET review=?, updated_at=datetime('now') "
+                      "WHERE paper_id=? AND review != 'deleted' AND "
+                      "(owner_id=? OR EXISTS(SELECT 1 FROM table_extracts WHERE id=table_extracts.id))",
+                      (rv, pid, u["id"]))
     for chunk in [ids[i:i + 500] for i in range(0, len(ids), 500)]:
         marks = ",".join("?" * len(chunk))
         with db.write() as c:
             c.execute(f"UPDATE table_extracts SET review=?, updated_at=datetime('now') "
                       f"WHERE user_id=? AND id IN ({marks})", (rv, u["id"], *chunk))
+    n = db.one("SELECT COUNT(*) n FROM table_extracts WHERE user_id=? AND review=?", (u["id"], rv))["n"]
     emit_data("tables")
-    return {"ok": True, "count": len(ids)}
+    return {"ok": True, "count": n}
 
 @app.delete("/api/tables/{tid}")
 def tables_delete(tid: str, request: Request):
@@ -3905,33 +4305,249 @@ async def tables_merge(request: Request):
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"})
 
-@app.post("/api/tables/export")
-async def tables_export(request: Request):
-    """导出 xlsx（每表一 sheet）：ids 指定，或 kept_only=全部保留。"""
+# ---------------- AI 合并表（跨表合成 → 工作台可编辑/版本回看） ----------------
+
+def _own_merge(u: dict, mid: str):
+    m = db.one("SELECT * FROM table_merges WHERE id=? AND user_id=?", (mid, u["id"]))
+    if m is None:
+        raise HTTPException(404, "合并表不存在")
+    return m
+
+
+@app.post("/api/tables/ai-merge")
+async def tables_ai_merge_create(request: Request):
+    """跨表 AI 合成：选中的 ≥2 张表 + 指令 → 一张汇总表（同步 LLM，offload 线程）。"""
+    import functools
+    import anyio
     u = require(request)
     b = await request.json()
-    ids = b.get("ids")
-    if ids:
-        rows = []
+    ids = list(dict.fromkeys(b.get("ids") or []))
+    instruction = (b.get("instruction") or "").strip()[:2000]
+    if not instruction:
+        raise HTTPException(400, "instruction 必填")
+    try:
+        r = await anyio.to_thread.run_sync(
+            functools.partial(tables_mod.merge_create, u["id"], ids, instruction))
+    except (ValueError, NoKeyError) as e:
+        raise HTTPException(400 if isinstance(e, ValueError) else 400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"合成失败：{str(e)[:150]}")
+    m = dict(r["merge"])
+    m["versions"] = json.loads(m["versions"] or "[]")
+    m["source_ids"] = json.loads(m["source_ids"] or "[]")
+    m["grid"] = json.loads(m["grid"] or "[]")
+    emit_data("tables")
+    return {"ok": True, "merge": m}
+
+
+@app.get("/api/tables-ai/merges")
+def tables_ai_merges_list(request: Request):
+    u = require(request)
+    rows = db.all("SELECT id, title, instruction, note, cur_ver, source_ids, versions, updated_at "
+                  "FROM table_merges WHERE user_id=? ORDER BY updated_at DESC LIMIT 50", (u["id"],))
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["versions"] = json.loads(d["versions"] or "[]")
+        d["source_ids"] = json.loads(d["source_ids"] or "[]")
+        out.append(d)
+    return {"merges": out}
+
+
+@app.get("/api/tables/ai-merges/{mid}")
+def tables_ai_merge_get(mid: str, request: Request):
+    u = require(request)
+    m = dict(_own_merge(u, mid))
+    m["grid"] = json.loads(m["grid"] or "[]")
+    m["versions"] = json.loads(m["versions"] or "[]")
+    m["source_ids"] = json.loads(m["source_ids"] or "[]")
+    return {"merge": m}
+
+
+@app.patch("/api/tables/ai-merges/{mid}")
+async def tables_ai_merge_edit(mid: str, request: Request):
+    """工作台编辑保存（整版覆盖 grid；版本栈只记 AI 生成版本，编辑由前端撤销栈兜底）。"""
+    u = require(request)
+    _own_merge(u, mid)
+    b = await request.json()
+    cells = b.get("grid")
+    if (not isinstance(cells, list) or len(cells) < 1 or len(cells) > 500
+            or len({len(r) for r in cells if isinstance(r, list)}) > 1
+            or any(not isinstance(r, list) or len(r) < 1 or len(r) > 100
+                   or any(v is not None and not isinstance(v, (str, int, float)) for v in r)
+                   for r in cells)):
+        raise HTTPException(400, "网格数据不合法（矩形 ≤500 行 × 100 列）")
+    norm = [[None if v is None else str(v) for v in r] for r in cells]
+    with db.write() as c:
+        c.execute("UPDATE table_merges SET grid=?, updated_at=datetime('now') WHERE id=?",
+                  (json.dumps(norm, ensure_ascii=False), mid))
+    return {"ok": True}
+
+
+@app.post("/api/tables/ai-merges/{mid}/regen")
+async def tables_ai_merge_regen(mid: str, request: Request):
+    """改指令重新合成 → 追加版本（历史保留，可回看/回滚）。"""
+    import functools
+    import anyio
+    u = require(request)
+    b = await request.json()
+    instruction = (b.get("instruction") or "").strip()[:2000]
+    if not instruction:
+        raise HTTPException(400, "instruction 必填")
+    try:
+        r = await anyio.to_thread.run_sync(
+            functools.partial(tables_mod.merge_regen, u["id"], mid, instruction))
+    except (ValueError, NoKeyError) as e:
+        raise HTTPException(400 if isinstance(e, ValueError) else 400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"重新合成失败：{str(e)[:150]}")
+    m = dict(r["merge"])
+    m["grid"] = json.loads(m["grid"] or "[]")
+    m["versions"] = json.loads(m["versions"] or "[]")
+    m["source_ids"] = json.loads(m["source_ids"] or "[]")
+    return {"ok": True, "merge": m}
+
+
+@app.post("/api/tables/ai-merges/{mid}/revert")
+async def tables_ai_merge_revert(mid: str, request: Request):
+    """回看/回滚到指定版本（版本栈保留，可来回切）。"""
+    import functools
+    import anyio
+    u = require(request)
+    b = await request.json()
+    ver = b.get("ver")
+    if not isinstance(ver, int):
+        raise HTTPException(400, "ver 必须是版本号")
+    try:
+        r = await anyio.to_thread.run_sync(
+            functools.partial(tables_mod.merge_revert, u["id"], mid, ver))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    m = dict(r["merge"])
+    m["grid"] = json.loads(m["grid"] or "[]")
+    m["versions"] = json.loads(m["versions"] or "[]")
+    m["source_ids"] = json.loads(m["source_ids"] or "[]")
+    return {"ok": True, "merge": m}
+
+
+@app.delete("/api/tables/ai-merges/{mid}")
+def tables_ai_merge_delete(mid: str, request: Request):
+    u = require(request)
+    _own_merge(u, mid)
+    with db.write() as c:
+        c.execute("DELETE FROM table_merges WHERE id=?", (mid,))
+    return {"ok": True}
+
+
+@app.post("/api/tables/ai-merges/{mid}/export")
+def tables_ai_merge_export(mid: str, request: Request):
+    """合并表导出 xlsx（单 sheet）。"""
+    u = require(request)
+    m = _own_merge(u, mid)
+    grid = json.loads(m["grid"] or "[]")
+    if not grid:
+        raise HTTPException(400, "合并表为空")
+    from urllib.parse import quote
+    data = tables_mod.build_xlsx([{"caption": m["title"] or "AI 合并表",
+                                   "paper_title": "", "page_index": 0, "grid": grid}])
+    fname = f"merge_{m['id']}_{time.strftime('%Y%m%d_%H%M')}.xlsx"
+    return Response(content=data,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"})
+
+
+@app.post("/api/tables/regen-batch")
+async def tables_regen_batch(request: Request):
+    """AI 加工批量入队（导出前加工）：对选中范围（ids + paper_ids 混合 / filtered）
+    逐表按用户指令重生成（regen_one 语义），结果落 ai_cells（done）——完成后导出
+    即加工版。LLM 逐表调用走 jobs 调度（进度/预算闸/失败隔离与批量整理同款）。"""
+    u = require(request)
+    b = await request.json()
+    instruction = (b.get("instruction") or "").strip()[:2000]
+    if not instruction:
+        raise HTTPException(400, "instruction 必填")
+    ids = list(b.get("ids") or [])
+    pids = list(b.get("paper_ids") or [])
+    f = b.get("filtered") or {}
+    if pids:
+        for pid in pids[:50]:
+            ph = "?"
+            rows = db.all(f"SELECT t.id FROM table_extracts t WHERE t.user_id=? AND t.paper_id={ph} "
+                          f"AND t.review != 'deleted'", (u["id"], pid))
+            ids += [r["id"] for r in rows]
+    if f:   # filtered 范围（与列表/导出同一筛选语义）
+        wsql, args, _ = _tables_where(u, f.get("review") or "active", f.get("q") or "",
+                                      f.get("paper_id") or "", f.get("collection_id") or "",
+                                      f.get("ps") or "", f.get("sc") or "")
+        ids += [r["id"] for r in db.all(
+            f"SELECT t.id FROM table_extracts t JOIN papers p ON p.id=t.paper_id WHERE {wsql}", args)]
+    ids = list(dict.fromkeys(ids))[:200]   # 去重保序 + 上限（单 job LLM 调用量有界）
+    if not ids:
+        raise HTTPException(400, "选中范围内没有可加工的表格")
+    # 防覆盖：跳过正在批量整理中的表（queued/running）
+    busy = {r["id"] for r in db.all(
+        f"SELECT id FROM table_extracts WHERE user_id=? AND id IN ({','.join('?' * len(ids))}) "
+        f"AND ai_status IN ('queued','running')", (u["id"], *ids))}
+    ids = [i for i in ids if i not in busy]
+    if not ids:
+        raise HTTPException(409, "所选表格都在批量整理中——稍等完成后再加工")
+    batch = new_batch_id()
+    job_id = scheduler.enqueue(u["id"], "table_regen", None,
+                               {"ids": ids, "instruction": instruction, "batch_id": batch},
+                               progress_total=len(ids))
+    audit(u["id"], "table-regen", f"{len(ids)} 张 batch={batch}")
+    return {"ok": True, "job_id": job_id, "count": len(ids), "batch": batch}
+
+
+@app.post("/api/tables/export")
+async def tables_export(request: Request):
+    """导出 xlsx（每表一 sheet）：ids 指定 / kept_only=全部保留 / filtered=按筛选范围
+    （与列表同款筛选语义——「导出当前筛选」入口）。version: ai=AI 整理版优先（默认，
+    未整理自动落回原始提取）；orig=强制原始提取。"""
+    u = require(request)
+    b = await request.json()
+    version = "orig" if b.get("version") == "orig" else "ai"
+    ids = b.get("ids") or []
+    pids = b.get("paper_ids") or []
+    f = b.get("filtered") or {}
+    rows = []
+    if pids:   # 论文级选中：该论文的全部可用表（跨页全量）
+        for chunk in [pids[i:i + 500] for i in range(0, len(pids), 500)]:
+            marks = ",".join("?" * len(chunk))
+            rows += db.all(f"SELECT t.*, p.title paper_title FROM table_extracts t "
+                           f"JOIN papers p ON p.id=t.paper_id "
+                           f"WHERE t.user_id=? AND t.paper_id IN ({marks}) AND t.review != 'deleted'",
+                           (u["id"], *chunk))
+    if ids:   # 表级选中（与论文级混合，按 id 去重）
         for chunk in [ids[i:i + 500] for i in range(0, len(ids), 500)]:
             marks = ",".join("?" * len(chunk))
             rows += db.all(f"SELECT t.*, p.title paper_title FROM table_extracts t "
                            f"JOIN papers p ON p.id=t.paper_id "
                            f"WHERE t.user_id=? AND t.id IN ({marks}) AND t.review != 'deleted'",
                            (u["id"], *chunk))
+    if rows:
+        seen = set()
+        rows = [r for r in rows if not (r["id"] in seen or seen.add(r["id"]))]
+    elif f:
+        wsql, args, _ = _tables_where(u, f.get("review") or "active", f.get("q") or "",
+                                      f.get("paper_id") or "", f.get("collection_id") or "",
+                                      f.get("ps") or "", f.get("sc") or "")
+        rows = db.all(f"SELECT t.*, p.title paper_title FROM table_extracts t "
+                      f"JOIN papers p ON p.id=t.paper_id WHERE {wsql} "
+                      f"ORDER BY p.created_at DESC, t.page_index", args)
     elif b.get("kept_only"):
         rows = db.all("SELECT t.*, p.title paper_title FROM table_extracts t "
                       "JOIN papers p ON p.id=t.paper_id "
                       "WHERE t.user_id=? AND t.review != 'deleted' ORDER BY p.title, t.page_index",
                       (u["id"],))
     else:
-        raise HTTPException(400, "ids 或 kept_only 二选一")
+        raise HTTPException(400, "ids / paper_ids / kept_only / filtered 至少传一项")
     if not rows:
         raise HTTPException(400, "没有可导出的表格")
     items = []
     for r in rows:
         grid = None
-        if r["ai_cells"]:
+        if version == "ai" and r["ai_cells"]:
             try:
                 grid = json.loads(r["ai_cells"])
             except Exception:  # noqa: BLE001
@@ -4049,7 +4665,14 @@ async def chat_stream(request: Request):
             log.exception("chat 收尾失败 %s", session_id)
             yield f"data: {json.dumps({'type': 'error', 'message': f'回答收尾失败: {str(e)[:120]}'}, ensure_ascii=False)}\n\n"
 
-    return StreamingResponse(gen(), media_type="text/event-stream",
+    def gen_with_limit() -> Iterator[str]:
+        try:
+            yield from gen()
+        finally:
+            _sse_release(u["id"])
+
+    _sse_acquire(u)  # 放 return 前一刻：acquire 与流启动之间无抛错窗口，避免计数泄漏
+    return StreamingResponse(gen_with_limit(), media_type="text/event-stream",
                              headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
 
 
@@ -4108,6 +4731,7 @@ async def paper_summary_stream(paper_id: str, u: dict = Depends(require)):
     if p is None:
         raise HTTPException(404, "论文不存在")
     _require_visible(u, p)
+    _sse_acquire(u)
 
     def gen() -> Iterator[str]:
         try:
@@ -4121,7 +4745,13 @@ async def paper_summary_stream(paper_id: str, u: dict = Depends(require)):
             log.exception("流式导读失败 %s", paper_id)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200]}, ensure_ascii=False)}\n\n"
 
-    return StreamingResponse(gen(), media_type="text/event-stream",
+    def gen_with_limit() -> Iterator[str]:
+        try:
+            yield from gen()
+        finally:
+            _sse_release(u["id"])
+
+    return StreamingResponse(gen_with_limit(), media_type="text/event-stream",
                              headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
 
 
@@ -4145,7 +4775,11 @@ async def paper_summary(paper_id: str, request: Request):
             raise HTTPException(500, f"任务入队失败: {e}")
         return {"job_id": job_id}
     try:
-        sid, payload = summarizer.generate(u, paper_id)
+        # offload（评审 P1-5）：同步 LLM 生成（max_tokens=6144）别占事件循环
+        import anyio
+        import functools
+        sid, payload = await anyio.to_thread.run_sync(
+            functools.partial(summarizer.generate, u, paper_id))
     except NoKeyError as e:
         raise HTTPException(400, str(e))
     except ValueError as e:
@@ -4226,6 +4860,15 @@ def index():
     html = (WEBUI_DIR / "index.html").read_text(encoding="utf-8")
     v = _asset_version()
     html = html.replace("/static/styles.css", f"/static/styles.css?v={v}")
+    # 压缩产物协商（专项轮 R5）：build-webui.py 在 terser 可用时产出 viewer.min.js(+map)。
+    # 仅当 min 比 viewer.js 新才改指——terser 缺席的环境里旧 min 不会 stale 上线，
+    # 没有压缩链的部署行为与从前完全一致。sourcemap 同目录，DevTools 打开时自动加载。
+    try:
+        _min = WEBUI_DIR / "viewer.min.js"
+        if _min.exists() and _min.stat().st_mtime >= (WEBUI_DIR / "viewer.js").stat().st_mtime:
+            html = html.replace("/static/viewer.js", f"/static/viewer.min.js?v={v}")
+    except OSError:
+        pass
     html = html.replace("/static/viewer.js", f"/static/viewer.js?v={v}")
     from fastapi.responses import Response as _Resp
     return _Resp(html, media_type="text/html")

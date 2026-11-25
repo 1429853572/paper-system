@@ -26,16 +26,19 @@ window.libOpenLib = cid => {          // 第一层点库 → 进第二层
   renderCollectionsPage();
 };
 
-/* 文库管理顶部工具条（第一/第二层共用：标题/搜索/新建库/导出弹层） */
+/* 文库管理顶部工具条（第一/第二层共用：标题/搜索/新建库/导出弹层）
+   P2：新建库改弹层输入（去掉常驻内联输入框）；文库导航直落表格层，工具条提供「库管理」回卡片层
+   与「导入文献」主色 CTA（LenX 式：主操作显眼、低频操作收拢）。 */
 function libMgrToolbarHtml(d) {
   return `
     <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <h2 class="page-h row" style="flex:1">文献库管理</h2>
       <button class="btn" onclick="openCollectPanel()" title="按关键词检索中文文献并入库（一次性或建专题跟踪）">${icon('inbox')} 采集文献</button>
       <input id="lib-mgr-q" placeholder="搜索论文标题/作者…" style="max-width:200px" value="${esc(state.libQuery)}">
-      <input id="newlib-name" placeholder="新库名称" style="max-width:150px">
-      <button class="btn primary" onclick="createLibFromPage()">${icon('plus')} 新建库</button>
+      <button class="btn" onclick="createLibFromPage()" title="新建顶层文献库">${icon('plus')} 新建库</button>
       <button class="btn" id="export-btn" title="批量导出当前范围/勾选的论文">${icon('download')} 导出</button>
+      ${state.libLevel === 2 ? `<button class="btn" onclick="libGoL1()" title="库卡片视图：新建子库/重命名/删除库等库管理操作">${icon('library')} 库管理</button>` : ''}
+      <button class="btn primary" onclick="openImportPop('files')" title="导入文献：文件 / DOI·arXiv·BibTeX / 服务器目录">${icon('upload')} 导入文献</button>
       <div class="tool-pop export-pop" id="export-pop" hidden>
         <div class="tp-label">范围</div>
         <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
@@ -95,6 +98,11 @@ async function renderCollectionsPage(preset = null) {
   const q = state.libQuery.toLowerCase();
 
   // ---- 当前选中范围（库 + 其子孙，与侧栏一致）----
+  // libSel 持久化可能指向已删库/共享库/群组库（不在自己的树里）——失效即复位到全部文献，
+  // 否则主表格渲染成「文献库 共 N 篇」的空壳（scopeName 兜底但 scope 无意义）
+  if (state.libSel && !d.collections.some(c => c.id === state.libSel)) {
+    state.libSel = ''; localStorage.removeItem('ps-lib-sel');
+  }
   const sel = state.libSel;
   const scopeIds = sel ? libDescendants(sel, d.collections) : [];
   const scopeKey = sel || 'all';
@@ -154,9 +162,10 @@ async function renderCollectionsPage(preset = null) {
         <td style="width:26px" onclick="event.stopPropagation()"><input type="checkbox" class="lib-ck" data-cid="${scopeKey}" data-pid="${p.id}" ${selBucket(scopeKey).has(p.id) ? 'checked' : ''} onchange="libCk('${scopeKey}')"></td>
         <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.title || '')}">
           ${p.read_status ? '' : '<span class="unread-dot" title="未读" style="margin-right:4px"></span>'}${esc(p.title || p.id)}
+          <span class="muted" style="font-size: var(--fs-xs)">${p.page_count ? ` · ${p.page_count}页` : ''}${p.file_size ? ` · ${(p.file_size/1048576).toFixed(1)}M` : ''}</span>
           ${ownerNames.length && scopeIds.length > 1 ? `<span class="muted" style="font-size: var(--fs-xs)"> · ${esc(ownerNames.join(' · '))}</span>` : ''}
           ${p.owner_name && p.owner_id !== state.me?.id ? `<span class="muted" style="font-size: var(--fs-xs)" title="上传者"> · ${esc(p.owner_name)}</span>` : ''}</td>
-        <td>${parseBadge}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
+        <td>${parseBadge}${['pending', 'parsing'].includes(p.parse_status) ? progressIndet('up-bar indet parse' + (p.parse_status === 'pending' ? ' dim' : ''), 'width:72px;margin-top:4px') : ''}${p.parse_status === 'failed' ? `<button class="btn small" title="重试解析与翻译（两者一起重新排队）" onclick="event.stopPropagation();retryPaperJob('${p.id}')">${icon('retry')}</button>` : ''}</td>
         <td>${trBadge}</td>
         <td class="row-actions" onclick="event.stopPropagation()">
           <button class="btn small danger hover-only" title="移入回收站（移库：勾选后用上方批量条）" onclick="delPaperFromLib('${p.id}')">${icon('trash')}</button>
@@ -167,7 +176,7 @@ async function renderCollectionsPage(preset = null) {
   const selNameArg = jsArg(selName);   // 塞进内联 onclick 的参数（引号/&/双引号全兜）
   el.innerHTML = libMgrToolbarHtml(d) + `
     <div class="lib-crumb">
-      ${state.libLevel === 2 ? `<a href="#" onclick="libGoL1();return false">← 全部库</a> <span class="muted">›</span> ` : '<span class="muted">位置：</span>'}
+      ${state.libLevel === 1 ? '<span class="muted">位置：</span> ' : ''}
       ${(() => {
         const chain = [];
         let cur = d.collections.find(c => c.id === sel);
@@ -443,12 +452,7 @@ window.libBatchDelete = async cid => {
   } catch (e) { toast(friendlyError(e, '批量删除失败')); }
   await refreshLib();
 };
-window.libUpload = cid => {
-  const inp = document.createElement('input');
-  inp.type = 'file'; inp.multiple = true;   // 不设 accept：与侧栏上传一致（PDF/图片/Office），由 uploadFiles 统一过滤
-  inp.onchange = () => uploadFiles(inp.files, cid);
-  inp.click();
-};
+window.libUpload = cid => openImportPop('files', cid);   // P1 入口归一：库卡片/库头的「上传」统一走导入弹层（带目标库预设）
 window.renameLib = async (cid, oldName) => {
   const name = await uiPrompt('重命名文献库', {value: oldName, okText: '保存'});
   if (!name?.trim() || name === oldName) return;
@@ -470,13 +474,11 @@ window.delLib = async (cid, name) => {
   toast('已删除'); await refreshLib();
 };
 window.createLibFromPage = async () => {
-  const inp = $('#newlib-name');
-  const name = inp.value.trim();
-  if (!name) { toast('请输入库名'); return; }
-  if (name.length > 50) { toast('库名最多 50 个字符'); inp.focus(); return; }
+  const name = (await uiPrompt('新建文献库', {placeholder: '库名（最多 50 字）', okText: '创建'}))?.trim();
+  if (!name) return;
+  if (name.length > 50) { toast('库名最多 50 个字符'); return; }
   try {
     await api('/api/collections', {method: 'POST', body: JSON.stringify({name})});
-    inp.value = '';
     toast('已创建'); await refreshLib();
   } catch (e) { toast(friendlyError(e, '创建失败，请重试')); }
 };

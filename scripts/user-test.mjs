@@ -142,7 +142,7 @@ await window.__T.renderAdminZone();
 await new Promise(r => setTimeout(r, 500));
 const az = doc.querySelector('#page-admin');
 check('管理区用户表渲染 2 用户', (az?.querySelectorAll('table.list tr').length || 0) >= 2);
-check('管理区显示磁盘占用（1.07G）', (az?.textContent || '').includes('1.07G'));
+check('管理区显示磁盘占用（1.1 GB，v1.2 格式公约后 fmtGBs 统一 1 位小数）', (az?.textContent || '').includes('1.1 GB'));
 check('管理区显示本月花费（非 token）', (az?.textContent || '').includes('本月花费'));
 check('已禁用用户带「已禁用」徽章', (az?.textContent || '').includes('已禁用'));
 const enableBtn = [...(az?.querySelectorAll('button[title="重新启用"]') || [])];
@@ -162,7 +162,7 @@ window.openQuotaDialog && window.openQuotaDialog(1);
 await new Promise(r => setTimeout(r, 150));
 const qpop = doc.querySelector('.adm-quota-pop');
 check('结构化限额编辑器（弹窗）存在（替代裸 JSON 框）', !!qpop);
-check('限额编辑器含 5 个数字字段（含月预算）', (qpop?.querySelectorAll('input[type="number"]').length || 0) === 5);
+check('限额编辑器含 6 个数字字段（解析/文件/页数/磁盘/月预算/订阅上限）', (qpop?.querySelectorAll('input[type="number"]').length || 0) === 6);
 check('已有 override 值回填（max_pages=500）', qpop?.querySelector('input[id$="-pp"]')?.value === '500');
 doc.querySelector('.adm-quota-pop')?.remove();
 // 删除已收进「更多 ▾」菜单

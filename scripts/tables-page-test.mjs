@@ -30,7 +30,8 @@ const LIST = { items: ITEMS, total: 3, page: 1, page_size: 60,
   by_paper: [
     { paper_id: 'p1', title: 'Paper A', n: 2, done: 1, mismatch: 1, deleted: 0 },
     { paper_id: 'p2', title: 'Paper B', n: 1, done: 0, mismatch: 0, deleted: 1 },
-  ] };
+  ],
+  by_collection: [{ collection_id: 'c9', name: '测试库', n: 3, shared: 0, parent_id: null, depth: 0, subtree_n: 3, has_children: false }] };
 const DETAIL = { id: 'tb1', paper_id: 'p1', page_index: 2, caption: 'Table 1: Ablation',
   cells: '[["Method","PSNR"],["A","25.1"]]', ai_cells: '[["Method","PSNR (dB)"],["A","25.1"]]',
   ai_note: '单位并入列头', ai_status: 'done', review: 'pending', html: '<table></table>',
@@ -111,13 +112,11 @@ await sleep(600);
 window.switchPage('tables');
 await sleep(500);
 
-// 1. 双栏 + KPI + 左栏聚合
-ok('1 页面渲染：KPI 6 卡 + 左栏聚合（批次+全部+2 篇论文）',
-   window.document.querySelectorAll('#tb-kpis .tk-kpi').length === 6 &&
-   window.document.querySelectorAll('#tb-rail-list .tk-rail-item').length === 4 &&
-   window.document.querySelector('#tb-rail-list .tk-rail-item .tk-rail-badge').textContent === '3');
-ok('1b 左栏论文行带状态微标（✓1）',
-   window.document.querySelector('#tb-rail-list .tb-rail-mini')?.textContent.includes('✓1'));
+// 1. v1.12 侧栏合并：表格页不再自带 rail（复用全局文库侧栏），批次入口进工具条下拉
+ok('1 页面渲染：KPI 智能卡（零值隐藏→5 张）+ 无自带侧栏（合并全局侧栏）',
+   window.document.querySelectorAll('#tb-kpis .tk-kpi').length === 5 &&
+   !window.document.querySelector('#tb-kpis .tb-statline') &&
+   !window.document.querySelector('#page-tables .tk-rail'));
 ok('2 卡片墙：2 张未剔除卡 + 状态徽章（已整理✓/需复核红）',
    window.document.querySelectorAll('.tb-card').length === 2 &&
    !!window.document.querySelector('.tb-card .badge.ok') &&
@@ -169,30 +168,77 @@ await sleep(300);
 ok('7 批量剔除（batch-review 调用）',
    reviewCalls.length === 1 && reviewCalls[0].review === 'deleted' && reviewCalls[0].ids.length === 1);
 
-// 6. 收表弹层
+// 6. 收集弹层（合并后：tbHarvestOpen → tbCollectOpen('harvest')，sources 异步渲染）
 await window.tbHarvestOpen();
-await sleep(300);
-const srcItems = window.document.querySelectorAll('.tb-src-item');
+await sleep(600);
+const srcItems = window.document.querySelectorAll('.ui-pop .col-item');
 ok('8 收表弹层（只看未收 → 仅 Paper C 可见）', srcItems.length === 1 &&
    srcItems[0].textContent.includes('Paper C') &&
    !!window.document.querySelector('#tb-src-q') &&
    window.document.querySelectorAll('#tb-src-lib option').length === 3, `n=${srcItems.length}`);
-window.document.querySelector('.tb-src-item input').checked = true;
+window.document.querySelector('.ui-pop .col-item input.tb-src-ck').checked = true;
 harvestCalls = [];
-await window.tbHarvestGo(window.document.querySelector('.ui-pop.tb-harvest-pop .btn.primary'), false);
+await window.tbHarvestGo(window.document.querySelector('.ui-pop .btn.primary'), false);
 await sleep(300);
 ok('9 收表调用（勾选篇 + auto_tidy）',
    harvestCalls.length === 1 && harvestCalls[0].paper_ids.length === 1 && harvestCalls[0].auto_tidy === true,
    JSON.stringify(harvestCalls[0]));
 
-// 5b. 左栏批次区 + 按库下拉
-const secs = [...window.document.querySelectorAll('.tb-rail-sec')].map(x => x.textContent);
-ok('5b 左栏批次/论文两区', secs.join(',') === '批次,论文', JSON.stringify(secs));
-const batchItem = window.document.querySelector('.tk-rail-item');
-ok('5c 批次项渲染（名+张数）', batchItem && batchItem.textContent.includes('上传批次') && batchItem.textContent.includes('3'),
-   batchItem?.textContent.slice(0, 30));
-const collSel = window.document.querySelector('#tb-toolbar select');
-ok('5d 按库下拉（全部+测试库）', collSel && collSel.options.length === 2 && collSel.options[1].textContent === '测试库');
+// 5b. 筛选入口（v1.12 状态 chips 收进漏斗弹层；批次维度已移除）
+ok('5b 筛选弹层：漏斗按钮 + 审阅状态 items（无批次）',
+   !!window.document.querySelector('#tb-filter-arrow') &&
+   (() => { window.document.querySelector('#tb-filter-arrow').click();
+     const pop = window.document.querySelector('#tb-filter-pop');
+     const ok5b = !pop.hidden && pop.querySelectorAll('.tp-item').length >= 5 &&
+            [...pop.querySelectorAll('.tp-item')].some(x => x.textContent.includes('全部可用'));
+     window.document.querySelector('#tb-filter-arrow').click();   // 关回
+     return ok5b;
+   })(), 'pop rendered');
+ok('5c 库/论文筛选走全局侧栏（工具条生效筛选 chips 展示所选）',
+   !window.document.querySelector('#page-tables .tk-rail') &&
+   !window.document.querySelector('#page-tables .tb-rail-sec'));
+
+// 5e. 视图切换：卡片（默认）↔ 列表——同一数据源两种渲染，状态持久化
+window.tbViewF('rows');
+await sleep(400);
+ok('5e 视图切换：列表行渲染（紧凑行含对照操作）',
+   window.document.querySelectorAll('.tb-view-toggle .chip-btn').length === 2 &&
+   window.document.querySelectorAll('#tb-stream .tb-row').length > 0 &&
+   !!window.document.querySelector('#tb-stream .tb-row .tb-row-ops button'),
+   'rows rendered');
+await window.tbViewF('card');
+await sleep(300);
+ok('5e-2 切回卡片视图', window.document.querySelectorAll('#tb-stream .tb-card').length === 2, 'cards back');
+
+// 5f. 分组全选 + 导出本组按钮（列表/卡片视图共用分组头）
+const gck = window.document.querySelector('#tb-stream .tb-group-ck');
+const gIds = gck.dataset.ids.split(',').filter(Boolean);
+gck.checked = true;                  // jsdom 不执行内联 onclick——翻转后直调 handler（与 onclick 同函数）
+await window.tbGroupSel(gck);
+await sleep(300);
+ok('5f 分组全选：组框勾选 → 组内全部进选中集合',
+   gIds.length >= 1 && gIds.every(id => (window.__state._tbSel || new Set()).has(id)),
+   'sel=' + (window.__state._tbSel || new Set()).size);
+window.tbGroupSel;   // 静默
+await window.tbClearFilters();
+ok('5f-2 导出本组按钮存在（每组一个，跨页全量导出入口）',
+   window.document.querySelectorAll('#tb-stream .tk-day button[title*="导出该论文"]').length ===
+   window.document.querySelectorAll('#tb-stream .tk-day').length, 'per-group');
+
+// 5g. 列表视图翻页（审阅流）：上一页/下一页控件 + 页码指示
+window.tbViewF('rows');
+await sleep(400);
+const pagerBtns = [...window.document.querySelectorAll('#tb-stream .tb-pager button')];
+ok('5g 列表翻页：上一页/下一页控件渲染 + tbPageTo 翻页',
+   pagerBtns.length === 2 && window.document.querySelector('#tb-stream .tb-pager .muted').textContent.includes('第 1 /'),
+   'pager rendered');
+await window.tbPageTo(2);
+await sleep(300);
+ok('5g-2 tbPageTo 生效（page 状态 +1）', (window.__state._tbPage || 1) === 2, 'page=' + window.__state._tbPage);
+await window.tbPageTo(1);
+await sleep(300);
+window.tbViewF('card');
+await sleep(300);
 
 // 6b. 上传链入口
 await window.tbUploadOpen();

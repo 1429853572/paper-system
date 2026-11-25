@@ -15,7 +15,7 @@ function renderQaUI(container) {   // 可注入 content-view（整栏）或 dock
         <button class="btn small" id="qa-pick-close" title="收起（Esc / 点面板外也可关）">${icon('close')}</button></div>
         <div class="qa-pick-tools">
           <input id="qa-pick-filter" placeholder="搜索标题…" style="font-size: var(--fs-sm)">
-          <select id="qa-pick-sort" title="组内排序" style="font-size: var(--fs-sm);width:auto;flex:none">
+          <select id="qa-pick-sort" title="组内排序" aria-label="组内排序" style="font-size: var(--fs-sm);width:auto;flex:none">
             <option value="recent">最近添加</option>
             <option value="title">标题 A-Z</option>
             <option value="year">年份（新→旧）</option>
@@ -922,7 +922,7 @@ async function boot() {
   await initPdfJs();
   state.mainView = 'read'; state.view = state.rpane.readingView || 'orig';
   applyQaLayout();
-  updateVisToggle(); updateUploadTarget(); updateExportBtn();
+  updateExportBtn();
   if (state.qaOpen) renderQaTab();   // 问答 dock（按记忆的开合状态）
   await loadCollections();
   await loadPapers();

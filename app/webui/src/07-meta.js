@@ -69,7 +69,7 @@ async function renderMeta() {
       <div class="ref-list" id="ref-list"></div></div>
     <div class="card"><h3>${icon('folder')} 文献库</h3>
       <div id="m-collection-chips" class="chip-row"></div>
-      <select id="m-collection-add" style="max-width:200px;font-size: var(--fs-sm)"></select></div>`;
+      <select id="m-collection-add" aria-label="加入文献库" style="max-width:200px;font-size: var(--fs-sm)"></select></div>`;
 
   renderCiteCard();
 
@@ -234,7 +234,18 @@ window.extractMeta = async (pid) => {
   } catch (e) { toast('提取失败: ' + e.message); }
 };
 /* 引用：卡片里选样式 + 即时预览 + 复制。
-   CSL 样式（12 种）经 citeproc-js 本地渲染（vendor），BibTeX 与兜底用后端预渲染。 */
+   CSL 样式（12 种）经 citeproc-js 本地渲染（vendor），BibTeX 与兜底用后端预渲染。
+   citeproc 按需加载（专项轮 R5）：原 967KB 阻塞每页首屏、仅此模块在用——首次调用时
+   注入压缩版（vendor/citeproc.min.js，373KB），调用方拿到的 Promise 复用不重复注入。 */
+let _citeprocLoad = null;
+const ensureCiteproc = () => _citeprocLoad ??= new Promise((resolve, reject) => {
+  if (window.citeproc) return resolve();
+  const s = document.createElement('script');
+  s.src = '/static/vendor/citeproc/citeproc.min.js';
+  s.onload = resolve;
+  s.onerror = () => { _citeprocLoad = null; reject(new Error('citeproc 加载失败')); };
+  document.head.appendChild(s);
+});
 const _cslCache = {xml: {}, locale: {}};
 async function _fetchText(url, cache, key) {
   if (cache[key]) return cache[key];
@@ -245,7 +256,7 @@ async function _fetchText(url, cache, key) {
   return t;
 }
 async function cslRender(item, styleId) {
-  if (!window.citeproc) throw new Error('citeproc 未加载');
+  await ensureCiteproc();
   const styleXml = await _fetchText(`/static/vendor/csl/${styleId}.csl`, _cslCache.xml, styleId);
   const lang = item.language || 'en-US';
   await _fetchText(`/static/vendor/citeproc/locales-${lang}.xml`, _cslCache.locale, lang);
@@ -283,7 +294,7 @@ function renderCiteCard() {
 async function _renderCiteBox(box, c, styleId) {
   const pid = c.paper_id;
   const put = html => { if (state.current?.id === pid && state._cite?.paper_id === pid) box.innerHTML = html; };
-  if (styleId === 'bibtex' || !window.citeproc) {
+  if (styleId === 'bibtex') {   // bibtex 走后端预渲染；其余样式由 cslRender 内部按需加载 citeproc
     const html = c.styles?.[styleId]?.html || '（该样式需要 citeproc 支持库）';
     put(html);
     state._citeRendered = {pid, styleId, html};

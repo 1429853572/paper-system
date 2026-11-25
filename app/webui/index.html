@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>paper-system · v1.7.0</title>
+<meta name="description" content="基于 MinerU 的学术论文阅读、双语翻译、证据问答与科研导读系统">
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-<link rel="stylesheet" href="/static/vendor/pdfjs/pdf_viewer.css">
+<!-- pdf_viewer.css（100KB，textLayer 样式）只有阅读页用：openPaper 首开时按需注入（03-reader.js） -->
 <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
 <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -32,80 +33,55 @@
     </header>
     <div class="collections" id="collections"></div>
     <div class="search"><input id="lib-search" placeholder="搜索标题 / 全文…"></div>
-    <div class="scope-chips" id="scope-chips">
-      <button class="chip-btn on" data-scope="">全部</button>
-      <button class="chip-btn" data-scope="private"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="4" y="7" width="8" height="6" rx="1.2"/><path d="M5.5 7V5.5a2.5 2.5 0 015 0V7"/></svg> 仅我</button>
-      <button class="chip-btn" data-scope="untranslated">未翻译</button>
-      <button class="chip-btn" data-scope="unread">未读</button>
-      <button class="chip-btn" data-scope="parsing">解析中</button>
-    </div>
     <div class="lib-tools">
-      <button class="tool-arrow" id="filter-arrow" title="筛选与排序">
+      <button class="tool-arrow" id="filter-arrow" title="筛选">
         <svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path d="M1.8 2.6h12.4a.5.5 0 0 1 .39.81L9.9 9.4v4.1a.6.6 0 0 1-.87.54l-2.4-1.2a.6.6 0 0 1-.33-.54V9.4L1.41 3.41A.5.5 0 0 1 1.8 2.6z"/>
         </svg>
       </button>
       <div class="tool-pop" id="filter-pop" hidden>
-        <div class="tp-label">筛选</div>
-        <div class="tp-item" data-f="">全部</div>
+        <div class="tp-label">解析状态</div>
+        <div class="tp-item" data-f="">全部论文</div>
         <div class="tp-item" data-f="parsed">已解析</div>
-        <div class="tp-item" data-f="failed">失败</div>
-        <div class="tp-item" data-f="skipped">已跳过</div>
-        <div class="tp-item" data-f="private">仅私人</div>
+        <div class="tp-item" data-f="parsing">解析中</div>
+        <div class="tp-item" data-f="failed">解析失败</div>
+        <div class="tp-item" data-f="skipped">已跳过（超页数）</div>
         <div class="tp-sep"></div>
-        <div class="tp-label">排序</div>
-        <div class="tp-item" data-s="recent">最近更新</div>
-        <div class="tp-item" data-s="title">标题</div>
-        <div class="tp-item" data-s="pages">页数</div>
-        <div class="tp-item" data-s="size">文件大小</div>
+        <div class="tp-label">阅读范围</div>
+        <div class="tp-item" data-scope="private">仅我可见</div>
+        <div class="tp-item" data-scope="unread">还没读</div>
+        <div class="tp-item" data-scope="untranslated">还没翻译</div>
+      </div>
+      <button class="tool-arrow" id="sort-arrow" title="排序">
+        <svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M3 3.5h10M3 8h7M3 12.5h4"/>
+        </svg>
+      </button>
+      <div class="tool-pop" id="sort-pop" hidden>
+        <div class="tp-label">排序方式</div>
+        <div class="tp-item" data-s="recent">最近添加</div>
+        <div class="tp-item" data-s="title">标题（拼音）</div>
+        <div class="tp-item" data-s="pages">页数从多到少</div>
+        <div class="tp-item" data-s="size">文件从大到小</div>
       </div>
       <span class="spacer"></span>
-      <div class="tool-pop upload-pop" id="upload-pop" hidden>
-        <div id="quota-hint" class="muted" style="font-size: var(--fs-xs);padding:2px 12px 4px"></div>
-        <div class="tp-item" id="upload-file-btn"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 2.5h5.5L12.5 5.5V13.5h-8.5z"/><path d="M9.5 2.5v3h3"/></svg> 选择文件上传</div>
-        <div class="url-import">
-          <input id="url-import-input" placeholder="粘贴 URL（pdf/arxiv 直链）">
-          <button class="btn small primary" id="url-import-btn">导入 URL</button>
-        </div>
-        <div class="ident-import">
-          <textarea id="ident-input" rows="2" placeholder="粘贴 DOI / arXiv ID / BibTeX（可多条），自动抓元数据 + OA PDF"></textarea>
-          <button class="btn small" id="ident-btn">导入 ID</button>
-        </div>
-        <div class="dir-import">
-          <select id="dir-select" style="width:auto;font-size: var(--fs-sm)"><option value="">从服务器目录导入…</option></select>
-          <button class="btn small" id="dir-btn" title="扫描目录批量入库（PDF 直通，CAJ 自动转 PDF）"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4.5A1.5 1.5 0 013.5 3h3l1.5 2h4.5A1.5 1.5 0 0114 6.5v5A1.5 1.5 0 0112.5 13h-9A1.5 1.5 0 012 11.5z"/></svg> 目录导入</button>
-          <span class="muted" style="font-size: var(--fs-xs)">把知网等下载器输出的目录放到 data/inbox/ 下</span>
-        </div>
-        <div class="muted" style="font-size: var(--fs-xs);padding:2px 12px 4px" id="upload-target">上传到：全部文献</div>
-        <div class="tp-sep"></div>
-        <label class="tp-item" style="display:flex;gap:8px;align-items:center;cursor:pointer">
-          <input type="checkbox" id="upload-private" style="width:auto"> 仅自己可见
-        </label>
-        <div class="tp-item" id="pf-adv-toggle" style="cursor:pointer">⚙ 解析过滤（高级）<span class="muted" id="pf-adv-hint" style="font-size: var(--fs-xs);margin-left:6px"></span></div>
-        <div id="pf-adv" hidden style="padding:2px 12px 8px;display:flex;flex-direction:column;gap:6px">
-          <label style="font-size: var(--fs-xs);display:flex;align-items:center;gap:6px">页数上限
-            <input id="pf-max" type="number" min="0" max="2000" style="width:64px">（0=不限）</label>
-          <label style="font-size: var(--fs-xs);display:flex;align-items:center;gap:6px">排除文件名
-            <input id="pf-exclude" placeholder="supplement, /翻译/" style="flex:1"></label>
-          <span class="muted" style="font-size: var(--fs-xs)">逗号分隔子串或 /正则/；超页数入库但不自动解析，可手动重解析</span>
-        </div>
-      </div>
-      <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
+      <input type="file" id="file-input" aria-label="选择文件" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx,.xls,.xlsx" hidden>
     </div>
     <div class="paper-list" id="paper-list"></div>
     <div class="sidebar-foot">
-      <button class="btn small primary" id="upload-arrow" title="上传文献（也可直接把文件拖到列表区）">
+      <button class="btn small primary" id="upload-arrow" title="导入文献：文件 / DOI·arXiv·BibTeX / 服务器目录（也可直接把文件拖到列表区）">
         <svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 10V2.5M5 5l3-3 3 3M3 13.5h10"/></svg>
-        上传
+        导入文献
       </button>
       <span class="spacer"></span>
-      <button class="btn small" id="lib-link" title="文库管理：批量选择与批量操作的主入口" onclick="switchPage('collections')"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 3.5h4.5v9H2.5zM9 3.5h4.5v9H9z"/></svg> 文库</button>
+      <button class="btn small" id="lib-link" title="文库管理：库管理与批量操作的主入口" onclick="switchPage('collections')"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 3.5h4.5v9H2.5zM9 3.5h4.5v9H9z"/></svg> 文库</button>
     </div>
   </aside>
   <div class="side-rail" id="side-rail" hidden><button id="side-expand" title="展开侧栏（文库）" aria-label="展开侧栏"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8.5 4l4 4-4 4M4.5 4l4 4-4 4"/></svg></button></div>
 
   <!-- ======= 主区 ======= -->
-  <main class="main">
+  <a class="skip-link" href="#main">跳到主内容</a>
+  <main class="main" id="main">
     <nav class="topbar">
       <button class="btn small" id="menu-toggle" title="收起/展开侧栏" aria-label="菜单"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg></button>
       <span class="title" id="page-title">阅读</span>
@@ -132,6 +108,7 @@
             <span id="zoom-label">100%</span>
             <button id="zoom-in" title="放大" aria-label="放大"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="M10.5 10.5L13.5 13.5M7 5.5v3M5.5 7h3"/></svg></button>
           </div>
+          <div class="pdf-loadbar" id="pdf-loadbar" hidden><i></i></div>
           <div class="pdf-host" id="pdf-host"></div>
         </div>
         <div class="v-handle" id="v-handle" title="拖动调整占比 · 双击复位">
@@ -161,6 +138,7 @@
             <span id="assets-subtabs" hidden>
               <button class="asset-sub on" data-at="figs">图表</button>
               <button class="asset-sub" data-at="eqs">公式</button>
+              <button class="asset-sub" data-at="tables">表格</button>
             </span>
             <span class="spacer"></span>
             <button class="btn small" id="discover-btn" title="找相关：S2 推荐 / 参考文献 / 引证，可勾选导入"><svg class="ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg> 找相关</button>
@@ -226,9 +204,9 @@
 </div>
 
 <div class="tool-pop acq-pop" id="acq-pop" hidden></div>
-<div id="toast"></div>
+<div id="toast" role="status"></div>
 
-<script src="/static/vendor/citeproc/citeproc.js"></script>
+<!-- citeproc.js（原 967KB 阻塞首屏）只服务引用格式化（07-meta）：首次使用时按需加载压缩版 -->
 <script type="module" src="/static/viewer.js"></script>
 </body>
 </html>
