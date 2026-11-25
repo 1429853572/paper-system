@@ -154,8 +154,8 @@ curl -s http://127.0.0.1:8001/api/acquire/status
 本机 frpc/frps **零改动**（7862 裸 TCP 透传，Host 头原样到达）。
 
 1. **买域名**：腾讯云/阿里云任选（.top/.xyz 首年 ¥10~30，.com ¥60+/年），实名后加一条解析：
-   `A | paper | 42.51.34.112 | TTL 默认`。以下假设得到 `paper.example.com`，替换成你的。
-2. **VPS 装 Caddy**（42.51.34.112，Debian/Ubuntu；先 `ss -tlnp | grep -E ':80 |:443 '` 确认空闲）：
+   `A | paper | <VPS_IP> | TTL 默认`。以下假设得到 `paper.example.com`，替换成你的。
+2. **VPS 装 Caddy**（<VPS_IP>，Debian/Ubuntu；先 `ss -tlnp | grep -E ':80 |:443 '` 确认空闲）：
    ```bash
    apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
@@ -173,7 +173,7 @@ curl -s http://127.0.0.1:8001/api/acquire/status
    `systemctl reload caddy`。DNS 生效后 Caddy 自动申请 Let's Encrypt 证书（需 80/443 公网可达）。
 4. **验证**（手机关 WiFi 走流量）：
    `https://paper.example.com` → 登录页且地址栏带锁；
-   `nslookup paper.example.com` → 42.51.34.112。
+   `nslookup paper.example.com` → <VPS_IP>。
 5. **可选加固**（推荐：外网只能走 HTTPS，裸端口仅本机 Caddy 可碰）：
    ```bash
    iptables -A INPUT -p tcp --dport 7862 -s 127.0.0.1 -j ACCEPT
